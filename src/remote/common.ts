@@ -51,15 +51,32 @@ export function useAction() {
  * The phone's back button closes what is open (a sheet, the drawer, a page) instead of
  * leaving the app. Each history entry carries a depth; a layer that opens makes sure an
  * entry exists at its depth, and going back closes every layer deeper than the entry
- * reached. Closing a layer on screen leaves its entry in place to be reused, so no
- * history call ever has to be undone.
+ * reached. A layer closed on screen also drops the entry it pushed, so the next back
+ * press is not swallowed by a spare entry.
  */
-const layers: Array<{ close: () => void }> = []
+interface Layer { close: () => void; popped: boolean }
+const layers: Layer[] = []
+let ignoring = 0
+let scheduled = false
 const depth = () => Number((history.state as { rcLayer?: number } | null)?.rcLayer ?? 0)
+/** Step back over the entries of layers that were closed without the back button. */
+function dropSpareEntries(): void {
+  if (scheduled) return
+  scheduled = true
+  setTimeout(() => {
+    scheduled = false
+    const current = depth()
+    if (current <= layers.length) return
+    ignoring += 1
+    history.go(layers.length - current)
+  }, 0)
+}
 if (typeof window !== 'undefined') window.addEventListener('popstate', () => {
+  // This traversal only rewinds the spare entry of a layer the page already closed.
+  if (ignoring > 0) { ignoring -= 1; return }
   const reached = depth()
   let closed = false
-  while (layers.length > reached) { layers.pop()!.close(); closed = true }
+  while (layers.length > reached) { const layer = layers.pop()!; layer.popped = true; layer.close(); closed = true }
   // Nothing was open at this depth: these are spare entries, step over all of them at once.
   if (!closed && reached > layers.length) history.go(layers.length - reached)
 })
@@ -67,10 +84,14 @@ export function useBackClose(open: boolean, close: () => void): void {
   const latest = React.useRef(close); latest.current = close
   React.useEffect(() => {
     if (!open) return
-    const layer = { close: () => latest.current() }
+    const layer: Layer = { close: () => latest.current(), popped: false }
     layers.push(layer)
     if (depth() < layers.length) history.pushState({ rcLayer: layers.length }, '')
-    return () => { const index = layers.indexOf(layer); if (index >= 0) layers.splice(index, 1) }
+    return () => {
+      const index = layers.indexOf(layer)
+      if (index >= 0) layers.splice(index, 1)
+      if (!layer.popped) dropSpareEntries()
+    }
   }, [open])
 }
 

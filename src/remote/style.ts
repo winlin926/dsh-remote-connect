@@ -42,6 +42,9 @@ input[type=checkbox],input[type=radio]{width:22px;height:22px;padding:0;accent-c
 .rc-round[aria-pressed=true],.rc-round[aria-expanded=true]{background:var(--rc-soft)}
 .rc-small{font-size:14px}
 .rc-muted{color:var(--rc-muted);font-size:14px}
+.rc-history{margin-top:12px;padding-top:12px;border-top:1px solid var(--rc-line)}
+.rc-history h4{margin:0 0 6px;font-size:14px}
+.rc-history p{margin:4px 0;font-size:13px;color:var(--rc-muted);word-break:break-all}
 
 /* Frame */
 .rc-app{--rc-mono:ui-monospace,"SF Mono","Cascadia Code","Roboto Mono",Menlo,Consolas,"Liberation Mono",monospace;--rc-sans:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;
