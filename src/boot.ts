@@ -1,5 +1,7 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
-function remoteBoot(): void {
+import { localFilePath } from './local-file.js'
+
+function remoteBoot(parseLocalFile: (href: string) => string | undefined): void {
   const globals = window as unknown as Record<string, any>
   globals.__DSH_REMOTE_CONTROL__ = true
   // The Host's page declares English; the app is Chinese, and browsers would offer to translate it.
@@ -7,6 +9,107 @@ function remoteBoot(): void {
   globals.__DSH_TRANSPORT__ = { ...globals.__DSH_TRANSPORT__, ownsHost: true }
   const originalFetch = window.fetch.bind(window)
   globals.__DSH_FILE_UPLOAD__ = { fetch: originalFetch }
+  function notice(message: string): void {
+    const existing = document.getElementById('dsh-rc-notice')
+    if (existing) existing.remove()
+    const toast = document.createElement('div'); toast.id = 'dsh-rc-notice'; toast.setAttribute('role', 'status')
+    toast.style.cssText = 'position:fixed;left:50%;top:20px;transform:translateX(-50%);z-index:2147483647;max-width:min(86vw,420px);padding:10px 16px;border-radius:999px;background:#242938;color:#fff;font:13px/1.6 system-ui,sans-serif;text-align:center;box-shadow:0 8px 28px #00000047'
+    toast.textContent = message
+    ;(document.body ?? document.documentElement).append(toast)
+    setTimeout(() => toast.remove(), 2600)
+  }
+  /** Open computer files on the remote device instead of invoking the Desktop handler. */
+  async function openLocalFile(href: string): Promise<void> {
+    const path = parseLocalFile(href)
+    if (!path) { notice('链接不是本机文件路径。'); return }
+    if (/\.html?$/i.test(path)) {
+      // Open immediately: awaiting a fetch first would lose the tap's popup permission.
+      const address = '/rc/workspace-file?p=' + encodeURIComponent(path)
+      const preview = window.open(address, '_blank')
+      if (preview) preview.opener = null
+      else location.assign(address)
+      return
+    }
+    try {
+      const response = await originalFetch('/rc/workspace-file?p=' + encodeURIComponent(path), { cache: 'no-store' })
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        notice((data as { error?: string } | null)?.error ?? `无法读取文件（HTTP ${response.status}）。`)
+        return
+      }
+      const objectUrl = URL.createObjectURL(await response.blob())
+      // A tap grants popup permission on real browsers; where it is withheld, fall back to
+      // navigating this tab — the file renders and the back button returns to the app.
+      if (!window.open(objectUrl, '_blank')) location.assign(objectUrl)
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 120000)
+    } catch { notice('读取文件失败，请检查电脑上的远程连接。') }
+  }
+  document.addEventListener('click', event => {
+    const target = event.target as Element | null
+    const anchor = target?.closest?.('a[href]') as HTMLAnchorElement | null
+    if (!anchor) return
+    const href = anchor.getAttribute('href') ?? ''
+    if (!/^file:/i.test(href)) return
+    event.preventDefault(); event.stopImmediatePropagation()
+    void openLocalFile(anchor.href)
+  }, true)
+  /** Phone-only diagnosis: a page that dies before the app mounts would be a blank white
+   *  screen with no way to see why, so the first failures surface right on the page. */
+  const bootErrors: string[] = []
+  const showBootErrors = (): void => {
+    if (document.getElementById('dsh-rc-boot-errors')) return
+    const box = document.createElement('div'); box.id = 'dsh-rc-boot-errors'; box.setAttribute('role', 'alert')
+    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;max-height:46%;overflow:auto;background:rgba(43,29,29,.96);color:#ffd9d9;font:11px/1.6 ui-monospace,Consolas,monospace;padding:10px 12px;white-space:pre-wrap;word-break:break-all;border-top:2px solid #B34337'
+    box.textContent = bootErrors.join('\n———\n')
+    ;(document.body ?? document.documentElement).append(box)
+  }
+  // The browser reports a deferred ResizeObserver delivery through the error event.
+  // Layout still settles on the next frame, so this is not a page failure.
+  const deferredObservation = (message: string): boolean =>
+    message === 'ResizeObserver loop completed with undelivered notifications.'
+    || message === 'ResizeObserver loop limit exceeded'
+  window.addEventListener('error', event => {
+    if (bootErrors.length >= 8) return
+    const failure = event as ErrorEvent
+    const target = event.target as (HTMLScriptElement & HTMLLinkElement & HTMLImageElement) | null
+    if (target && target.tagName && (target.tagName === 'SCRIPT' || target.tagName === 'LINK' || target.tagName === 'IMG') && (target.src || target.href)) {
+      const url = target.src || target.href || ''
+      bootErrors.push(`资源加载失败: <${target.tagName.toLowerCase()}> ${url}`)
+    } else if (failure.message && !deferredObservation(failure.message)) {
+      bootErrors.push(`JS 错误: ${failure.message}\n  at ${(failure.filename || '?').split('/').pop()}:${failure.lineno}`)
+    } else return
+    showBootErrors()
+    scheduleReport(1500)
+  }, true)
+  window.addEventListener('unhandledrejection', event => {
+    if (bootErrors.length >= 8) return
+    bootErrors.push(`Promise 拒绝: ${String((event as PromiseRejectionEvent).reason).slice(0, 400)}`)
+    showBootErrors()
+    scheduleReport(1500)
+  })
+  /** Phone-only boot failures can't be debugged from a screenshot: one small report per page
+   *  load lands in the computer's storage, whatever pairing state the device ends up in. */
+  let reported = 0
+  let reportTimer: ReturnType<typeof setTimeout> | undefined
+  const sendReport = (): void => {
+    if (reported >= 3) return
+    reported += 1
+    const root = document.getElementById('root')
+    void originalFetch('/rc/boot-report', {
+      method: 'POST', keepalive: true,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        href: location.href, viewport: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
+        ua: navigator.userAgent, mounted: !!root?.children.length, errors: bootErrors.slice(0, 8),
+      }),
+    }).catch(() => { /* diagnostics must never disturb the page */ })
+  }
+  const scheduleReport = (delay: number): void => {
+    if (reported >= 3) return
+    clearTimeout(reportTimer)
+    reportTimer = setTimeout(sendReport, delay)
+  }
+  scheduleReport(8000)
   function disconnected(message: string): void {
     if (document.getElementById('dsh-rc-disconnected')) return
     const notice = document.createElement('div'); notice.id = 'dsh-rc-disconnected'; notice.setAttribute('role', 'alert')
@@ -44,7 +147,7 @@ function remoteBoot(): void {
     }
   }
   if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', { value: () => '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0]! & 15 >> Number(c) / 4).toString(16)) })
-  // Cloudflare Quick Tunnels do not support SSE. EventSource uses our WS carrier.
+  // EventSource uses one authenticated WS carrier for both LAN and fixed-domain connections.
   const NativeSocket = window.WebSocket
   class RemoteEventSource extends EventTarget {
     static CONNECTING = 0; static OPEN = 1; static CLOSED = 2
@@ -98,8 +201,12 @@ function remoteBoot(): void {
   }
   globals.EventSource = RemoteEventSource
 }
-export const BOOT_SCRIPT = `(${remoteBoot.toString()})();`
+export const BOOT_SCRIPT = `(${remoteBoot.toString()})(${localFilePath.toString()});`
 export function injectBoot(html: string): string {
-  return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}<script>${BOOT_SCRIPT.replace(/<\/script/gi, '<\\/script')}</script>`)
+  const script = `<script>${BOOT_SCRIPT.replace(/<\/script/gi, '<\\/script')}</script>`
+  // Android keeps the 980px fallback layout when a script runs before the viewport meta.
+  const viewport = /<meta\b[^>]*\bname=["']viewport["'][^>]*>/i.exec(html)
+  if (viewport) return html.slice(0, viewport.index + viewport[0].length) + script + html.slice(viewport.index + viewport[0].length)
+  return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}<meta name="viewport" content="width=device-width, initial-scale=1">${script}`)
 }
 

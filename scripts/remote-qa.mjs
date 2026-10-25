@@ -13,7 +13,10 @@ const manage = (action, fields = {}) => local.evaluate(async ({ action, fields }
 }, { action, fields })
 const check = (name, details = {}) => { results.push({ name, passed: true, ...details }); console.log('PASS', name) }
 try {
-  await manage('stop'); await local.waitForTimeout(200); await manage('preferences', { mode: process.env.DSH_QA_MODE || 'lan', proxy: process.env.DSH_QA_PROXY || '', route: process.env.DSH_QA_ROUTE || 'cloudflare' }); await manage('start')
+  await manage('stop'); await local.waitForTimeout(200)
+  const mode = process.env.DSH_QA_MODE || 'lan'
+  await manage('preferences', { mode, proxy: process.env.DSH_QA_PROXY || '', ...(mode === 'public' ? { publicUrl: process.env.DSH_QA_PUBLIC_URL || 'https://dsh.example.com' } : {}) })
+  await manage('start')
   await expect.poll(async () => { const state = await manage('status'); if (state.phase === 'error') throw new Error(state.error); return state.phase }, { timeout: 140000, intervals: [1000] }).toBe('ready')
   const initial = await manage('status')
   const changed = await manage('preferences', { mode: initial.activeMode === 'lan' ? 'public' : 'lan' })
@@ -25,8 +28,13 @@ try {
   page.on('response', response => { if (response.status() >= 500) (deliberateDisconnect ? interruptedRequests : errors).push(`${new URL(response.url()).pathname}: HTTP ${response.status()}`) })
   expect((await context.request.get(initial.links[0].base + '/api/remote.mux')).status()).toBe(403)
   await page.goto(initial.links[0].url)
+  if (mode === 'public') {
+    await page.locator('#password:not([hidden])').waitFor()
+    await page.getByLabel('6 位连接密码').fill(initial.pairingPin)
+    await page.getByRole('button', { name: '验证并继续', exact: true }).click()
+  }
   await page.getByText('等待电脑确认，请查看本机远程控制面板').waitFor()
-  expect((await context.request.get(initial.links[0].base + '/')).status()).toBe(403)
+  expect((await context.request.get(initial.links[0].base + '/')).status()).toBe(mode === 'public' ? 200 : 403)
   const requests = (await manage('status')).requests
   await manage('approve', { id: requests.at(-1).id }); await page.waitForURL(url => url.pathname === '/')
   await page.getByRole('textbox', { name: '消息', exact: true }).waitFor(); check('unauthorized gate, waiting page, local approval, standalone app boot')

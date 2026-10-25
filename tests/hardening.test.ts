@@ -8,8 +8,6 @@ import { join } from 'node:path'
 import * as Plugin from '../src/index.js'
 import { Gateway, MANAGE_PATH, REMOTE_MARK } from '../src/gateway.js'
 import { MAX_DEVICES, PairingService } from '../src/pairing.js'
-import { TunnelManager, isTemporaryHost } from '../src/tunnel.js'
-import { EventEmitter } from 'node:events'
 import { deniedPage, pairingPage } from '../src/pages.js'
 
 const OWNER = { principal: { kind: "owner" } } as Connection.PeerScope
@@ -91,23 +89,6 @@ it('admits the addresses the computer has now, and marks what it forwards as rem
   expect(JSON.parse(forwarded.body)).toEqual({ mark: '1' })
 })
 
-it('keeps a verified public connection when only the computer loses sight of it', async () => {
-  const gateway = { port: 1, healthURL: (base: string) => `${base}/rc/health`, verifyHealth: () => true, allowAuthority() {}, disallowAuthority() {} } as unknown as Gateway
-  const failed = vi.fn()
-  const tunnel = new TunnelManager(gateway, failed) as unknown as { phase: string; url?: string; warning?: string; error?: string; verifyUntil: number; generation: number; probe(generation: number): Promise<void>; stop(): Promise<void> }
-  vi.stubGlobal('fetch', vi.fn(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }) }))
-  cleanup.push(() => { vi.unstubAllGlobals(); return tunnel.stop() })
-  tunnel.url = 'https://example.trycloudflare.com'; tunnel.phase = 'ready'
-  for (let i = 0; i < 3; i++) await tunnel.probe(tunnel.generation)
-  expect(tunnel.phase).toBe('ready')
-  expect(tunnel.warning).toContain('ECONNRESET')
-  expect(failed).not.toHaveBeenCalled()
-  // A new address that never answers within the allowed time is a failed start.
-  tunnel.phase = 'verifying'; tunnel.verifyUntil = Date.now() - 1
-  await tunnel.probe(tunnel.generation)
-  expect(tunnel.phase).toBe('error')
-  expect(failed).toHaveBeenCalledOnce()
-})
 
 it('loads with default preferences when the file is damaged, and refuses forwarded calls on the local route', async () => {
   const home = folder(), previous = process.env.DSH_HOME
@@ -120,7 +101,7 @@ it('loads with default preferences when the file is damaged, and refuses forward
   try {
     await ctx.plugin(Connection, {}); await ctx.plugin(Plugin, {})
     await vi.waitFor(async () => expect((await call()).status).toBe(200))
-    expect(await (await call()).json()).toMatchObject({ enabled: false, autoStart: false, mode: 'public', error: expect.stringContaining('偏好设置') })
+    expect(await (await call()).json()).toMatchObject({ enabled: false, autoStart: false, mode: 'lan', error: expect.stringContaining('偏好设置') })
     expect((await call({ [REMOTE_MARK]: '1' })).status).toBe(403)
     // One accent colour for every surface of the plugin, kept with the preferences.
     const prefer = (accent: string) => ctx.connection.createSharedFetchHandler('/api').fetch(new Request('http://desktop.internal' + MANAGE_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'preferences', accent }) }), OWNER)
@@ -137,35 +118,4 @@ it('renders the pairing pages in the chosen accent colour', () => {
   expect(pairingPage('black')).toContain('<html lang="zh-CN" data-rc-accent="black">')
   expect(deniedPage()).toContain('data-rc-accent="orange"')
   expect(pairingPage()).toContain(':root[data-rc-accent=blue]{--rc-accent:#3D63E6')
-})
-
-it('falls back to the next public service when the first never comes up, and reports only the last failure', async () => {
-  const gateway = { port: 1, healthURL: (base: string) => `${base}/rc/health`, verifyHealth: () => true, allowAuthority() {}, disallowAuthority() {} } as unknown as Gateway
-  const failed = vi.fn()
-  const tunnel = new TunnelManager(gateway, failed)
-  const children: EventEmitter[] = []
-  const child = () => { const fake = Object.assign(new EventEmitter(), { exitCode: 0, signalCode: null, connected: false, kill() {} }); children.push(fake); return fake }
-  const internals = tunnel as unknown as { launchCloudflare(): unknown; launchSsh(): unknown }
-  vi.spyOn(internals, 'launchCloudflare').mockImplementation(child)
-  vi.spyOn(internals, 'launchSsh').mockImplementation(child)
-  cleanup.push(() => tunnel.stop())
-  await tunnel.start(undefined, ['cloudflare', 'ssh'])
-  expect(tunnel.route).toBe('cloudflare')
-  children[0]!.emit('error', new Error('no route'))
-  expect(tunnel.route).toBe('ssh')
-  expect(tunnel.phase).toBe('starting')
-  expect(tunnel.note).toContain('localhost.run')
-  expect(failed).not.toHaveBeenCalled()
-  children[1]!.emit('error', Object.assign(new Error('missing'), { code: 'ENOENT' }))
-  expect(tunnel.phase).toBe('error')
-  expect(tunnel.error).toContain('ssh')
-  expect(failed).toHaveBeenCalledOnce()
-})
-
-it('knows the hosts that last only as long as their tunnel', () => {
-  expect(isTemporaryHost('abc.trycloudflare.com')).toBe(true)
-  expect(isTemporaryHost('F96B9EE03F7CD2.lhr.life')).toBe(true)
-  expect(isTemporaryHost('192.168.1.23:5173')).toBe(false)
-  expect(isTemporaryHost('lhr.life.example.com')).toBe(false)
-  expect(isTemporaryHost(undefined)).toBe(false)
 })

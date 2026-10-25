@@ -10,10 +10,13 @@ const h = React.createElement
 const ROUTE = '/api/dsh-remote-control/manage'
 interface Status {
   ui?: 'custom' | 'native'
-  enabled: boolean; busy: boolean; mode: 'public' | 'lan' | 'fixed'; activeMode?: 'public' | 'lan' | 'fixed'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null; accent?: Accent; route?: string; activeRoute?: string; routeNote?: string
+  enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null; accent?: Accent
+  publicUrl?: string | null; publicPort: number; pairingPin?: string; pinFixed?: boolean; passwordPairing?: boolean
+  publicUrlCheck?: { at: number; reachable: boolean; status: number | null; error: string | null }
+  certificate?: { domain?: string; expiresAt?: number; renewAt?: number; selfSigned: boolean; pending: boolean; restartRequired: boolean; error?: string }
   phase: string; error?: string; warning?: string; gatewayPort: number; local: boolean; expiresAt?: number; qr?: string
   links: Array<{ base: string; url?: string }>; requests: Array<{ id: string; name: string; expiresAt: number }>
-  devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public' }>; fixedReason: string; lanHint: string
+  devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public' }>; lanHint: string
 }
 interface ClientContext {
   effect(run: () => void | (() => void), label?: string): void
@@ -27,157 +30,373 @@ export async function command(input: Record<string, unknown>): Promise<Status> {
   return data as Status
 }
 type Way = 'public' | 'lan'
-/** The two ways a phone reaches the computer, in words that need no networking knowledge. */
 const WAYS: Array<{ mode: Way; name: string; text: string }> = [
-  { mode: 'lan', name: '同一 Wi‑Fi', text: '手机和电脑连着同一个 Wi‑Fi 或路由器时使用。速度最快，数据不经过外部服务器。' },
-  { mode: 'public', name: '任意网络', text: '手机用流量或别处的 Wi‑Fi 也能连。通过免费的公共通道转发，每次开启都会换一个新地址，需要重新扫码。' },
+  { mode: 'lan', name: '同一 Wi‑Fi', text: '同一网络直连，无需公网配置。' },
+  { mode: 'public', name: '任意网络', text: '异地或移动网络，需固定域名。' },
 ]
 const wayName = (mode: string | undefined) => WAYS.find(way => way.mode === mode)?.name ?? ''
-const phaseLabels: Record<string, string> = { off: '未开启', downloading: '正在下载连接组件', starting: '正在建立连接', verifying: '正在检查能否访问', ready: '已开启', error: '连接失败' }
 function icon(): React.ReactNode { return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, 'aria-hidden': true }, h('rect', { x: 7, y: 2, width: 10, height: 20, rx: 3 }), h('path', { d: 'M10 5h4M11 19h2' })) }
-
+function WayIcon({ mode }: { mode: Way }): React.ReactElement {
+  return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+    mode === 'lan'
+      ? h(React.Fragment, null, h('path', { d: 'M3 9a14 14 0 0 1 18 0M6 13a9 9 0 0 1 12 0M9.5 16.5a4 4 0 0 1 5 0' }), h('circle', { cx: 12, cy: 20, r: .8, fill: 'currentColor', stroke: 0 }))
+      : h(React.Fragment, null, h('circle', { cx: 12, cy: 12, r: 9 }), h('path', { d: 'M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18' })))
+}
+function moveRadio(event: React.KeyboardEvent<HTMLButtonElement>, index: number, count: number, choose: (index: number) => void): void {
+  const offset = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 0
+  if (!offset && event.key !== 'Home' && event.key !== 'End') return
+  event.preventDefault()
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? count - 1 : (index + offset + count) % count
+  choose(next)
+  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role=radio]')[next]?.focus()
+}
 const when = (time: number) => new Date(time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-
-/** One authorized device: where it paired, when it was used, a name the user can change. */
-function DeviceRow({ device, disabled, act }: { device: Status['devices'][number]; disabled: boolean; act: (action: string, fields?: Record<string, unknown>) => Promise<void> }): React.ReactElement {
+const address = (value: string) => {
+  try { const url = new URL(value); return url.origin + (url.pathname === '/' ? '' : url.pathname) }
+  catch { return value }
+}
+const AVATAR_TONES = ['indigo', 'teal', 'violet', 'warm'] as const
+const avatarTone = (seed: string) => AVATAR_TONES[[...seed].reduce((sum, character) => sum + (character.codePointAt(0) ?? 0), 0) % AVATAR_TONES.length]!
+function StrokeIcon({ children }: { children: React.ReactNode }): React.ReactElement {
+  return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, children)
+}
+function DeviceIcon(): React.ReactElement {
+  return h(StrokeIcon, null, h('rect', { x: 3, y: 4.5, width: 18, height: 12, rx: 2 }), h('path', { d: 'M1.5 19.5h21' }), h('path', { d: 'M9 8.5h6' }))
+}
+function BellIcon(): React.ReactElement {
+  return h(StrokeIcon, null, h('path', { d: 'M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6' }), h('path', { d: 'M10.3 19.5a2 2 0 0 0 3.4 0' }))
+}
+function GearIcon(): React.ReactElement {
+  return h(StrokeIcon, null, h('circle', { cx: 12, cy: 12, r: 3 }), h('path', { d: 'M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7' }))
+}
+const cardIcon = (tone: 'indigo' | 'teal' | 'violet' | 'warm' | 'slate', icon: React.ReactElement): React.ReactElement =>
+  block('span', 'dsrc-card-icon', [icon], { 'data-tone': tone })
+const block = (tag: 'div' | 'section' | 'span', className: string, children: React.ReactNode[], props: Record<string, unknown> = {}): React.ReactElement => h(tag, { className, ...props }, ...children)
+function StatusNote({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'neutral' | 'ok' | 'danger' | 'warn' }): React.ReactElement {
+  return block('div', 'dsrc-status-note', [h('span', { className: 'dsrc-status-label' }, label), h('span', { className: 'dsrc-status-value' }, value)], { 'data-tone': tone })
+}
+function InlineNotice({ tone = 'info', children, action }: { tone?: 'info' | 'warn' | 'danger'; children?: React.ReactNode; action?: { label: string; onClick: () => void } }): React.ReactElement {
+  return block('div', 'dsrc-inline-notice', [block('div', 'dsrc-notice-copy', [children]),
+    action ? h('button', { type: 'button', className: 'dsrc-button dsrc-notice-action', onClick: action.onClick }, action.label) : null], { 'data-tone': tone, role: tone === 'danger' ? 'alert' : 'status' })
+}
+function DeviceRow({ device, disabled, act }: { device: Status['devices'][number]; disabled: boolean; act: (action: string, fields?: Record<string, unknown>) => Promise<unknown> }): React.ReactElement {
   const [name, setName] = React.useState<string | null>(null)
-  const save = () => { const next = name?.trim(); setName(null); if (next && next !== device.name) void act('rename', { id: device.id, name: next }) }
-  return h('div', { className: 'dsrc-device dsrc-row' },
-    h('div', { className: 'dsrc-device-main' },
-      name === null
-        ? h('div', { className: 'dsrc-device-name' }, device.name,
-          device.via ? h('span', { className: 'dsrc-tag' }, wayName(device.via)) : null,
-          device.online ? h('span', { className: 'dsrc-tag dsrc-online' }, '在线') : null)
-        : h('input', { className: 'dsrc-rename', 'aria-label': '设备名称', autoFocus: true, maxLength: 40, value: name, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value), onBlur: save, onKeyDown: (event: React.KeyboardEvent) => { if (event.key === 'Enter') save(); if (event.key === 'Escape') setName(null) } }),
-      h('div', { className: 'dsrc-muted' }, `配对于 ${when(device.createdAt)} · 最近使用 ${when(device.lastSeenAt)}`)),
-    h('div', { className: 'dsrc-actions' },
-      h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled, onClick: () => setName(device.name) }, '重命名'),
-      h('button', { type: 'button', className: 'dsrc-button dsrc-danger', disabled, onClick: () => { void act('revoke', { id: device.id }) } }, '撤销授权')))
+  const finished = React.useRef(false)
+  const finish = (save: boolean) => {
+    if (finished.current) return
+    finished.current = true
+    const next = save ? name?.trim() : ''
+    setName(null)
+    if (next && next !== device.name) void act('rename', { id: device.id, name: next })
+  }
+  return block('div', 'dsrc-device dsrc-row', [
+    block('span', 'dsrc-avatar', [(device.name.trim().charAt(0) || '·').toUpperCase()], { 'data-tone': avatarTone(device.id), 'aria-hidden': true }),
+    block('div', 'dsrc-device-main', [
+      name === null ? block('div', 'dsrc-device-name', [device.name,
+        device.via ? h('span', { className: 'dsrc-tag', 'data-way': device.via }, wayName(device.via)) : null,
+        device.online ? h('span', { className: 'dsrc-tag dsrc-online' }, '在线') : null])
+        : h('input', { className: 'dsrc-rename', 'aria-label': `重命名 ${device.name}`, autoFocus: true, maxLength: 40, value: name, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value), onBlur: () => finish(true), onKeyDown: (event: React.KeyboardEvent) => { if (event.key === 'Enter') finish(true); if (event.key === 'Escape') finish(false) } }),
+      h('div', { className: 'dsrc-device-meta' }, `配对于 ${when(device.createdAt)} · 最近使用 ${when(device.lastSeenAt)}`)]),
+    block('div', 'dsrc-actions', [
+      h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled, onClick: () => { finished.current = false; setName(device.name) } }, '重命名'),
+      h('button', { type: 'button', className: 'dsrc-button dsrc-danger', disabled, onClick: () => { void act('revoke', { id: device.id }) } }, '撤销授权')]),
+  ])
 }
 
 export function RemoteControlPanel(): React.ReactElement {
   const [state, setState] = React.useState<Status | null>(null)
   const [error, setError] = React.useState('')
-  const [working, setWorking] = React.useState(false)
-  const [proxy, setProxy] = React.useState('')
+  const [statusError, setStatusError] = React.useState('')
+  const [workingAction, setWorkingAction] = React.useState('')
+  const [proxy, setProxy] = React.useState<string | null>(null)
+  const [domain, setDomain] = React.useState<string | null>(null)
+  const [pin, setPin] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState('')
-  // A short message that floats over the panel and goes by itself: the answer to "did that work?".
-  const [toast, setToast] = React.useState(''), toastTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const [toast, setToast] = React.useState('')
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const say = (text: string) => { setToast(text); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2200) }
   React.useEffect(() => () => clearTimeout(toastTimer.current), [])
   const mounted = React.useRef(true), pending = React.useRef(false)
   const refresh = React.useCallback(async () => {
     if (pending.current) return
     pending.current = true
-    try { const data = await command({ action: 'status' }); if (mounted.current) { setState(data); setError('') } }
-    catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : '状态读取失败。') }
-    finally { pending.current = false }
+    try {
+      const data = await command({ action: 'status' })
+      if (mounted.current) { setState(data); setStatusError('') }
+    } catch (failure) {
+      if (mounted.current) setStatusError(failure instanceof Error ? failure.message : '状态读取失败。')
+    } finally { pending.current = false }
   }, [])
   React.useEffect(() => {
     mounted.current = true; void refresh(); const timer = setInterval(() => { void refresh() }, 2000)
     return () => { mounted.current = false; clearInterval(timer) }
   }, [refresh])
   const act = async (action: string, fields: Record<string, unknown> = {}) => {
-    setWorking(true); setNotice('')
+    setWorkingAction(action); setNotice(''); setError('')
     try {
       const data = await command({ action, ...fields })
       if (data.links) setState(data)
-      else if (action === 'switch') { setNotice('已提交切换，当前访问即将断开。请使用新入口重新连接。') }
-      else if (action === 'stop') { setState(previous => previous ? { ...previous, enabled: false, phase: 'off', links: [], qr: undefined } : previous); setNotice('远程连接已关闭，设备授权保留。') }
-      else { setNotice('操作已提交。'); setTimeout(() => { void refresh() }, 200) }
-      setError('')
-    } catch (failure) { setError(failure instanceof Error ? failure.message : '操作失败。') }
-    finally { setWorking(false) }
+      if (action === 'certificate') setNotice('证书申请或续期已开始，状态会自动更新。')
+      else if (action === 'switch') setNotice('已提交切换，当前访问即将断开。请使用新入口重新连接。')
+      else if (action === 'stop') {
+        setState(previous => previous ? { ...previous, enabled: false, activeMode: undefined, phase: 'off', links: [], requests: [], qr: undefined } : previous)
+        setNotice('远程连接已关闭，设备授权保留。')
+      } else if (['preferences', 'setPin', 'rename'].includes(action)) {
+        setNotice(action === 'preferences' ? '设置已保存。' : action === 'setPin' ? '连接密码已更新，请重新配对设备。' : '设备名称已更新。')
+        setTimeout(() => { void refresh() }, 200)
+      } else if (['approve', 'reject', 'revoke', 'revokeAll'].includes(action)) setTimeout(() => { void refresh() }, 200)
+      return true
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '操作失败。')
+      return false
+    } finally { setWorkingAction('') }
   }
-  const copy = async (url: string) => {
-    try { await navigator.clipboard.writeText(url); setNotice(''); say('已复制配对链接') }
-    catch { setNotice('浏览器不允许自动复制，请选中下面的链接手动复制。') }
+  const copy = async (url: string, message = '已复制配对链接') => {
+    try { await navigator.clipboard.writeText(url); setNotice(''); say(message) }
+    catch { setNotice('浏览器不允许自动复制，请选中下方的完整链接手动复制。') }
   }
+  const working = !!workingAction
+  const disabled = working || !!state?.busy
   const expired = !!state?.expiresAt && Date.now() >= state.expiresAt
   const proxyMode = state?.proxyMode ?? 'off'
-  // The code is a one-time ticket for pairing a new device, valid for five minutes; devices already
-  // paired do not depend on it. While the panel is open it is renewed, unless a device is mid-pairing.
+  const proxyDraft = proxy ?? state?.manualProxy ?? ''
+  const proxyDirty = proxy !== null && proxyDraft.trim() !== (state?.manualProxy ?? '')
+  let proxyInvalid = false
+  if (proxyDraft.trim()) {
+    try { const url = new URL(proxyDraft.trim()); proxyInvalid = !['http:', 'https:'].includes(url.protocol) || !!url.username || !!url.password }
+    catch { proxyInvalid = true }
+  }
+  const publicUrl = state?.publicUrl ?? ''
+  const domainDraft = domain ?? publicUrl
+  const domainDirty = domain !== null && domainDraft.trim() !== publicUrl
+  let domainInvalid = false
+  if (domainDirty && domainDraft.trim()) {
+    try { const url = new URL(domainDraft.trim()); domainInvalid = url.protocol !== 'https:' || url.pathname !== '/' || !!url.username || !!url.password || !!url.search || !!url.hash || !url.hostname.includes('.') }
+    catch { domainInvalid = true }
+  }
+  const pinDraft = pin ?? (state?.pinFixed ? state.pairingPin ?? '' : '')
+  const pinInvalid = !!pinDraft && !/^\d{6}$/.test(pinDraft)
+  const certificate = state?.certificate
+  const certificateExpired = !!certificate?.expiresAt && certificate.expiresAt <= Date.now()
+  const certificateLabel = state && !state.local ? '仅本机可管理' : !publicUrl ? '配置域名后可管理' : !certificate ? '正在读取证书状态' : certificate.pending ? '正在申请或续期' : certificateExpired ? '证书已过期' : certificate.selfSigned ? 'frpc 自签证书' : certificate.expiresAt ? `有效至 ${new Date(certificate.expiresAt).toLocaleDateString('zh-CN')}` : '尚未申请'
+  // A renewed one-time pairing ticket does not invalidate already paired devices.
   const renewing = React.useRef(false)
   React.useEffect(() => {
     if (!state?.enabled || !expired || state.busy || renewing.current || (state.local && state.requests.length)) return
     renewing.current = true
-    void command({ action: 'refresh' }).then(setState, () => {}).finally(() => { renewing.current = false })
+    void command({ action: 'refresh' }).then(data => { if (mounted.current) setState(data) }, () => {}).finally(() => { renewing.current = false })
   }, [state, expired])
-  /** The way the user asked to change to while connected, awaiting their confirmation. */
   const [asking, setAsking] = React.useState<Way | null>(null)
-  // While connected, the option shown as chosen is the one in use; nothing changes until confirmed.
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const domainInput = React.useRef<HTMLInputElement>(null)
+  const openSettings = React.useCallback((focus = false) => {
+    setSettingsOpen(true)
+    if (focus) setTimeout(() => {
+      domainInput.current?.focus({ preventScroll: true })
+      domainInput.current?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    }, 60)
+  }, [])
   const shown = state?.enabled ? state.activeMode : state?.mode
+  const domainBlocked = shown === 'public' && !publicUrl
+  React.useEffect(() => { if (domainBlocked) setSettingsOpen(true) }, [domainBlocked])
   const choose = (mode: Way) => {
-    if (!state?.enabled) { void act('preferences', { mode }); return }
+    if (!state || disabled) return
+    if (mode === 'public' && !publicUrl) {
+      setAsking(null)
+      setNotice(state.enabled ? '先保存固定公网域名，再切换到“任意网络”。' : '选择已保留。请填写固定公网域名，然后开启连接。')
+      if (!state.enabled) void act('preferences', { mode })
+      openSettings(true)
+      return
+    }
+    if (!state.enabled) { void act('preferences', { mode }); return }
     setAsking(mode === state.activeMode ? null : mode)
   }
-  const change = async (mode: Way) => { setAsking(null); await act('preferences', { mode }); await act('switch') }
-  const disabled = working || !!state?.busy
+  const change = async (mode: Way) => {
+    setAsking(null)
+    if (mode === 'public' && !publicUrl) { openSettings(true); return }
+    if (await act('preferences', { mode })) await act('switch')
+  }
+  const start = () => {
+    if (domainBlocked || domainDirty || domainInvalid) { openSettings(true); return }
+    void act('start')
+  }
   const [accent] = useAccent()
   React.useEffect(() => { syncAccent(state?.accent, next => { void act('preferences', { accent: next }) }) }, [state?.accent])
   const firstURL = state?.links[0]?.url
+  const online = state?.devices.filter(device => device.online).length ?? 0
+  const connectionState = !state ? 'loading' : state.error ? 'error' : state.busy || working ? 'busy' : state.enabled ? 'ready' : domainBlocked ? 'blocked' : 'off'
+  const connectionLabel = !state ? statusError ? '读取失败' : '正在读取' : state.error ? '连接失败' : state.busy || working ? '正在处理' : state.enabled ? online ? '设备已连接' : '等待手机扫码' : domainBlocked ? '需要配置域名' : '未开启'
+  const settingsIssue = domainBlocked ? '需配置公网域名' : shown === 'public' && (certificate?.error || certificateExpired) ? '证书需处理' : shown === 'public' && state?.publicUrlCheck && !state.publicUrlCheck.reachable ? '公网检测未通过' : ''
   const button = (label: string, action: string, fields?: Record<string, unknown>, extra = '') => h('button', { type: 'button', className: `dsrc-button ${extra}`, disabled, onClick: () => { void act(action, fields) } }, label)
-  return h('div', { className: 'dsrc', 'data-dsh-plugin': 'dsh-remote-control' },
-    h('header', { className: 'dsrc-head' }, h('div', null, h('h2', null, '远程控制'), h('p', { className: 'dsrc-sub' }, '扫码后在本机确认连接，继续会话与审批。')),
-      h('span', { className: 'dsrc-badge', 'data-ready': state?.phase === 'ready' }, h('span', { className: 'dsrc-dot' }), phaseLabels[state?.phase ?? 'off'] ?? '读取状态')),
-    h('section', { className: 'dsrc-surface' },
-      h('h3', null, '连接方式'),
-      h('div', { className: 'dsrc-note' }, '手机连接后使用的界面',
-        h('div', { className: 'dsrc-mode', role: 'group', 'aria-label': '手机界面' },
-          ...([['custom', '自定义界面'], ['native', '原生界面']] as const).map(([id, title]) =>
-            h('button', { key: id, type: 'button', 'aria-pressed': (state?.ui ?? 'custom') === id, disabled, onClick: () => { void act('preferences', { ui: id }) } }, title))),
-        h('p', null, '下次打开或刷新手机页面时生效，无需重新配对。自定义界面异常时，也可直接打开原生界面。'),
-        state?.local ? null : h('a', { href: '/?ui=native' }, '打开原生界面')),
-      h('p', { className: 'dsrc-note' }, '当前按 DSH 0.2.1-rc.2 接口适配。若部分功能提示服务缺失，请检查相关插件是否启用，或改用原生界面。'),
-      h('div', { className: 'dsrc-ways', role: 'radiogroup', 'aria-label': '连接方式' },
-        ...WAYS.map(way => h('button', { key: way.mode, type: 'button', role: 'radio', className: 'dsrc-way', 'aria-checked': shown === way.mode, disabled, onClick: () => choose(way.mode) },
-          h('span', { className: 'dsrc-way-mark' }),
-          h('span', null, h('span', { className: 'dsrc-way-name' }, way.name, state?.enabled && state.activeMode === way.mode ? h('span', { className: 'dsrc-tag' }, '正在使用') : null),
-            h('span', { className: 'dsrc-way-text' }, way.text))))),
-      asking ? h('div', { className: 'dsrc-confirm', role: 'alertdialog', 'aria-label': '更换连接方式' },
-        h('p', null, `改用“${wayName(asking)}”？已经连上的手机会断开，需要重新扫码。`),
-        h('div', { className: 'dsrc-actions' },
-          h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setAsking(null) }, '保持不变'),
-          h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled, onClick: () => { void change(asking) } }, '更换并重新连接'))) : null,
-      shown === 'lan' && state?.enabled ? h('p', { className: 'dsrc-note' }, '连不上时，检查手机和电脑是否在同一个 Wi‑Fi，以及电脑防火墙是否拦截了这个程序。') : null,
-      h('div', { className: 'dsrc-actions' }, state?.enabled ? button('关闭远程连接', 'stop') : button('开启远程连接', 'start', {}, 'dsrc-primary')),
-      h('label', { className: 'dsrc-toggle' }, h('input', { type: 'checkbox', checked: state?.autoStart ?? false, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { autoStart: event.target.checked }) } }), '随 DSH 启动，自动开启所选连接方式'),
-      h('div', { className: 'dsrc-note' }, '强调色　', h('span', { className: 'dsrc-swatches', role: 'radiogroup', 'aria-label': '强调色' },
-        ...ACCENT_IDS.map(id => h('button', { key: id, type: 'button', className: 'dsrc-swatch', role: 'radio', 'aria-checked': accent === id, 'aria-label': ACCENTS[id].name, title: ACCENTS[id].name, style: { '--rc-swatch': ACCENTS[id].accent } as React.CSSProperties, onClick: () => { chooseAccent(id); void act('preferences', { accent: id }) } }))),
-        '　电脑面板、配对页和手机界面共用'),
-      shown !== 'lan' ? h('div', { className: 'dsrc-note' }, '线路　',
-        h('span', { className: 'dsrc-mode dsrc-routes', role: 'group', 'aria-label': '线路' },
-          ...([['cloudflare', 'Cloudflare'], ['ssh', 'localhost.run（备用）']] as const).map(([id, name]) =>
-            h('button', { key: id, type: 'button', 'aria-pressed': (state?.route ?? 'cloudflare') === id, disabled, onClick: () => { void act('preferences', { route: id }) } }, name))),
-        state?.activeRoute ? `　正在使用 ${state.activeRoute}` : '') : null,
-      shown !== 'lan' ? h('p', { className: 'dsrc-note' }, state?.routeNote ?? 'Cloudflare 开不起来时可以换 localhost.run：它用电脑自带的 ssh，不用下载任何东西，但速度慢得多，手机第一次打开可能要等几分钟，地址每隔几小时还会换一次。改线路在下次开启时生效。') : null,
-      shown !== 'lan' ? h('details', { className: 'dsrc-proxy' },
-        h('summary', null, `电脑访问外网的代理 · ${proxyMode === 'system' ? (state?.systemProxy ? '自动检测到系统代理' : '自动检测（当前没有）') : proxyMode === 'manual' ? '手动填写' : '不使用'}`),
-        h('div', { className: 'dsrc-mode dsrc-routes', role: 'group', 'aria-label': '代理方式', style: { margin: '10px 0 0' } },
-          ...([['off', '不使用'], ['system', '自动检测系统代理'], ['manual', '手动填写']] as const).map(([id, name]) =>
-            h('button', { key: id, type: 'button', 'aria-pressed': proxyMode === id, disabled, onClick: () => { void act('preferences', { proxyMode: id }) } }, name))),
-        proxyMode === 'system' ? h('p', { className: 'dsrc-note' }, state?.systemProxy ? `检测到 ${state.systemProxy.url}（${state.systemProxy.source}），开启时会用它。` : '没有检测到系统代理，开启时直接连接。开了代理软件却没检测到的话，请在代理软件里打开“系统代理”，或改用手动填写。') : null,
-        proxyMode === 'manual' ? h('div', { className: 'dsrc-input' }, h('input', { 'aria-label': '电脑端代理地址', placeholder: state?.manualProxy || 'http://127.0.0.1:7890', value: proxy, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setProxy(event.target.value) }), button('保存', 'preferences', { proxy: proxy || state?.manualProxy || '' })) : null,
-        h('p', { className: 'dsrc-note' }, '默认不使用代理。只有直接连不上 Cloudflare 时才需要打开；走代理反而连不上的话（代理出口被 Cloudflare 拒绝），请改回“不使用”。手机不需要代理。改动在下次开启时生效。')) : null,
-    ),
-    h('section', { className: 'dsrc-surface' }, h('div', { className: 'dsrc-row' }, h('h3', null, '扫码配对'), h('span', { className: 'dsrc-muted' }, expired ? '正在更新二维码' : firstURL ? '只用于添加新设备 · 自动更新' : '等待连接就绪')),
-      h('div', { className: 'dsrc-pair' }, state?.qr && !expired
-        ? h('button', { type: 'button', className: 'dsrc-code dsrc-code-button', title: '点击换一个新的二维码', 'aria-label': '配对二维码，点击刷新', disabled, onClick: () => { void act('refresh') } },
-          h('img', { src: state.qr, alt: '远程控制配对二维码' }), h('span', { className: 'dsrc-code-hint' }, '点击刷新'))
-        : h('div', { className: 'dsrc-code' }, h('div', { className: 'dsrc-placeholder' }, expired ? '正在更新二维码…' : '连接就绪后\n二维码会显示在这里')),
-        h('div', { className: 'dsrc-steps' }, ...['开启连接并用手机扫码', '在本机面板确认配对请求', '进入远程界面，继续会话和审批'].map((step, i) => h('div', { className: 'dsrc-step', key: step }, h('span', { className: 'dsrc-number' }, String(i + 1).padStart(2, '0')), h('span', null, step))), h('p', { className: 'dsrc-muted' }, '配对后的设备与本机同权，可以管理设置、凭据和插件。二维码只在添加新设备时用一次，已连上的手机不受它影响。'))),
-      firstURL && !expired ? h('button', { type: 'button', className: 'dsrc-link dsrc-link-button', title: '点击复制配对链接', onClick: () => { void copy(firstURL) } }, h('span', null, firstURL), h('span', { className: 'dsrc-link-hint' }, '点击复制')) : null,
-      state?.links && state.links.length > 1 ? h('p', { className: 'dsrc-note' }, '其他网卡地址：', ...state.links.slice(1).map(link => h('span', { key: link.base }, ' ', h('button', { type: 'button', className: 'dsrc-button', onClick: () => { if (link.url) void copy(link.url) } }, link.base)))) : null,
-    ),
-    state?.local && state.requests.length ? h('section', { className: 'dsrc-surface' }, h('h3', null, '等待你确认'), ...state.requests.map(request => h('div', { className: 'dsrc-device dsrc-row', key: request.id }, h('div', null, h('div', { className: 'dsrc-device-name' }, request.name), h('div', { className: 'dsrc-muted' }, '允许后授予与本机相同的权限')), h('div', { className: 'dsrc-actions' }, button('拒绝', 'reject', { id: request.id }), button('允许连接', 'approve', { id: request.id }, 'dsrc-primary'))))) : null,
-    h('section', { className: 'dsrc-surface' }, h('div', { className: 'dsrc-row' }, h('h3', null, '已授权设备'), state?.devices.length ? button('撤销全部', 'revokeAll', {}, 'dsrc-danger') : null),
-      state?.devices.length ? state.devices.map(device => h(DeviceRow, { key: device.id, device, disabled, act })) : h('p', { className: 'dsrc-empty' }, '还没有配对设备。扫码并确认后，设备会出现在这里。'),
-      h('p', { className: 'dsrc-note' }, '同一台手机用两种方式各连过一次，会有两条记录。“同一 Wi‑Fi”的授权 30 天不用后过期；“任意网络”的地址每次开启都会变，关闭连接后对应的记录自动清除。')),
-    error || state?.error ? h('div', { className: 'dsrc-error', role: 'alert' }, error || state?.error) : null,
-    state?.warning ? h('p', { className: 'dsrc-note', role: 'status' }, state.warning) : null,
-    notice ? h('p', { className: 'dsrc-note', role: 'status' }, notice) : null,
-    toast ? h('div', { className: 'dsrc-toast', role: 'status', 'aria-live': 'polite' }, h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast) : null,
-  )
+
+  const main = () => {
+    if (!state) return block('section', 'dsrc-surface dsrc-loading', [
+      h('span', { className: 'dsrc-loading-mark', 'aria-hidden': true }),
+      block('div', '', [h('h3', null, statusError ? '暂时无法读取状态' : '正在读取远程连接'), h('p', { className: 'dsrc-note' }, statusError || '正在获取连接方式、二维码与授权设备…')]),
+      statusError ? h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void refresh() } }, '重试') : null,
+    ], { 'aria-busy': !statusError, role: 'status' })
+    const modeButtons = block('div', 'dsrc-ways', WAYS.map((way, index) => h('button', {
+      key: way.mode, type: 'button', role: 'radio', 'data-mode': way.mode, className: 'dsrc-way', 'aria-checked': shown === way.mode, title: way.text,
+      tabIndex: shown === way.mode || !shown && index === 0 ? 0 : -1, disabled, onClick: () => choose(way.mode),
+      onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => moveRadio(event, index, WAYS.length, next => choose(WAYS[next]!.mode)),
+    }, h('span', { className: 'dsrc-way-icon' }, h(WayIcon, { mode: way.mode })),
+    block('span', 'dsrc-way-copy', [block('span', 'dsrc-way-name', [way.name, state.enabled && state.activeMode === way.mode ? h('span', { className: 'dsrc-tag dsrc-online' }, '使用中') : null])]))), { role: 'radiogroup', 'aria-label': '连接方式' })
+    const code = block('div', 'dsrc-scan', [
+      state.qr && !expired ? block('div', 'dsrc-code', [h('img', { src: state.qr, alt: `${wayName(shown)}远程控制配对二维码`, draggable: false })], { 'data-ready': true })
+        : block('div', 'dsrc-code', [block('div', 'dsrc-placeholder', [expired ? '正在更新二维码…' : state.busy ? '连接就绪后显示二维码' : domainBlocked ? '配置域名并开启后显示二维码' : '开启连接后显示配对二维码'])]),
+      state.qr && !expired ? h('button', { type: 'button', className: 'dsrc-button dsrc-ghost dsrc-code-refresh', disabled, onClick: () => { void act('refresh').then(saved => { if (saved) say('二维码已刷新') }) } }, workingAction === 'refresh' ? '正在刷新…' : '刷新二维码') : null,
+      block('div', 'dsrc-steps', ['手机相机扫码', shown === 'public' ? state.passwordPairing ? '输入密码直接进入' : '输入密码，本机确认' : '在本机确认配对', '继续会话与审批'].map((step, index) => block('span', 'dsrc-step', [h('span', { className: 'dsrc-number' }, String(index + 1)), h('span', null, step)], { key: step }))),
+    ])
+    const pairingPassword = shown === 'public' && state.local ? block('div', 'dsrc-pin', [
+      block('div', 'dsrc-pin-head', [h('span', { className: 'dsrc-field-label' }, '连接密码'), h('span', { className: 'dsrc-pin-kind' }, state.pinFixed ? '固定' : '随机')]),
+      pin === null ? block('div', 'dsrc-secret', [
+        h('code', null, state.pairingPin ?? '------'),
+        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: disabled || !state.pairingPin, onClick: () => { if (state.pairingPin) void copy(state.pairingPin, '已复制连接密码') } }, '复制'),
+        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled, onClick: () => setPin(state.pinFixed ? state.pairingPin ?? '' : '') }, state.pinFixed ? '修改' : '设为固定'),
+      ]) : block('div', 'dsrc-input', [
+        h('input', { 'aria-label': '固定连接密码', inputMode: 'numeric', maxLength: 6, placeholder: '6 位数字', value: pinDraft, 'aria-invalid': pinInvalid, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setPin(event.target.value.replace(/\D/g, '')) }),
+        h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: disabled || pinInvalid, onClick: () => { if (confirm('修改连接密码会断开所有已授权手机，需要重新配对。继续？')) void act('setPin', { pin: pinDraft }).then(saved => { if (saved) setPin(null) }) } }, '保存'),
+        h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setPin(null) }, '取消'),
+      ]),
+      h('p', { className: 'dsrc-note' }, pin === null ? '仅配对本人设备；修改密码会撤销授权。' : '留空恢复随机密码；保存将撤销授权。'),
+      pinInvalid ? h('p', { className: 'dsrc-error' }, '连接密码必须是 6 位数字。') : null,
+    ]) : shown === 'public' ? h('p', { className: 'dsrc-note dsrc-pin' }, '连接密码仅能在本机面板查看和修改。') : null
+    const brief = block('div', 'dsrc-brief', [
+      block('div', 'dsrc-connection-state', [
+        h('strong', null, state.busy ? '正在启动连接…' : state.enabled ? online ? '手机已连接，可以继续使用' : '连接已就绪，等待手机扫码' : domainBlocked ? '还差一个固定公网域名' : '开启后，用手机继续操作'),
+        h('p', null, state.enabled ? online ? `${online} 台设备在线；也可以继续配对其他手机。` : '已授权设备可直接使用，新手机请扫码。' : domainBlocked ? '域名通常只需配置一次，保存后回到这里开启。' : shown === 'public' ? `将通过 ${address(publicUrl)} 连接。` : '同一 Wi‑Fi 即可直连，授权设备可重复使用。'),
+      ]),
+      domainBlocked ? h(InlineNotice, { tone: 'warn', action: { label: '配置域名', onClick: () => openSettings(true) } }, '“任意网络”需要固定公网域名，在右侧“连接与外观设置”里填写。') : null,
+      state.error ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
+      shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, '公网域名当前无法访问，请检查域名与 frpc 转发。')]) : null,
+      block('div', 'dsrc-connection-actions', [state.enabled ? button(workingAction === 'stop' ? '正在关闭…' : '关闭远程连接', 'stop', {}, 'dsrc-stop')
+        : h('button', { type: 'button', className: 'dsrc-button dsrc-primary dsrc-start', disabled, onClick: start }, state.busy || workingAction === 'start' ? '正在开启…' : domainBlocked ? '先配置域名' : '开启远程连接')]),
+      h('label', { className: 'dsrc-toggle' }, h('input', { type: 'checkbox', checked: state.autoStart, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { autoStart: event.target.checked }) } }), '随 DSH 自动开启'),
+      pairingPassword,
+      firstURL && !expired ? block('div', 'dsrc-pair-link', [
+        h('code', { className: 'dsrc-link', title: address(firstURL) }, address(firstURL)),
+        h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void copy(firstURL) } }, '复制链接'),
+      ]) : null,
+      state.links.length > 1 ? h('details', { className: 'dsrc-networks' }, h('summary', null, `其他网卡（${state.links.length - 1}）`),
+        block('div', 'dsrc-alt-links', state.links.slice(1).map(link => h('button', { key: link.base, type: 'button', className: 'dsrc-button dsrc-address-button', title: '复制此网卡的完整配对链接', disabled: !link.url, onClick: () => { if (link.url) void copy(link.url) } }, address(link.base))))) : null,
+    ])
+    return block('section', 'dsrc-surface dsrc-workspace', [
+      modeButtons,
+      asking ? block('div', 'dsrc-confirm', [
+        h('p', null, `切换到“${wayName(asking)}”？已连接的手机会断开，需要重新配对。`),
+        block('div', 'dsrc-actions', [h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setAsking(null) }, '取消'),
+          h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled, onClick: () => { void change(asking) } }, '切换连接')]),
+      ], { role: 'alertdialog', 'aria-label': '更换连接方式' }) : null,
+      block('div', 'dsrc-stage', [code, brief]),
+      statusError ? block('div', 'dsrc-panel-message', [h('span', null, `状态更新失败，当前显示上次结果。${statusError}`), h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void refresh() } }, '重试')], { 'data-tone': 'warn', role: 'alert' }) : null,
+      error && error !== state.error ? block('div', 'dsrc-panel-message', [error], { 'data-tone': 'danger', role: 'alert' }) : null,
+      state.warning ? block('div', 'dsrc-panel-message', [state.warning], { 'data-tone': 'warn', role: 'status' }) : null,
+      notice ? block('div', 'dsrc-panel-message', [notice, !navigator.clipboard && firstURL ? h('textarea', { className: 'dsrc-copy-fallback', readOnly: true, 'aria-label': '完整配对链接，可全选复制', value: firstURL, onFocus: (event: React.FocusEvent<HTMLTextAreaElement>) => event.currentTarget.select() }) : null], { 'data-tone': 'info', role: 'status' }) : null,
+    ], { 'data-section': 'connection', 'data-state': connectionState })
+  }
+
+  const settings = () => {
+    if (!state) return null
+    const publicSettings = block('section', 'dsrc-setting-group', [
+      block('div', 'dsrc-setting-heading', [h('h3', null, '公网连接'), h('span', { className: 'dsrc-setting-kicker' }, '固定域名与证书')]),
+      block('div', 'dsrc-field dsrc-domain-field', [
+        h('label', { htmlFor: 'dsrc-public-url' }, '固定公网域名'),
+        block('div', 'dsrc-input', [
+          h('input', { id: 'dsrc-public-url', ref: domainInput, type: 'url', value: domainDraft, placeholder: 'https://dsh.example.com', spellCheck: false, autoComplete: 'off', disabled: disabled || !state.local || state.activeMode === 'public', 'aria-invalid': domainInvalid, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDomain(event.target.value) }),
+          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !domainDirty || domainInvalid || state.activeMode === 'public', onClick: () => { void act('preferences', { publicUrl: domainDraft.trim() }).then(saved => { if (saved) setDomain(null) }) } }, '保存'),
+        ]),
+        domainInvalid ? h('p', { className: 'dsrc-error' }, '请输入不带路径、账号或密码的 https:// 域名。') : null,
+        h('p', { className: 'dsrc-note' }, !state.local ? '域名只能在连接到此电脑的本机面板修改。' : state.activeMode === 'public' ? '如需修改域名，请先关闭远程连接。' : `将 frpc 的 80 / 443 转发到本机端口 ${state.publicPort}。`),
+      ]),
+      block('div', 'dsrc-setting-row', [
+        h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !publicUrl || domainDirty, onClick: () => { void act('checkPublicUrl') } }, workingAction === 'checkPublicUrl' ? '正在检测…' : state.publicUrlCheck ? '重新检测' : '检测连通性'),
+        h(StatusNote, { label: '域名', value: state.publicUrlCheck ? state.publicUrlCheck.reachable ? `可访问${state.publicUrlCheck.status ? ` · HTTP ${state.publicUrlCheck.status}` : ''}` : `无法访问${state.publicUrlCheck.error ? ` · ${state.publicUrlCheck.error}` : ''}` : state.local ? '尚未检测' : '仅本机可检测', tone: state.publicUrlCheck ? state.publicUrlCheck.reachable ? 'ok' : 'danger' : 'neutral' }),
+      ]),
+      block('div', 'dsrc-field dsrc-certificate', [
+        block('div', 'dsrc-setting-row', [
+          h(StatusNote, { label: 'HTTPS 证书', value: certificateLabel, tone: certificateExpired || certificate?.error ? 'danger' : certificate?.pending ? 'warn' : certificate?.expiresAt && !certificate.selfSigned ? 'ok' : 'neutral' }),
+          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !publicUrl || !!certificate?.pending || !state.enabled || state.activeMode !== 'public', title: !state.enabled || state.activeMode !== 'public' ? '开启任意网络后可申请证书' : undefined, onClick: () => { void act('certificate') } }, certificate?.pending || workingAction === 'certificate' ? '处理中…' : certificate?.expiresAt && !certificateExpired && !certificate.selfSigned ? '续期证书' : '申请证书'),
+        ]),
+        certificate?.restartRequired ? h('p', { className: 'dsrc-note' }, '证书已部署，请在 SakuraFrp 中重载对应隧道。') : null,
+        certificate?.error ? h('p', { className: 'dsrc-error' }, '证书错误：' + certificate.error) : null,
+      ]),
+      publicUrl ? h('label', { className: 'dsrc-check dsrc-direct' },
+        h('input', { type: 'checkbox', checked: state.passwordPairing === true, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { passwordPairing: event.target.checked }) } }),
+        block('span', 'dsrc-check-copy', [
+          h('span', { className: 'dsrc-field-label' }, '密码直连配对'),
+          h('span', { className: 'dsrc-note' }, '开启后，新设备在浏览器输入连接密码即可直接配对进入，无需扫码和电脑确认；建议配合固定密码使用。'),
+        ])) : null,
+    ], { 'aria-label': '公网连接' })
+    const appearance = block('section', 'dsrc-setting-group', [
+      block('div', 'dsrc-setting-heading', [h('h3', null, '电脑网络代理'), h('span', { className: 'dsrc-setting-kicker' }, proxyMode === 'system' ? '自动检测' : proxyMode === 'manual' ? '手动设置' : '不使用')]),
+      block('div', 'dsrc-mode', ([['off', '不使用'], ['system', '自动检测'], ['manual', '手动设置']] as const).map(([id, name]) => h('button', { key: id, type: 'button', 'aria-pressed': proxyMode === id, disabled: disabled || !state.local, onClick: () => { void act('preferences', { proxyMode: id }) } }, name)), { role: 'group', 'aria-label': '代理方式' }),
+      proxyMode === 'system' ? h('p', { className: 'dsrc-note' }, state.systemProxy ? `已检测：${state.systemProxy.url} · ${state.systemProxy.source}` : '未检测到系统代理，将直接连接。') : null,
+      proxyMode === 'manual' ? block('div', 'dsrc-field dsrc-proxy-field', [
+        block('div', 'dsrc-input', [
+          h('input', { 'aria-label': '电脑端代理地址', placeholder: 'http://127.0.0.1:7890', value: proxyDraft, 'aria-invalid': proxyInvalid, disabled: disabled || !state.local, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setProxy(event.target.value) }),
+          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !proxyDirty || proxyInvalid, onClick: () => { void act('preferences', { proxy: proxyDraft.trim() }).then(saved => { if (saved) setProxy(null) }) } }, '保存'),
+        ]),
+        proxyInvalid ? h('p', { className: 'dsrc-error' }, '代理需为不带用户名和密码的 HTTP(S) 地址。') : null,
+        !proxyDraft.trim() ? h('p', { className: 'dsrc-note' }, '留空并保存可移除手动代理。') : null,
+      ]) : null,
+      h('p', { className: 'dsrc-note' }, '仅用于电脑的域名检测和证书请求，不改变手机连接。'),
+      block('div', 'dsrc-field dsrc-appearance', [
+        h('span', { className: 'dsrc-field-label' }, '手机界面'),
+        block('div', 'dsrc-mode', ([['custom', '自定义界面'], ['native', '原生界面']] as const).map(([id, title]) => h('button', { key: id, type: 'button', 'aria-pressed': (state.ui ?? 'custom') === id, disabled, onClick: () => { void act('preferences', { ui: id }) } }, title)), { role: 'group', 'aria-label': '手机界面' }),
+        h('p', { className: 'dsrc-note' }, '刷新手机页面后生效，无需重新配对。'),
+        state.local ? null : h('a', { className: 'dsrc-native-link', href: '/?ui=native' }, '打开原生界面'),
+      ]),
+      block('div', 'dsrc-field dsrc-appearance', [
+        h('span', { className: 'dsrc-field-label' }, '界面强调色'),
+        block('div', 'dsrc-appearance-row', [
+          block('span', 'dsrc-swatches', ACCENT_IDS.map((id, index) => h('button', {
+            key: id, type: 'button', className: 'dsrc-swatch', role: 'radio', 'aria-checked': accent === id, tabIndex: accent === id ? 0 : -1, 'aria-label': ACCENTS[id].name, title: ACCENTS[id].name,
+            style: { '--rc-swatch': ACCENTS[id].accent } as React.CSSProperties,
+            onClick: () => { chooseAccent(id); void act('preferences', { accent: id }) },
+            onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => moveRadio(event, index, ACCENT_IDS.length, next => { const selected = ACCENT_IDS[next]!; chooseAccent(selected); void act('preferences', { accent: selected }) }),
+          })), { role: 'radiogroup', 'aria-label': '界面强调色' }),
+          h('span', { className: 'dsrc-muted' }, '对全部 copylee 插件生效'),
+        ]),
+      ]),
+    ], { 'aria-label': '代理与外观' })
+    return h('details', { className: 'dsrc-surface dsrc-preferences', 'data-needed': !!settingsIssue, open: settingsOpen, onToggle: (event: React.SyntheticEvent<HTMLDetailsElement>) => setSettingsOpen(event.currentTarget.open) },
+      h('summary', null,
+        block('span', 'dsrc-settings-title', [cardIcon('slate', h(GearIcon, null)), '连接与外观设置']),
+        h('span', { className: `dsrc-summary-value${settingsIssue ? ' dsrc-needs-attention' : ''}` }, settingsIssue || `${publicUrl ? '域名已配置' : '域名未配置'} · ${(state.ui ?? 'custom') === 'custom' ? '自定义界面' : '原生界面'} · ${ACCENTS[accent].name}`)),
+      block('div', 'dsrc-preferences-body', [publicSettings, appearance]))
+  }
+  const requests = () => state?.local && state.requests.length ? block('section', 'dsrc-surface dsrc-requests', [
+    block('div', 'dsrc-card-head', [
+      cardIcon('warm', h(BellIcon, null)),
+      h('h3', null, '待确认配对'),
+      h('span', { className: 'dsrc-tag dsrc-pending' }, `${state.requests.length} 项`),
+    ]),
+    h('p', { className: 'dsrc-note' }, '手机正在等待本机确认；仅允许本人设备。'),
+    ...state.requests.map(request => block('div', 'dsrc-device dsrc-row', [
+      block('div', 'dsrc-device-main', [block('div', 'dsrc-device-name', [request.name]), h('div', { className: 'dsrc-muted' }, '请求访问此电脑')]),
+      block('div', 'dsrc-actions', [button('拒绝', 'reject', { id: request.id }), button('允许连接', 'approve', { id: request.id }, 'dsrc-primary')]),
+    ], { key: request.id })),
+  ], { 'data-section': 'requests' }) : null
+  const devices = () => state ? block('section', 'dsrc-surface dsrc-devices', [
+    block('div', 'dsrc-card-head', [
+      cardIcon('violet', h(DeviceIcon, null)),
+      h('h3', null, '已授权设备'),
+      state.devices.length ? h('span', { className: 'dsrc-count' }, String(state.devices.length)) : null,
+      h('span', { className: 'dsrc-spacer', 'aria-hidden': true }),
+      state.devices.length ? h('button', { type: 'button', className: 'dsrc-button dsrc-danger', disabled, onClick: () => { if (confirm(`确定撤销全部 ${state.devices.length} 台设备的授权？所有已授权手机都需要重新配对。`)) void act('revokeAll') } }, '撤销全部') : null,
+    ]),
+    state.devices.length ? block('div', 'dsrc-device-list', state.devices.map(device => h(DeviceRow, { key: device.id, device, disabled, act }))) : h('p', { className: 'dsrc-empty' }, '暂无设备，扫码确认后会显示在这里。'),
+    h('p', { className: 'dsrc-note' }, '不同连接方式分别记录授权；连续 30 天未使用的授权会过期。'),
+  ], { 'data-section': 'devices' }) : null
+  return block('div', 'dsrc', [
+    h('header', { className: 'dsrc-head' }, block('div', '', [h('h2', null, '远程控制'), h('p', { className: 'dsrc-sub' }, '用手机浏览器继续电脑上的会话与审批。')]),
+      h('span', { className: 'dsrc-badge', 'data-state': connectionState, role: 'status' }, h('span', { className: 'dsrc-dot' }), connectionLabel)),
+    block('div', 'dsrc-layout', [
+      block('div', 'dsrc-col dsrc-col-main', [main()]),
+      block('div', 'dsrc-col dsrc-col-rail', [requests(), devices(), settings()]),
+    ]),
+    toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
+  ], { 'data-dsh-plugin': 'dsh-remote-control' })
 }
 interface Waiting { enabled: boolean; accent?: Accent; requests: Array<{ id: string; name: string; expiresAt: number }> }
 
@@ -199,15 +418,16 @@ function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => vo
     finally { setWorking(false); onDone() }
   }
   return h('dialog', { className: 'dsrc-dialog dsrc-prompt', ref: dialog, onCancel: (event: React.SyntheticEvent) => event.preventDefault() },
-    request ? h('div', { className: 'dsrc' },
+    request ? block('div', 'dsrc', [
       h('h2', null, '新的配对请求'),
       h('p', { className: 'dsrc-prompt-device' }, request.name),
       h('p', { className: 'dsrc-note' }, '这台设备扫描了远程控制二维码。允许后，它与本机拥有相同的权限，可以管理设置、凭据和插件。不是你本人操作请拒绝。'),
       waiting.requests.length > 1 ? h('p', { className: 'dsrc-note' }, `还有 ${waiting.requests.length - 1} 个请求在等待。`) : null,
-      error ? h('div', { className: 'dsrc-error', role: 'alert' }, error) : null,
-      h('div', { className: 'dsrc-actions dsrc-prompt-actions' },
+      error ? block('div', 'dsrc-error', [error], { role: 'alert' }) : null,
+      block('div', 'dsrc-actions dsrc-prompt-actions', [
         h('button', { type: 'button', className: 'dsrc-button', disabled: working, onClick: () => { void answer('reject') } }, '拒绝'),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: working, autoFocus: true, onClick: () => { void answer('approve') } }, '允许连接'))) : null)
+        h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: working, autoFocus: true, onClick: () => { void answer('approve') } }, '允许连接')]),
+    ]) : null)
 }
 function SidebarEntry({ wide }: { wide?: boolean }): React.ReactElement {
   const anchor = React.useRef<HTMLSpanElement>(null)
@@ -243,4 +463,3 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'copylee-remote-control', order: 65, label: () => '远程控制' }, () => h(RemoteControlPanel)))
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'copylee-remote-control', order: 65 }, (props: { wide?: boolean }) => h(SidebarEntry, { wide: props?.wide })))
 }
-

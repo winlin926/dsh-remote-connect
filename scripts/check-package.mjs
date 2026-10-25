@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from 'node:fs'
 const packed = JSON.parse(readFileSync(process.argv[2] || '.qa/pack-manifest.json', 'utf8'))
 const manifest = Array.isArray(packed) ? packed[0] : Object.values(packed)[0]
 const paths = new Set(manifest.files.map(file => file.path))
-for (const path of ['lib/index.js', 'lib/client.js', 'lib/tunnel-worker.js', 'lib/remote.js', 'lib/style.css', 'lib/LICENSES.txt', 'lib/types/index.d.ts', 'cordis.patch.yml', 'README.md', 'docs/ui-spec.md', 'docs/features.md', 'docs/verification.md']) {
+for (const path of ['lib/index.js', 'lib/client.js', 'lib/remote.js', 'lib/style.css', 'lib/LICENSES.txt', 'lib/types/index.d.ts', 'cordis.patch.yml', 'README.md', 'docs/ui-spec.md', 'docs/features.md', 'docs/verification.md']) {
   if (!paths.has(path)) throw new Error(`Missing package file: ${path}`)
 }
 for (const path of paths) if (/^(\.qa|scripts|tests|node_modules)\//.test(path) || /\.npmrc$/.test(path)) throw new Error(`Private or development file packaged: ${path}`)

@@ -75,7 +75,7 @@ it('names a device by model or system and browser', () => {
   // The model a browser reports on request wins over the reduced User-Agent.
   expect(deviceName('Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36', 'V2309A<b>;')).toBe('V2309Ab · Chrome')
 })
-it('records the pairing address, renames, and prunes devices whose address is gone', () => {
+it('records the pairing address and renames authorized devices', () => {
   const { service } = fixture()
   const pair = (host: string) => { const claim = service.request(service.issue().token, 'Android', host); service.approve(claim.id); return service.claim(claim.id, claim.key).credential! }
   const lan = pair('192.168.1.23:5173'), tunnel = pair('Old-Name.trycloudflare.com')

@@ -4,8 +4,8 @@ import * as Connection from '@deepseek-ai/dsh-client-connection'
 import * as Plugin from '../src/index.js'
 import { MANAGE_PATH } from '../src/gateway.js'
 import { Gateway } from '../src/gateway.js'
-import { TunnelManager } from '../src/tunnel.js'
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -47,7 +47,7 @@ async function withHost(run: (command: (action: string, fields?: Record<string, 
   const ctx = new Context(); let record: unknown
   const remove = ctx.provide('credentials', { modifyRecord: async (_key: unknown, update: (value: unknown) => Promise<unknown>) => { const next = await update(record); if (next !== undefined) record = next; return record } })
   try {
-    await ctx.plugin(Connection, {}); await ctx.plugin(Plugin, {})
+    await ctx.plugin(Connection, {}); await ctx.plugin(Plugin, { certificateDir: join(folder, 'certificates') })
     const command = async (action: string, fields: Record<string, unknown> = {}) => {
       const response = await ctx.connection.createSharedFetchHandler('/api').fetch(new Request('http://desktop.internal' + MANAGE_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...fields }) }), OWNER)
       const data = await response.json(); return { ...data, status: response.status }
@@ -83,12 +83,13 @@ it('keeps the running LAN entry and QR while saving a different mode or proxy', 
 }))
 
 it('explicitly switches entries, invalidates the old entry, and can retry a failed switch', async () => withHost(async command => {
-  vi.spyOn(TunnelManager.prototype, 'start').mockImplementation(async function () { this.phase = 'ready'; this.url = 'https://test.trycloudflare.com' })
   await command('preferences', { mode: 'lan' }); const lan = await command('start')
-  await command('preferences', { mode: 'public' }); const publicEntry = await command('switch')
+  await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' }); const publicEntry = await command('switch')
   expect(publicEntry).toMatchObject({ activeMode: 'public', phase: 'ready', mode: 'public' })
-  // The port is kept across the switch (a phone's bookmark keeps working), but what answers there now
-  // is the new entry: nothing of the old one is served.
+  // Public mode always uses the frpc target port, not the temporary LAN port.
+  expect(publicEntry.gatewayPort).toBe(43128)
+  expect(publicEntry.publicPort).toBe(43128)
+  expect(publicEntry.links[0].base).toBe('https://dsh.example.com')
   expect(await fetch(`http://127.0.0.1:${lan.gatewayPort}/`).then(response => response.status, () => 0)).not.toBe(200)
   await command('preferences', { mode: 'lan' }); const switched = await command('switch')
   expect(switched).toMatchObject({ activeMode: 'lan', enabled: true, phase: 'ready' })
@@ -97,6 +98,68 @@ it('explicitly switches entries, invalidates the old entry, and can retry a fail
   await command('preferences', { mode: 'public' }); expect((await command('switch')).status).toBe(400)
   expect(await command('status')).toMatchObject({ enabled: false, phase: 'error', error: 'test address unavailable' })
   expect((await command('start')).activeMode).toBe('public')
+}))
+
+it('changes the public PIN only locally and revokes existing device authorization', async () => withHost(async command => {
+  await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' })
+  const state = await command('start')
+  const base = `http://127.0.0.1:${state.gatewayPort}`
+  const call = (path: string, body: unknown, headers: Record<string, string> = {}) => new Promise<{ status: number; body: any; cookie: string }>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method: 'POST', headers: { host: 'dsh.example.com', origin: 'https://dsh.example.com', 'content-type': 'application/json', ...headers } }, res => {
+      let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), cookie: res.headers['set-cookie']?.[0]?.split(';')[0] ?? '' }))
+    }); req.on('error', reject); req.end(JSON.stringify(body))
+  })
+  const entry = await call('/rc/pair/verify', { pin: state.pairingPin })
+  expect(entry.status).toBe(200)
+  const requestPairing = await call('/rc/pair/request', { token: new URL(state.links[0].url).hash.slice(6) }, { cookie: entry.cookie })
+  await command('approve', { id: requestPairing.body.id })
+  const claim = await call('/rc/pair/claim', { id: requestPairing.body.id, key: requestPairing.body.key }, { cookie: entry.cookie })
+  expect(claim.status).toBe(200)
+  expect((await command('status')).devices).toHaveLength(1)
+  expect((await command('setPin', { pin: '123456' })).pairingPin).toBe('123456')
+  expect((await command('status')).devices).toHaveLength(0)
+  expect((await call(MANAGE_PATH, { action: 'status' }, { cookie: claim.cookie })).status).toBe(403)
+}))
+
+it('pairs a device directly with the password only when the switch is on', async () => withHost(async command => {
+  await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' })
+  const state = await command('start')
+  const call = (path: string, body: unknown, headers: Record<string, string> = {}) => new Promise<{ status: number; body: any; cookie: string }>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method: 'POST', headers: { host: 'dsh.example.com', origin: 'https://dsh.example.com', 'content-type': 'application/json', ...headers } }, res => {
+      let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), cookie: res.headers['set-cookie']?.[0]?.split(';')[0] ?? '' }))
+    }); req.on('error', reject); req.end(JSON.stringify(body))
+  })
+  await command('setPin', { pin: '654321' })
+  expect((await call('/rc/pair/direct', { pin: '654321' })).status).toBe(403)
+  await command('preferences', { passwordPairing: true })
+  expect((await command('status')).passwordPairing).toBe(true)
+  expect((await call('/rc/pair/direct', { pin: '000000' })).status).toBe(401)
+  const direct = await call('/rc/pair/direct', { pin: '654321' })
+  expect(direct.status).toBe(200)
+  expect(direct.cookie).toContain('dsh_rc=')
+  expect((await command('status')).devices).toHaveLength(1)
+  // The directly paired device has full device access through the gateway, but the switch itself stays local-only.
+  expect((await call(MANAGE_PATH, { action: 'requests' }, { cookie: direct.cookie })).status).toBe(200)
+  expect((await call(MANAGE_PATH, { action: 'preferences', passwordPairing: false }, { cookie: direct.cookie })).status).toBe(400)
+  expect((await command('status')).passwordPairing).toBe(true)
+  // Workspace-file links from messages: served to paired devices, refused otherwise.
+  const get = (path: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: string; location: string }>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method: 'GET', headers: { host: 'dsh.example.com', ...headers } }, res => {
+      let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text, location: String(res.headers.location ?? '') }))
+    }); req.on('error', reject); req.end()
+  })
+  const preview = join(tmpdir(), `dsh-rc-preview-${Date.now()}.html`)
+  writeFileSync(preview, '<p>preview-ok</p>')
+  try {
+    expect((await get('/rc/workspace-file?p=' + encodeURIComponent(preview))).status).toBe(403)
+    const opened = await get('/rc/workspace-file?p=' + encodeURIComponent(preview), { cookie: direct.cookie })
+    expect(opened.status).toBe(303)
+    const served = await get(opened.location, { origin: 'null' })
+    expect(served.status).toBe(200)
+    expect(served.body).toContain('preview-ok')
+    expect(served.body).toContain('<p>preview-ok</p>')
+    expect((await get('/rc/workspace-file?p=' + encodeURIComponent('C:/data/../secrets.txt'), { cookie: direct.cookie })).status).toBe(400)
+  } finally { rmSync(preview, { force: true }) }
 }))
 
 it('does not resurrect an entry after closing during an asynchronous listen', async () => withHost(async command => {
@@ -123,9 +186,10 @@ async function remoteClient(command: (action: string, fields?: Record<string, un
 }
 
 it('acknowledges an authorized remote switch before terminating its old entry', async () => withHost(async command => {
-  vi.spyOn(TunnelManager.prototype, 'start').mockImplementation(async function () { this.phase = 'ready'; this.url = 'https://test.trycloudflare.com' })
   const remote = await remoteClient(command)
   expect((await remote.manage('approve', { id: 'anything' })).status).toBe(400)
+  expect((await remote.manage('preferences', { publicUrl: 'https://dsh.example.com' })).status).toBe(400)
+  await command('preferences', { publicUrl: 'https://dsh.example.com' })
   await remote.manage('preferences', { mode: 'public' })
   expect(await remote.manage('switch')).toMatchObject({ switching: true, mode: 'public', status: 200 })
   await vi.waitFor(async () => expect(await command('status')).toMatchObject({ activeMode: 'public', phase: 'ready' }))
@@ -134,12 +198,22 @@ it('acknowledges an authorized remote switch before terminating its old entry', 
 }))
 
 it('cancels a remotely queued switch when the local owner closes the gateway', async () => withHost(async command => {
-  const tunnelStart = vi.spyOn(TunnelManager.prototype, 'start')
-  const remote = await remoteClient(command); await remote.manage('preferences', { mode: 'public' })
+  const remote = await remoteClient(command); await command('preferences', { publicUrl: 'https://dsh.example.com' }); await remote.manage('preferences', { mode: 'public' })
   expect((await remote.manage('switch')).switching).toBe(true)
   await command('stop'); await new Promise(resolve => setTimeout(resolve, 150))
   expect(await command('status')).toMatchObject({ enabled: false, busy: false, phase: 'off', links: [] })
-  expect(tunnelStart).not.toHaveBeenCalled()
+}))
+
+it('rolls back a saved public domain when preference persistence fails', async () => withHost(async command => {
+  await command('preferences', { mode: 'public', publicUrl: 'https://first.example.com' })
+  const before = await command('start')
+  await command('stop')
+  const file = join(process.env.DSH_HOME!, 'dsh-remote-control', 'default', 'preferences.json')
+  rmSync(file); mkdirSync(file)
+  expect((await command('preferences', { publicUrl: 'https://second.example.com' })).status).toBe(400)
+  expect((await command('status')).publicUrl).toBe('https://first.example.com')
+  expect(JSON.parse(readFileSync(join(process.env.DSH_HOME!, 'dsh-remote-control', 'default', 'public-url.json'), 'utf8')).publicUrl).toBe('https://first.example.com')
+  expect(before.publicUrl).toBe('https://first.example.com')
 }))
 
 it('rolls back unsaved preferences and preserves the live entry when atomic persistence fails', async () => withHost(async command => {

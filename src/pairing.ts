@@ -120,6 +120,20 @@ export class PairingService {
     if (claim.state !== 'pending') this.pending.delete(id)
     return result
   }
+  /** Password-direct pairing: register the device right away — no QR token, no claim, no approval. */
+  pairDirectly(userAgent: string, host?: string, model?: string): string {
+    this.expire()
+    if (this.devices.size >= MAX_DEVICES) {
+      const idle = [...this.devices.values()].filter(d => !this.options.isOnline?.(d.id)).sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
+      if (!idle) throw new Error(`已有 ${MAX_DEVICES} 台设备在线，请先撤销不再使用的设备。`)
+      this.revoke(idle.id)
+    }
+    const deviceId = randomUUID(), secret = random()
+    const device: Device = { id: deviceId, name: deviceName(userAgent, model), hash: hash(secret), createdAt: this.now(), lastSeenAt: this.now(), ...(host ? { host: host.toLowerCase() } : {}) }
+    this.devices.set(deviceId, device)
+    try { this.save() } catch (error) { this.devices.delete(deviceId); throw error }
+    return `${deviceId}.${secret}`
+  }
   authenticate(credential: string | undefined): Device | undefined {
     this.expire()
     if (!credential || credential.length > 128) return undefined

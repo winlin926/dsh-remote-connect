@@ -3,8 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 const host: UserConfig = {
-  entry: ['lib/types/index.js', 'lib/types/tunnel-worker.js'], outDir: 'lib', format: 'esm', platform: 'node', target: 'es2024', clean: false, dts: false, fixedExtension: false,
-  deps: { neverBundle: ['@deepseek-ai/cordis', '@deepseek-ai/schemastery', '@deepseek-ai/dsh-host-webserver', 'untun', 'ws', 'undici'], onlyBundle: false },
+  entry: ['lib/types/index.js'], outDir: 'lib', format: 'esm', platform: 'node', target: 'es2024', clean: false, dts: false, fixedExtension: false,
+  deps: { neverBundle: ['@deepseek-ai/cordis', '@deepseek-ai/schemastery', '@deepseek-ai/dsh-host-webserver', 'ws', 'undici'], onlyBundle: false },
 }
 const client: UserConfig = {
   entry: { client: 'lib/types/client/index.js' }, outDir: 'lib', format: 'cjs', platform: 'browser', target: 'es2022', clean: false, dts: false,

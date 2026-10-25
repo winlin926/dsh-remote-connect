@@ -1,7 +1,7 @@
 {
   "name": "@copylee/dsh-remote-control",
   "version": "0.2.9",
-  "description": "DSH 扫码远程控制：独立移动界面、本机确认配对、untun 免费公网穿透与局域网直连",
+  "description": "DSH 扫码远程控制：独立移动界面、本机确认配对、固定公网域名与局域网直连",
   "type": "module",
   "license": "MIT",
   "author": "copylee",
@@ -44,12 +44,13 @@
     "dsh",
     "dsh-plugin",
     "remote-control",
-    "untun",
-    "qrcode"
+    "qrcode",
+    "frpc",
+    "acme"
   ],
   "dsh": {
     "engines": {
-      "dsh": ">=0.2.1-rc.2"
+      "dsh": ">=0.2.1-rc.3"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -78,11 +79,12 @@
     "qa:sidebar-host": "node scripts/sidebar-entry-host-qa.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-web-frontend": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-web-frontend": "0.2.1-rc.3",
     "qrcode": "^1.5.4",
     "undici": "^7.30.0",
-    "untun": "0.2.2",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "acme-client": "5.4.0",
+    "https-proxy-agent": "^7.0.6"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0 <5",
@@ -98,17 +100,17 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
     "@deepseek-ai/cordis-plugin-loader": "1.0.6",
-    "@deepseek-ai/dsh": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-api-gateway": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-modules": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-store": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-dockkit": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-util-workspace-path": "0.2.1-rc.2",
+    "@deepseek-ai/dsh": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-api-gateway": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-modules": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-store": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-dockkit": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-util-workspace-path": "0.2.1-rc.3",
     "@deepseek-ai/schemastery": "3.18.5",
     "@playwright/test": "^1.56.0",
     "@shikijs/langs": "^4.5.0",

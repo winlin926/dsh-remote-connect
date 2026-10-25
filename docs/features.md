@@ -22,6 +22,7 @@
 | 技能 | skills.list({sessionId})、技能相关 settings namespace | 元数据清单与目录配置；通过 /技能名 调用；未暴露的技能文件编辑不伪装为可用能力 |
 | 费用 | sessions 的 cost/usage/token projections | 只展示实际投影，不推算提供商账单；宿主未提供时明确说明 |
 | 文件 | workspaceFiles.list/read/readBytes | 浏览、文本／图片／PDF 预览、下载；文本分页／文件上限明确提示；上传在聊天输入区 |
+| 消息中的电脑 HTML | 认证网关临时预览站点 | 点击 `file://` HTML 在手机新标签页打开；相对路径 CSS、JS、图片和目录内网页链接可加载；预览脚本与 DSH 会话隔离 |
 | 原生打开 | session.canOpenWorkspacePath/openWorkspacePath | 明确作用于电脑；未启用时禁用，不冒充手机本地应用 |
 | 第三方自定义设置 | settings.section + Slots renderer compatibility adapter | computer-use、proxy 容器通过；保留插件服务、作用域及样式；不保证任意插件、未来 SDK 均兼容 |
 
