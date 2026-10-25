@@ -273,6 +273,7 @@ export function RemoteControlPanel(): React.ReactElement {
       state.qr && !expired ? block('div', 'dsrc-code', [h('img', { src: state.qr, alt: `${wayName(shown)}远程控制配对二维码`, draggable: false })], { 'data-ready': true })
         : block('div', 'dsrc-code', [block('div', 'dsrc-placeholder', [expired ? '正在更新二维码…' : state.busy ? '连接就绪后显示二维码' : domainBlocked ? '配置域名并开启后显示二维码' : '开启连接后显示配对二维码'])]),
       state.qr && !expired ? h('button', { type: 'button', className: 'dsrc-button dsrc-ghost dsrc-code-refresh', disabled, onClick: refreshCode }, workingAction === 'refresh' ? '正在刷新…' : '刷新二维码') : null,
+      shown === 'public' && state.local && state.publicUrlCheck && !state.publicUrlCheck.reachable ? h('p', { className: 'dsrc-error', role: 'alert' }, '公网入口当前不可达，现在扫码打不开。请先启动电脑上的 SakuraFrp / frpc 服务。') : null,
       block('div', 'dsrc-steps', ['手机相机扫码', shown === 'public' ? state.passwordPairing ? '输入密码直接进入' : '输入密码，本机确认' : '在本机确认配对', '继续会话与审批'].map((step, index) => block('span', 'dsrc-step', [h('span', { className: 'dsrc-number' }, String(index + 1)), h('span', null, step)], { key: step }))),
     ])
     const pairingPassword = shown === 'public' && state.local ? block('div', 'dsrc-pin', [
@@ -296,7 +297,7 @@ export function RemoteControlPanel(): React.ReactElement {
       ]),
       domainBlocked ? h(InlineNotice, { tone: 'warn', action: { label: '配置域名', onClick: () => openSettings(true) } }, '“任意网络”需要固定公网域名，在右侧“连接与外观设置”里填写。') : null,
       state.error ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
-      shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, '公网域名当前无法访问，请检查域名与 frpc 转发。')]) : null,
+      shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, '公网入口当前不可达：请确认电脑上的 SakuraFrp / frpc 服务正在运行、隧道已启动，且域名仍指向本机。')]) : null,
       block('div', 'dsrc-connection-actions', [state.enabled ? h('button', { type: 'button', className: 'dsrc-button dsrc-stop', disabled, onClick: stopConnection }, workingAction === 'stop' ? '正在关闭…' : '关闭远程连接')
         : h('button', { type: 'button', className: 'dsrc-button dsrc-primary dsrc-start', disabled, onClick: start }, state.busy || workingAction === 'start' ? '正在开启…' : domainBlocked ? '先配置域名' : '开启远程连接')]),
       h('label', { className: 'dsrc-toggle' }, h('input', { type: 'checkbox', checked: state.autoStart, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { autoStart: event.target.checked }) } }), '随 DSH 自动开启'),

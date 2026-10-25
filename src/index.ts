@@ -205,9 +205,21 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         lanHint: '手机需与电脑处于同一局域网。若连接被防火墙阻断，请手动允许网关端口；插件不会修改防火墙。',
       }
     }
+    // A QR is useless when the public entry is down. Probe it when public access starts and
+    // every two minutes after, so the panel can say why a phone cannot open the link.
+    let monitor: ReturnType<typeof setInterval> | undefined
+    let probing = false
+    const stopMonitor = () => { if (monitor) clearInterval(monitor); monitor = undefined }
+    const probe = () => {
+      if (probing || !enabled || activeMode !== 'public' || !access?.domain) return
+      probing = true
+      void access.checkDomain().catch(() => undefined).finally(() => { probing = false })
+    }
+    const startMonitor = () => { stopMonitor(); monitor = setInterval(probe, 120_000); monitor.unref(); probe() }
     const stop = async () => {
       ++generation
       enabled = false; activeMode = undefined; access?.setActive(false); qr = undefined; pairing.invalidate()
+      stopMonitor()
       const current = gateway; gateway = undefined
       await current?.close()
     }
@@ -238,6 +250,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         if (mode === 'lan' && !config.gatewayPort && next.port !== preferences.port) { preferences = { ...preferences, port: next.port }; try { savePreferences() } catch { /* only a convenience */ } }
         if (disposed || ticket !== generation) { await next.close(); return }
         enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = pairing.issue()
+        if (mode === 'public') startMonitor(); else stopMonitor()
       } catch (failure) { if (ticket === generation) { error = failure instanceof Error ? failure.message : '启动失败。'; await stop() }; throw failure }
       finally { busy = false }
     }
@@ -349,7 +362,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       try { json(res, 200, await manage(await body(req), true)) }
       catch (failure) { json(res, 400, { error: failure instanceof Error ? failure.message : '操作失败。' }) }
     }
-    ready.effect(() => () => { clearInterval(credentialTimer); void access?.certificates.stop(); void access?.resetOutbound() }, 'remote-control public access')
+    ready.effect(() => () => { stopMonitor(); clearInterval(credentialTimer); void access?.certificates.stop(); void access?.resetOutbound() }, 'remote-control public access')
     ready.effect(() => ready.webServer.register({ kind: 'exact', path: MANAGE_PATH, handler: localHandler }), 'remote-control local management')
     // Desktop's trusted IPC/Fetch carrier bypasses node:http. The outer gateway
     // handles this exact route itself and never forwards remote approval requests.
