@@ -119,6 +119,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     const upstreamPort = ready.webServer.port
     if (!upstreamPort) throw new Error('DSH WebServer 尚未就绪。')
     let credential = hostCookie(ready.connection, upstreamPort)
+    // The Host session cookie is absolute (30 days by default). Refresh it well before that,
+    // so a gateway left running for weeks never starts answering 401 to every remote request.
+    const credentialTimer = setInterval(() => { try { credential = hostCookie(ready.connection, upstreamPort) } catch { /* keep the current cookie */ } }, 12 * 3600_000)
+    credentialTimer.unref()
     const require = createRequire(import.meta.url)
     const distRoot = join(dirname(require.resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
     const renderIndex = async (ui = preferences.ui) => {
@@ -225,8 +229,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         const wanted = mode === 'public' ? PUBLIC_PORT : config.gatewayPort || preferences.port || 0
         try { await next.listen(host, wanted) }
         catch (failure) {
+          const code = (failure as NodeJS.ErrnoException).code ?? ''
+          if (mode === 'public' && code === 'EADDRINUSE') throw new Error(`公网端口 ${wanted} 已被占用：可能另一个 DSH 配置正在使用公网模式，请先关闭它的远程连接。`)
           // Only a port that cannot be had is worth a second try on another one.
-          if (mode === 'public' || config.gatewayPort || !wanted || !['EADDRINUSE', 'EACCES'].includes((failure as NodeJS.ErrnoException).code ?? '')) throw failure
+          if (mode === 'public' || config.gatewayPort || !wanted || !['EADDRINUSE', 'EACCES'].includes(code)) throw failure
           next = gateway = create(); await next.listen(host, 0)   // taken by something else since
         }
         if (mode === 'lan' && !config.gatewayPort && next.port !== preferences.port) { preferences = { ...preferences, port: next.port }; try { savePreferences() } catch { /* only a convenience */ } }
@@ -261,7 +267,11 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           return { switching: true, mode: preferences.mode }
         }
         case 'stop': if (local) await stop(); else { ++generation; setTimeout(() => { void stop() }, 75) }; return { stopped: true }
-        case 'refresh': if (!enabled) throw new Error('请先开启远程连接。'); qr = pairing.issue(); return status(local)
+        case 'refresh': {
+          if (!enabled) throw new Error('请先开启远程连接。')
+          if (pairing.outstanding()) throw new Error('还有配对请求在等待确认，请先处理后再刷新二维码。')
+          qr = pairing.issue(); return status(local)
+        }
         case 'approve': if (!local) throw new Error('首次配对必须在本机确认。'); pairing.approve(String(input.id)); return status(local)
         case 'reject': if (!local) throw new Error('配对请求由本机处理。'); pairing.reject(String(input.id)); return status(local)
         case 'revoke': {
@@ -339,7 +349,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       try { json(res, 200, await manage(await body(req), true)) }
       catch (failure) { json(res, 400, { error: failure instanceof Error ? failure.message : '操作失败。' }) }
     }
-    ready.effect(() => () => { void access?.certificates.stop(); void access?.resetOutbound() }, 'remote-control public access')
+    ready.effect(() => () => { clearInterval(credentialTimer); void access?.certificates.stop(); void access?.resetOutbound() }, 'remote-control public access')
     ready.effect(() => ready.webServer.register({ kind: 'exact', path: MANAGE_PATH, handler: localHandler }), 'remote-control local management')
     // Desktop's trusted IPC/Fetch carrier bypasses node:http. The outer gateway
     // handles this exact route itself and never forwards remote approval requests.

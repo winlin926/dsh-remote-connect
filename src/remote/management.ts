@@ -20,26 +20,27 @@ const categories: Array<[string, string, RegExp]> = [
 const categoryOf = (ns: string) => categories.find(([, , pattern]) => pattern.test(ns))?.[0]
 const SELF = '@copylee/dsh-remote-control'
 const builtIn = new Set(['general', 'models', 'plugins', 'agent-presets', 'skills', 'cost', 'archive', 'schedule', 'copylee-remote-control'])
-export function Management({ ctx, page, start = '', sessionId, onSession, appearance }: { ctx: Host; page: string; start?: string; sessionId?: string; onSession: (id: string) => void; appearance?: React.ReactNode }) {
+export function Management({ ctx, page, start = '', sessionId, onSession, onSection, appearance }: { ctx: Host; page: string; start?: string; sessionId?: string; onSession: (id: string) => void; onSection: (section: string) => void; appearance?: React.ReactNode }) {
   if (page === 'files') return h(Files, { ctx, sessionId })
   const missing = missingCapabilities(ctx, ['slots.subscribe', 'slots.getVersion', 'slots.entriesOfSlot'])
-  return missing.length ? h(CapabilityNotice, { missing }) : h(ReadyManagement, { ctx, page, start, sessionId, onSession, appearance })
+  return missing.length ? h(CapabilityNotice, { missing }) : h(ReadyManagement, { ctx, page, start, sessionId, onSession, onSection, appearance })
 }
-function ReadyManagement({ ctx, page, start = '', sessionId, onSession, appearance }: { ctx: Host; page: string; start?: string; sessionId?: string; onSession: (id: string) => void; appearance?: React.ReactNode }) {
-  const [section, setSection] = React.useState(start)
+function ReadyManagement({ ctx, page, start = '', sessionId, onSession, onSection, appearance }: { ctx: Host; page: string; start?: string; sessionId?: string; onSession: (id: string) => void; onSection: (section: string) => void; appearance?: React.ReactNode }) {
+  // The section is the App's `start`, so the header, the sidebar highlight and this page never disagree.
+  const section = start
   const description = useLoad<Host>(() => callRemote(ctx, 'settings', 'describe').then(value), [ctx])
   const revision = React.useSyncExternalStore((cb: () => void) => ctx.slots.subscribe('settings.section', cb), () => ctx.slots.getVersion('settings.section'))
   const compatible = React.useMemo(() => ctx.slots.entriesOfSlot('settings.section').filter((entry: Host) => !builtIn.has(entry.options.id)), [ctx, revision])
   const selected = compatible.find((entry: Host) => `compat:${entry.options.id}` === section)
   return h('div', { className: 'rc-scroll' }, h('div', { className: 'rc-content' },
-    section ? h('button', { onClick: async () => setSection(''), className: 'rc-pill rc-small' }, '‹ 返回设置分类') : null,
+    section ? h('button', { onClick: async () => onSection(''), className: 'rc-pill rc-small' }, '‹ 返回设置分类') : null,
     description.error ? h('div', { className: 'rc-error' }, description.error, h('button', { onClick: description.reload }, '重试')) : null,
     !section ? h(React.Fragment, null, appearance, h('p', { className: 'rc-muted' }, '以下修改作用于正在连接的电脑。'), h('section', { className: 'rc-list' },
-      ...categories.map(([id, title]) => h('button', { key: id, className: 'rc-menu-row', onClick: async () => setSection(id) }, title, h('span', null, '›'))),
-      h('button', { className: 'rc-menu-row', onClick: async () => setSection('plugins') }, '插件与安装任务', h('span', null, '›')),
-      h('button', { className: 'rc-menu-row', onClick: async () => setSection('remote') }, '远程连接与设备', h('span', null, '›')),
-      h('button', { className: 'rc-menu-row', onClick: async () => setSection('workspaces') }, '工作区', h('span', null, '›')),
-      ...compatible.map((entry: Host) => h('button', { key: entry.options.id, className: 'rc-menu-row', onClick: async () => setSection(`compat:${entry.options.id}`) }, label(entry.options.label, entry.options.id), h('span', { className: 'rc-muted' }, '插件页面 ›'))))) :
+      ...categories.map(([id, title]) => h('button', { key: id, className: 'rc-menu-row', onClick: async () => onSection(id) }, title, h('span', null, '›'))),
+      h('button', { className: 'rc-menu-row', onClick: async () => onSection('plugins') }, '插件与安装任务', h('span', null, '›')),
+      h('button', { className: 'rc-menu-row', onClick: async () => onSection('remote') }, '远程连接与设备', h('span', null, '›')),
+      h('button', { className: 'rc-menu-row', onClick: async () => onSection('workspaces') }, '工作区', h('span', null, '›')),
+      ...compatible.map((entry: Host) => h('button', { key: entry.options.id, className: 'rc-menu-row', onClick: async () => onSection(`compat:${entry.options.id}`) }, label(entry.options.label, entry.options.id), h('span', { className: 'rc-muted' }, '插件页面 ›'))))) :
     section === 'remote' ? h(RemoteControlPanel) : section === 'plugins' ? h(Plugins, { ctx }) : section === 'workspaces' ? h(Workspaces, { ctx }) : selected ? h(Compatibility, { key: section, entry: selected, ctx }) :
     h(React.Fragment, null, h('h2', { style: { marginTop: 20 } }, categories.find(([id]) => id === section)?.[1]),
       section === 'models' ? h(Credentials, { ctx }) : null,

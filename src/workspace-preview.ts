@@ -79,7 +79,9 @@ export class WorkspacePreviews {
         'origin-agent-cluster': '?1', 'access-control-allow-origin': 'null',
       }
       // The opaque origin can run the artifact but cannot use DSH cookies, storage or APIs.
+      // SVG is a document too: without the sandbox its scripts would run in the gateway origin.
       if (mime.startsWith('text/html')) headers['content-security-policy'] = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads'
+      else if (mime === 'image/svg+xml') headers['content-security-policy'] = 'sandbox'
       res.writeHead(200, headers)
       if (req.method === 'HEAD') { res.end(); return }
       const stream = createReadStream(path)

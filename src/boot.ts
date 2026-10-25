@@ -22,8 +22,10 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
   async function openLocalFile(href: string): Promise<void> {
     const path = parseLocalFile(href)
     if (!path) { notice('链接不是本机文件路径。'); return }
-    if (/\.html?$/i.test(path)) {
+    if (/\.html?$/i.test(path) || /\.svg$/i.test(path)) {
       // Open immediately: awaiting a fetch first would lose the tap's popup permission.
+      // Both are documents; the gateway serves them under a sandbox CSP, so a blob URL
+      // (which would inherit the gateway origin and drop that header) is never used.
       const address = '/rc/workspace-file?p=' + encodeURIComponent(path)
       const preview = window.open(address, '_blank')
       if (preview) preview.opener = null

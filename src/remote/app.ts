@@ -33,6 +33,8 @@ function ReadyApp({ ctx }: { ctx: Host }): React.ReactElement {
   /** The settings section a drawer shortcut opens directly ('' = the category list). */
   const [start, setStart] = React.useState(''), [searching, setSearching] = React.useState(false)
   const action = useAction()
+  /** Only a new session replaces the conversation with the creation skeleton; renaming or archiving keeps it. */
+  const [creating, setCreating] = React.useState(false)
   const [offline, setOffline] = React.useState(!navigator.onLine)
   React.useEffect(() => {
     const lost = () => setOffline(true), restored = () => setOffline(false)
@@ -88,8 +90,10 @@ function ReadyApp({ ctx }: { ctx: Host }): React.ReactElement {
   }, [sessions, workspaces, sessionId, workspaceId])
   React.useEffect(() => {
     if (!query.trim()) { setSearchIds(undefined); return }
+    // Results of the previous keyword must not pass as matches while the new query runs.
+    setSearchIds(undefined)
     const controller = new AbortController()
-    const timer = setTimeout(() => { void ctx.sessions.search(query, controller.signal).then((result: any) => { if (!controller.signal.aborted) setSearchIds(value(result).items.map((s: any) => s.sessionId ?? s.id)) }, () => {}) }, 350)
+    const timer = setTimeout(() => { void ctx.sessions.search(query, controller.signal).then((result: any) => { if (!controller.signal.aborted) setSearchIds(value(result).items.map((s: any) => s.sessionId ?? s.id)) }, () => { if (!controller.signal.aborted) setSearchIds([]) }) }, 350)
     return () => { clearTimeout(timer); controller.abort() }
   }, [ctx, query])
   /** An untouched session has no title of its own yet (the Host labels it with the workspace's name). */
@@ -100,7 +104,8 @@ function ReadyApp({ ctx }: { ctx: Host }): React.ReactElement {
     // An untouched new session is reused, as on the computer, instead of piling up another one.
     const unused = (sessions.ids ?? []).find((id: string) => sessions.byId[id]?.blank && !workspaces.archivedSessionIds?.includes(id) && (!workspace || workspace.sessionIds.includes(id)))
     if (unused) { setArchived(false); select(unused); return Promise.resolve() }
-    return action.run(async () => { const id = await ctx.sessions.create(workspaceId ? { workspaceId } : {}); setArchived(false); select(id) }, '')
+    setCreating(true)
+    return action.run(async () => { const id = await ctx.sessions.create(workspaceId ? { workspaceId } : {}); setArchived(false); select(id) }, '').finally(() => setCreating(false))
   }
   // Long press (or right click) on a session opens what can be done with it.
   const [menuFor, setMenuFor] = React.useState<string>()
@@ -202,14 +207,12 @@ function ReadyApp({ ctx }: { ctx: Host }): React.ReactElement {
       header,
       action.error ? h('div', { className: 'rc-error rc-banner', role: 'alert' }, action.error, h('button', { className: 'rc-text', 'aria-label': '关闭提示', onClick: () => action.setError('') }, '×')) : null,
       offline ? h('div', { className: 'rc-offline rc-banner', role: 'alert' },
-        h('span', null, h('strong', null, '和电脑的连接断开了。'), location.hostname.endsWith('.trycloudflare.com')
-          ? '电脑上的远程连接可能已关闭或重新开启；重新开启后地址会变，需要在电脑上重新扫码。'
-          : '请确认手机和电脑在同一个 Wi‑Fi，并且电脑上的远程连接还开着。恢复后会自动重连。'),
+        h('span', null, h('strong', null, '和电脑的连接断开了。'), '请确认手机和电脑在同一 Wi‑Fi、电脑上的远程连接还开着，或固定域名仍指向这台电脑。恢复后会自动重连。'),
         h('button', { className: 'rc-text', onClick: () => location.reload() }, '重试')) : null,
       page === 'chat'
-        ? action.busy ? h('div', { className: 'rc-skeleton' }, '正在创建会话…')
+        ? creating ? h('div', { className: 'rc-skeleton' }, '正在创建会话…')
           : sessionId ? h(Boundary, { key: sessionId, what: '这个会话' }, h(Chat, { ctx, sessionId, onSession: select }))
             : h('div', { className: 'rc-scroll rc-welcome' }, h('h1', null, '今天，我们继续做什么？'), h('p', null, '创建会话，接着在电脑上的工作。'))
         : page === 'session' ? sessionActions
-          : h(Boundary, { key: `${page}:${start}`, what: '这个页面' }, h(Management, { ctx, page, start, sessionId, onSession: select, appearance }))))
+          : h(Boundary, { key: page, what: '这个页面' }, h(Management, { ctx, page, start, sessionId, onSession: select, appearance, onSection: setStart }))))
 }

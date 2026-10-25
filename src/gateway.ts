@@ -281,7 +281,7 @@ export class Gateway {
       try {
         const content = await readFile(cleaned)
         if (content.length > 48 * 1024 * 1024) { json(res, 413, { error: '文件超过 48 MB，请在电脑上打开。' }); return }
-        res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' })
+        res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...(mime === 'image/svg+xml' ? { 'content-security-policy': 'sandbox' } : {}) })
         res.end(content)
       } catch { json(res, 404, { error: '文件不存在或无法读取，可能已被移动或删除。' }) }
       return

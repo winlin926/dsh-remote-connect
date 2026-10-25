@@ -6,7 +6,11 @@ import { createFilePairingPinStore, readLegacyPairingPin, type PairingPinStore }
 import { createCertificateManager, migrateLegacyAccountKey, type CertificateManager, type CertificateStatus } from './acme-certificate.js'
 import { createOutboundProxy, type OutboundProxy } from './outbound-proxy.js'
 
-export const PUBLIC_PORT = 43128
+/** frpc forwards the public domain to this fixed port; a test run may point it elsewhere. */
+export const PUBLIC_PORT = (() => {
+  const override = Number(process.env.DSH_RC_PUBLIC_PORT)
+  return Number.isInteger(override) && override > 0 && override < 65536 ? override : 43128
+})()
 export const FRPC_CERTIFICATE_DIR = join(process.env.ProgramData ?? 'C:\\ProgramData', 'SakuraFrpService', 'FrpcWorkingDirectory')
 const FAILURE_WINDOW = 10 * 60_000
 
@@ -121,9 +125,12 @@ export class PublicAccess {
     const own = (this.failures.get(address) ?? []).filter(time => time > cutoff)
     this.failures.set(address, own)
     this.allFailures = this.allFailures.filter(time => time > cutoff)
-    const limited = own.length >= 5 || this.allFailures.length >= 20
+    // One address must not lock every other phone out: the global ceiling only applies once
+    // the failures are spread across several addresses.
+    const globalLimited = this.allFailures.length >= 20 && this.failures.size >= 5
+    const limited = own.length >= 5 || globalLimited
     if (!limited) return undefined
-    const oldest = Math.min(...(own.length >= 5 ? [own[0]!] : []), ...(this.allFailures.length >= 20 ? [this.allFailures[0]!] : []))
+    const oldest = Math.min(...(own.length >= 5 ? [own[0]!] : []), ...(globalLimited ? [this.allFailures[0]!] : []))
     return Math.max(1, Math.ceil((oldest + FAILURE_WINDOW - this.now()) / 1000))
   }
 

@@ -11,7 +11,7 @@ const matches = (value: string, expected: string) => {
 export const IDLE_MS = 30 * 24 * 3600_000
 export interface Device {
   id: string; name: string; createdAt: number; lastSeenAt: number; hash: string
-  /** The address the device paired through. Its cookie is bound to that address and works nowhere else. */
+  /** The address the device paired through, shown in the panel; the browser scopes its cookie to that origin. */
   host?: string
 }
 interface Pending { id: string; name: string; host?: string; expiresAt: number; keyHash: string; state: 'pending' | 'approved' | 'rejected'; credential?: string }
@@ -91,6 +91,8 @@ export class PairingService {
     this.expire()
     return [...this.pending.values()].filter(p => p.state === 'pending').map(({ id, name, expiresAt }) => ({ id, name, expiresAt }))
   }
+  /** Claims a new ticket would strand: waiting for approval, or approved but not yet collected. */
+  outstanding(): number { this.expire(); return [...this.pending.values()].filter(p => p.state !== 'rejected').length }
   approve(id: string): void {
     this.expire()
     const claim = this.pending.get(id)

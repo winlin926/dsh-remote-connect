@@ -1,7 +1,7 @@
 import { ask, confirmAction } from './dialog.js'
 import * as React from 'react'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useStore, useLoad, useAction, value, cacheText, cachedText, type Host } from './common.js'
+import { useStore, useLoad, useAction, value, cacheText, cachedText, useBackClose, type Host } from './common.js'
 import { Icon } from './icons.js'
 import { Picker } from './picker.js'
 import { callRemote, chatContent, pendingInteraction, CapabilityNotice, missingCapabilities } from './host.js'
@@ -76,6 +76,9 @@ function BoundChat({ ctx, binding, sessionId, onSession }: { ctx: Host; binding:
   const [options, setOptions] = React.useState(false)
   /** The menu behind the plus button: what can be added to a message, and the session's slash commands. */
   const [menu, setMenu] = React.useState(false)
+  // Both sheets sit above the conversation; the back button closes them before it leaves the page.
+  useBackClose(menu, () => setMenu(false))
+  useBackClose(options, () => setOptions(false))
   // The session's own command catalogue, as the computer's "/" menu reads it. A Host without it leaves the menu with File only.
   const commands = useLoad<Host[]>(async () => {
     const list = ctx.remote?.commands?.list
@@ -118,8 +121,10 @@ function BoundChat({ ctx, binding, sessionId, onSession }: { ctx: Host; binding:
     const typed = /^\/([^\s/]+)/.exec(draft.trim())
     if (typed && commandNames.has(typed[1]!) && !attachments.length) {
       const line = draft.trim()
-      setDraft('')
-      return runCommand(line)
+      // Keep the text when the command could not run (locked by another action, or failed).
+      const done = await runCommand(line)
+      if (done !== undefined) setDraft('')
+      return
     }
     const result = await action.run(async () => {
       const outcome = await ctx.conversation.sendSession(binding.session, draft, attachments.map(a => a.id), 'queue')
@@ -281,7 +286,7 @@ function BoundChat({ ctx, binding, sessionId, onSession }: { ctx: Host; binding:
           modelOptions.length ? h(Picker, { className: 'rc-model', label: '会话模型', value: model, disabled: action.busy, placeholder: '选择模型', onChange: pickModel,
             // The same model can be offered by several providers: list them under the provider's name.
             choices: modelOptions.map((m: Host) => ({ value: `${m.provider}/${m.model}`, label: m.name, group: m.providerName })) }) : h('span', { className: 'rc-model rc-muted' }, '默认模型'),
-          session.running ? h('button', { className: 'rc-round rc-stop', 'aria-label': '停止生成', onClick: () => { void action.run(() => binding.session.cancel(), '') } }, h(Icon, { name: 'stop' })) : null,
+          session.running ? h('button', { className: 'rc-round rc-stop', 'aria-label': '停止生成', disabled: action.busy, onClick: () => { void action.run(() => binding.session.cancel(), '') } }, h(Icon, { name: 'stop' })) : null,
           h('button', { className: 'rc-round rc-send', 'aria-label': '发送消息', disabled: action.busy || (!draft.trim() && !attachments.length), onClick: () => { void send() } }, h(Icon, { name: 'send' }))))))
 }
 function Subtasks({ ctx, sessionId, onSession }: { ctx: Host; sessionId: string; onSession: (id: string) => void }) {

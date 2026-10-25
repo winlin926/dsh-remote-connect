@@ -88,6 +88,14 @@ describe('gateway admission and transport', () => {
     f.pairing.revoke(f.pairing.list()[0]!.id)
     expect((await fetch(f.base + location, { headers: { cookie: f.cookie, origin: 'null' } })).status).toBe(404)
   })
+  it('sandboxes SVG workspace files so their scripts cannot use the gateway origin', async () => {
+    const f = await fixture(), file = join(f.folder, 'picture.svg')
+    writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+    const response = await fetch(`${f.base}/rc/workspace-file?p=${encodeURIComponent(file)}`, { headers: { cookie: f.cookie } })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('image/svg+xml')
+    expect(response.headers.get('content-security-policy')).toBe('sandbox')
+  })
   it('expires unused preview capabilities and keeps resources inside their real directory', async () => {
     const f = await fixture(), site = join(f.folder, 'site')
     mkdirSync(site); writeFileSync(join(site, 'index.html'), '<p>page</p>')

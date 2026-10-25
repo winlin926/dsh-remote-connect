@@ -4,6 +4,7 @@ import * as Connection from '@deepseek-ai/dsh-client-connection'
 import * as Plugin from '../src/index.js'
 import { MANAGE_PATH } from '../src/gateway.js'
 import { Gateway } from '../src/gateway.js'
+import { PUBLIC_PORT } from '../src/public-access.js'
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -82,13 +83,23 @@ it('keeps the running LAN entry and QR while saving a different mode or proxy', 
   expect((await command('status')).links).toEqual(started.links)
 }))
 
+it('keeps a waiting pairing request when the QR is refreshed', async () => withHost(async command => {
+  await command('preferences', { mode: 'lan' }); const state = await command('start')
+  const base = `http://127.0.0.1:${state.gatewayPort}`
+  const request = await (await fetch(base + '/rc/pair/request', { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ token: new URL(state.links[0].url).hash.slice(6) }) })).json()
+  expect((await command('refresh')).status).toBe(400)
+  expect((await command('status')).requests).toHaveLength(1)
+  await command('reject', { id: request.id })
+  expect((await command('refresh')).status).toBe(200)
+}))
+
 it('explicitly switches entries, invalidates the old entry, and can retry a failed switch', async () => withHost(async command => {
   await command('preferences', { mode: 'lan' }); const lan = await command('start')
   await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' }); const publicEntry = await command('switch')
   expect(publicEntry).toMatchObject({ activeMode: 'public', phase: 'ready', mode: 'public' })
   // Public mode always uses the frpc target port, not the temporary LAN port.
-  expect(publicEntry.gatewayPort).toBe(43128)
-  expect(publicEntry.publicPort).toBe(43128)
+  expect(publicEntry.gatewayPort).toBe(PUBLIC_PORT)
+  expect(publicEntry.publicPort).toBe(PUBLIC_PORT)
   expect(publicEntry.links[0].base).toBe('https://dsh.example.com')
   expect(await fetch(`http://127.0.0.1:${lan.gatewayPort}/`).then(response => response.status, () => 0)).not.toBe(200)
   await command('preferences', { mode: 'lan' }); const switched = await command('switch')

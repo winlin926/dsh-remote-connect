@@ -35,6 +35,17 @@ describe('pairing admission and durable revocation', () => {
     const fresh = service.issue(); advance(300001)
     expect(() => service.request(fresh.token, '')).toThrow()
   })
+  it('counts the claims a ticket refresh would strand', () => {
+    const { service } = fixture(), claim = service.request(service.issue().token, '')
+    expect(service.outstanding()).toBe(1)
+    service.reject(claim.id)
+    expect(service.outstanding()).toBe(0)
+    const accepted = service.request(service.issue().token, '')
+    service.approve(accepted.id)
+    expect(service.outstanding()).toBe(1)   // approved, credential not collected yet
+    service.claim(accepted.id, accepted.key)
+    expect(service.outstanding()).toBe(0)
+  })
   it('rejects requests without granting a credential', () => {
     const { service } = fixture(), claim = service.request(service.issue().token, '')
     service.reject(claim.id)
