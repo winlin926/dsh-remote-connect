@@ -7,6 +7,7 @@ import { once } from 'node:events'
 import { WebSocket, WebSocketServer } from 'ws'
 import { Gateway, MANAGE_PATH, safePath } from '../src/gateway.js'
 import { PairingService } from '../src/pairing.js'
+import { bootScript } from '../src/boot.js'
 const cleanup: Array<() => Promise<unknown> | void> = []
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn() })
 async function fixture() {
@@ -25,7 +26,7 @@ async function fixture() {
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
   cleanup.push(async () => { for (const client of wss.clients) client.terminate(); wss.close(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())) })
   const port = (upstream.address() as { port: number }).port
-  gateway = new Gateway({ pairing, upstreamPort: port, upstreamCookie: () => 'host-private=secret', manage: async (input, local) => { if (input.action === 'approve' && !local) throw new Error('本机确认'); return { local } }, index: async ui => `<html><head></head><body>official shell; ui=${ui ?? 'default'}</body></html>`, onBootReport: (report, device) => reports.push({ report, device }) })
+  gateway = new Gateway({ pairing, upstreamPort: port, upstreamCookie: () => 'host-private=secret', manage: async (input, local) => { if (input.action === 'approve' && !local) throw new Error('本机确认'); return { local } }, index: async () => '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Host</title></head><body><div id="root"></div></body></html>', boot: () => bootScript(true), onBootReport: (report, device) => reports.push({ report, device }) })
   await gateway.listen('127.0.0.1'); cleanup.push(() => gateway.close())
   const base = `http://127.0.0.1:${gateway.port}`
   const claim = pairing.request(pairing.issue().token, 'Android'); pairing.approve(claim.id)
@@ -52,9 +53,11 @@ describe('gateway admission and transport', () => {
     expect(data.cookie).toBe('host-private=secret'); expect(data.cookie).not.toContain(f.credential)
     expect(response.headers.get('set-cookie')).not.toContain('host-secret')
   })
-  it('serves a gated official shell with boot hooks before scripts', async () => {
+  it('serves a gated official shell whose boot hooks load before the Host scripts', async () => {
     const f = await fixture(), response = await fetch(f.base, { headers: { cookie: f.cookie } }), html = await response.text()
-    expect(html).toContain('__DSH_TRANSPORT__'); expect(html).toContain('official shell'); expect(html).not.toContain(f.credential)
+    expect(html).toContain('<div id="root"></div>'); expect(html).toContain('<script src="/rc/boot.js"></script>'); expect(html).not.toContain(f.credential)
+    const boot = await (await fetch(`${f.base}/rc/boot.js`, { headers: { cookie: f.cookie } })).text()
+    expect(boot).toContain('__DSH_TRANSPORT__'); expect(boot).toContain('__DSH_REMOTE_CONTROL__')
   })
   it('opens a complete local HTML site in an isolated temporary preview', async () => {
     const f = await fixture(), site = join(f.folder, 'site')
@@ -114,13 +117,28 @@ describe('gateway admission and transport', () => {
     await f.gateway.close()
     await expect(fetch(f.base + next)).rejects.toThrow()
   })
-  it('selects native/custom UI only after authorization and ignores unknown UI values', async () => {
+  it('serves the Host page itself with the boot script instead of a bundled copy', async () => {
+    const f = await fixture()
+    const page = await fetch(`${f.base}/`, { headers: { cookie: f.cookie } })
+    expect(page.status).toBe(200)
+    expect(page.headers.get('content-type')).toContain('text/html')
+    const html = await page.text()
+    expect(html).toContain('<div id="root"></div>')
+    expect(html).toContain('<script src="/rc/boot.js"></script>')
+    const boot = await fetch(`${f.base}/rc/boot.js`, { headers: { cookie: f.cookie } })
+    expect(boot.status).toBe(200)
+    expect(boot.headers.get('content-type')).toContain('text/javascript')
+    expect(await boot.text()).toContain('__DSH_REMOTE_CONTROL__')
+    expect((await fetch(`${f.base}/rc/boot.js`, { method: 'POST', headers: { cookie: f.cookie } })).status).toBe(405)
+    expect(f.calls()).toBe(0)
+  })
+  it('sends retired phone-interface links to the Host page, after authorization only', async () => {
     const f = await fixture()
     expect((await fetch(f.base + '/?ui=native')).status).toBe(403)
-    for (const [query, selected] of [['native', 'native'], ['custom', 'custom'], ['evil', 'default']]) {
-      const response = await fetch(`${f.base}/?ui=${query}`, { headers: { cookie: f.cookie } })
-      expect(response.status).toBe(200)
-      expect(await response.text()).toContain(`ui=${selected}`)
+    for (const query of ['native', 'custom', 'evil']) {
+      const response = await fetch(`${f.base}/?ui=${query}`, { headers: { cookie: f.cookie }, redirect: 'manual' })
+      expect(response.status).toBe(302)
+      expect(response.headers.get('location')).toBe('/')
     }
     expect(f.calls()).toBe(0)
   })

@@ -47,6 +47,8 @@ export const CSS = `
 .dsrc-row>.dsrc-actions{flex-shrink:0}
 .dsrc-button{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:5px 12px;border:1px solid var(--rc-line);border-radius:8px;background:transparent;font-size:13px;line-height:20px;white-space:nowrap;transition:background .14s,border-color .14s,box-shadow .14s}
 .dsrc-button:hover:not(:disabled){background:var(--rc-fill);border-color:color-mix(in srgb,var(--rc-ink) 25%,var(--rc-line))}
+/* The phone entry is a link to the gateway, styled as the panel's own button. */
+.dsrc a.dsrc-button{text-decoration:none;color:inherit}
 .dsrc-primary{background:var(--rc-accent);border-color:var(--rc-accent);color:var(--rc-accent-ink)!important;font-weight:650;box-shadow:0 2px 5px color-mix(in srgb,var(--rc-accent) 20%,transparent)}
 .dsrc-primary:hover:not(:disabled){background:var(--rc-accent);border-color:var(--rc-accent);filter:brightness(.94)}
 .dsrc-danger{border-color:transparent;color:var(--rc-danger)!important;padding-right:8px;padding-left:8px}

@@ -2,25 +2,33 @@
 
 **远程连接** —— 用手机浏览器继续电脑上的 DeepSeek Harness（DSH）会话，支持扫码配对、消息发送、工具审批、附件与文件管理。
 
-基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 修改，保留原项目 MIT 许可证。当前适配 **DSH 0.2.1-rc.3**。
+基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 修改，保留原项目 MIT 许可证。当前适配 **DSH 0.2.1-rc.5**。
 
 ## 界面预览
 
 ![电脑端远程连接面板](assets/desktop-connect.png)
 
-![手机浏览器原生界面](assets/mobile-native.jpg)
+## 手机打开的就是电脑上的界面
+
+插件不再自带一套手机聊天界面。手机浏览器打开远程连接地址时，运行的是**电脑上正在使用的那一份 DSH Web 界面**：
+
+- 电脑升级 DSH 后，手机刷新即同步，不需要更新插件；插件也不再有自己的一套前端版本号要跟。
+- DSH 对手机、平板、窄窗口做的适配（软键盘、触屏、窄屏设置页等）随宿主一起生效。
+- 插件只负责它真正该负责的部分：认证网关、扫码配对、局域网 / 公网入口、证书与本机管理面板。
+
+因为界面属于宿主，插件只能在元信息层面提手机体验：`interactive-widget=resizes-content`（Android 键盘压缩布局而不是顶起整页）、表单字号不小于 16px（消除 iOS 聚焦自动放大）、浏览器状态栏跟随主题。这些默认开启，可用配置项 `mobileShim: false` 关闭。
 
 ## 相比原项目的修改
 
-- 将 DSH 相关依赖统一到 **0.2.1-rc.3**，解决 rc.2 / rc.3 混装造成模型插件无法加载的问题。
-- 修复手机端“自定义界面 / 原生界面”切换：选择后立即打开对应界面并保存设置，不再错误跳回原生界面。
-- 优化手机显示和交互，输入区、模型选择、主题切换、工作区入口等主要触控目标至少为 **44px**。
-- 保留原生界面回退、中文输入、断线恢复、草稿保存和局域网 / 公网两种连接方式。
-- 更新 rc.3 下的自动化交互回归测试，覆盖配对、聊天、审批、附件、文件、设置与界面切换。
+- 把"原生界面"从内置前端改为**代理宿主的当前页面**：删除 `@deepseek-ai/dsh-web-frontend` 运行依赖和整套静态资源分发，手机不再拿到旧版本前端。
+- 删除自带的自定义手机聊天界面（约 1400 行、依赖 rc.3 内部 Slots/hostFace），插件只保留宿主稳定接口（webServer / connection / schedule）。
+- 依赖统一到 **0.2.1-rc.5**，插件入口与宿主同版本编译。
+- 保留扫码配对、局域网 / 公网两种连接、固定域名与 ACME 证书、断线恢复、手机本机文件预览。
+- 自动化回归覆盖配对、官方界面挂载、聊天、审批、附件上传、面板与设备撤销。
 
 ## 安装
 
-环境要求：Node.js 22.19+ 或 24+，DSH **0.2.1-rc.3**。
+环境要求：Node.js 22.19+ 或 24+，DSH **0.2.1-rc.5 以上**（`dsh.engines.dsh = >=0.2.1-rc.5 <0.3.0-0`）。
 
 在 DSH 插件管理中添加：
 
@@ -74,14 +82,9 @@ DSH 桌面版和 `dsh web` 使用各自的配置，需要分别安装。
 
 使用 SakuraFrp 时，插件会按其 `FrpcWorkingDirectory` 约定部署证书；如面板提示重载隧道，需要在 SakuraFrp 中手动操作。也可使用其他反向代理自行管理证书。
 
-## 两种手机界面
+## 从旧版本升级
 
-- **自定义界面**：插件针对手机优化的聊天界面。
-- **原生界面**：DSH 官方 Web 界面。
-
-进入 **设置与管理 → 远程连接与设备 → 连接与外观设置 → 手机界面**，选择后会立即打开并保存。切换不需要重新配对，会话数据不会因界面切换而分开。
-
-`/?ui=custom` 和 `/?ui=native` 可临时预览指定界面，不改变保存的默认选择。
+旧版保存的“手机界面”选择（自定义 / 原生）在升级后失效并被忽略：只剩宿主界面这一种。旧的 `/?ui=custom`、`/?ui=native` 链接会自动跳回 `/`，不需要重新配对。
 
 ## 安全提示
 
@@ -92,13 +95,18 @@ DSH 桌面版和 `dsh web` 使用各自的配置，需要分别安装。
 ```bash
 pnpm install
 pnpm typecheck
-pnpm test
-pnpm build
+pnpm test          # 单元测试：网关准入、配对、公网、证书、桌面面板
+pnpm build         # tsc + tsdown，产物在 lib/
+pnpm qa:host       # 启动隔离的真实 DSH 宿主（独立 DSH_HOME，不碰用户数据）
+pnpm qa:native     # 手机视口验收：配对后必须加载宿主界面并能对话
+pnpm qa:browser    # 完整链路：面板、配对、官方界面、上传、审批、设备撤销
 ```
+
+`pnpm qa:*` 需要先运行 `pnpm qa:host` 并在 `.qa/connection.json` 写入宿主地址。
 
 ## 致谢
 
-感谢原项目 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 及其作者 Copy。原项目关于固定域名、密码和证书的设计还参考了 [dsh-remote-web-ui](https://github.com/zhu1090093659/dsh-web/tree/main/packages/dsh-remote-web-ui)、[DSH Remote](https://github.com/mrRisega/dsh-remote/tree/main/packages/dsh-remote-web) 与 [dsh-roam](https://github.com/winlin926/dsh-roam)。
+感谢原项目 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 及其作者 Copy。原项目关于固定域名、密码和证书的设计还参考了 [dsh-remote-web-ui](https://github.com/zhu1090093659/dsh-web/tree/main/packages/dsh-remote-web-ui)、[DSH Remote](https://github.com/mrRisega/dsh-remote/tree/main/packages/dsh-remote) 与 [dsh-roam](https://github.com/winlin926/dsh-roam)。
 
 ## 许可证
 

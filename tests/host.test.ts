@@ -62,14 +62,13 @@ async function withHost(run: (command: (action: string, fields?: Record<string, 
   }
 }
 
-it('persists a default UI without restarting the live gateway and rejects unknown UIs', async () => withHost(async command => {
-  expect((await command('status')).ui).toBe('custom')
+it('ignores the retired phone-interface preference without restarting the live gateway', async () => withHost(async command => {
+  expect((await command('status')).ui).toBeUndefined()
   await command('preferences', { mode: 'lan' }); const started = await command('start')
-  const selected = await command('preferences', { ui: 'native' })
-  expect(selected).toMatchObject({ ui: 'native', gatewayPort: started.gatewayPort, enabled: true })
-  expect(selected.links).toEqual(started.links)
-  expect((await command('preferences', { ui: 'unknown' })).status).toBe(400)
-  expect((await command('status')).ui).toBe('native')
+  const saved = await command('preferences', { ui: 'native' })
+  expect(saved).toMatchObject({ gatewayPort: started.gatewayPort, enabled: true })
+  expect(saved.ui).toBeUndefined()
+  expect(saved.links).toEqual(started.links)
 }))
 
 it('keeps the running LAN entry and QR while saving a different mode or proxy', async () => withHost(async command => {
