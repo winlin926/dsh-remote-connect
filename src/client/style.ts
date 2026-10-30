@@ -47,6 +47,8 @@ export const CSS = `
 .dsrc-row>.dsrc-actions{flex-shrink:0}
 .dsrc-button{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:5px 12px;border:1px solid var(--rc-line);border-radius:8px;background:transparent;font-size:13px;line-height:20px;white-space:nowrap;transition:background .14s,border-color .14s,box-shadow .14s}
 .dsrc-button:hover:not(:disabled){background:var(--rc-fill);border-color:color-mix(in srgb,var(--rc-ink) 25%,var(--rc-line))}
+/* The phone entry is a link to the gateway, styled as the panel's own button. */
+.dsrc a.dsrc-button{text-decoration:none;color:inherit}
 .dsrc-primary{background:var(--rc-accent);border-color:var(--rc-accent);color:var(--rc-accent-ink)!important;font-weight:650;box-shadow:0 2px 5px color-mix(in srgb,var(--rc-accent) 20%,transparent)}
 .dsrc-primary:hover:not(:disabled){background:var(--rc-accent);border-color:var(--rc-accent);filter:brightness(.94)}
 .dsrc-danger{border-color:transparent;color:var(--rc-danger)!important;padding-right:8px;padding-left:8px}
@@ -246,11 +248,11 @@ export const CSS = `
 .dsrc-button{min-height:44px;font-size:16px}
 .dsrc-connection-actions .dsrc-button{min-height:44px}
 .dsrc-input input{height:44px;font-size:16px}
-.dsrc-mode button{min-height:40px;font-size:14px}
+.dsrc-mode button{min-height:44px;font-size:14px}
 .dsrc .dsrc-way{min-height:46px;padding:10px 12px}
 .dsrc-toggle{min-height:44px;font-size:14px}
 .dsrc-toggle input{width:20px;height:20px}
-.dsrc .dsrc-swatch{width:30px;height:30px}
+.dsrc .dsrc-swatch{width:44px;height:44px;min-height:44px}
 .dsrc-muted,.dsrc-note,.dsrc-sub,.dsrc-summary-value,.dsrc-way-name,.dsrc-field-label,.dsrc-field>label,.dsrc-status-note,.dsrc-step,.dsrc-connection-state p,.dsrc-inline-notice,.dsrc-panel-message{font-size:14px}
 .dsrc-connection-state strong{font-size:16px}
 .dsrc-setting-kicker{font-size:12px}

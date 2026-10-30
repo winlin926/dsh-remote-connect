@@ -2,42 +2,40 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-client-connection'
-import { createRequire } from 'node:module'
 import { homedir, networkInterfaces } from 'node:os'
-import { dirname, extname, join, resolve, sep } from 'node:path'
+import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
+import { request as httpRequest } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { PairingService } from './pairing.js'
 import { Gateway, MANAGE_PATH, REMOTE_MARK } from './gateway.js'
 import { FRPC_CERTIFICATE_DIR, PUBLIC_PORT, PublicAccess } from './public-access.js'
 import { normalizePublicUrl } from './public-url-settings.js'
-import { body, gzipFor, isLoopback, json, sameOrigin } from './http.js'
-import { gzipSync } from 'node:zlib'
+import { body, isLoopback, json, sameOrigin } from './http.js'
+import { bootScript } from './boot.js'
 import { isAccent, type Accent } from './accent.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 
-export const name = '@copylee/dsh-remote-control'
+export const name = '@winlin926/dsh-remote-connect'
 export const inject = ['connection']
 export const Config = z.object({
   gatewayPort: z.natural().max(65535).default(0).i18n({ 'zh-CN': { $description: '局域网网关端口；0 表示自动选择空闲端口。' } }),
   certificateDir: z.string().default('').i18n({ 'zh-CN': { $description: '证书部署目录；留空使用 SakuraFrp 的 FrpcWorkingDirectory。' } }),
+  mobileShim: z.boolean().default(true).i18n({ 'zh-CN': { $description: '手机浏览器微调（键盘策略、表单字号、浏览器状态栏颜色）；界面布局仍由 DSH 自己负责。' } }),
 })
-export interface Config { gatewayPort?: number; certificateDir?: string }
+export interface Config { gatewayPort?: number; certificateDir?: string; mobileShim?: boolean }
 type Mode = 'public' | 'lan'
 /** Where outbound domain checks and certificate requests get their proxy. */
 type ProxyMode = 'system' | 'manual' | 'off'
 const isProxyMode = (value: unknown): value is ProxyMode => value === 'system' || value === 'manual' || value === 'off'
 interface Preferences {
-  autoStart: boolean; mode: Mode; proxy?: string; proxyMode: ProxyMode; accent: Accent; ui: 'custom' | 'native'
+  autoStart: boolean; mode: Mode; proxy?: string; proxyMode: ProxyMode; accent: Accent
   /** The port last used, tried again so the address a phone knows keeps working after a restart. */
   port?: number
   /** Password-direct pairing: a new device that enters the fixed public password is paired at once. Off by default. */
   passwordPairing?: boolean
 }
-const mime: Record<string, string> = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }
 /** Adapters that are rarely the network a phone is on: virtual switches, VPN / proxy tunnels. */
 const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|vmware|virtualbox|vbox|docker|loopback|tailscale|zerotier|tap|tun|vpn|clash|meta|wintun|utun|bluetooth/i
 
@@ -82,15 +80,15 @@ function appendBootReport(file: string, report: Record<string, unknown>, device:
 
 export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const profile = ctx.get('profileContext') as { name?: string } | undefined
-  const storage = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-remote-control', String(profile?.name || process.env.DSH_PROFILE || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'))
+  const storage = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-remote-connect', String(profile?.name || process.env.DSH_PROFILE || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'))
   mkdirSync(storage, { recursive: true })
   const prefsFile = join(storage, 'preferences.json')
-  let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off', accent: 'orange', ui: 'custom' }
+  let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off', accent: 'orange' }
   let error: string | undefined
   if (existsSync(prefsFile)) {
     try {
       const stored = JSON.parse(readFileSync(prefsFile, 'utf8')) as Partial<Preferences>
-      preferences = { ui: stored.ui === 'native' ? 'native' : 'custom', autoStart: stored.autoStart === true, mode: stored.mode === 'public' ? 'public' : 'lan', proxy: typeof stored.proxy === 'string' ? stored.proxy : undefined,
+      preferences = { autoStart: stored.autoStart === true, mode: stored.mode === 'public' ? 'public' : 'lan', proxy: typeof stored.proxy === 'string' ? stored.proxy : undefined,
         // An address typed before proxy modes existed is still an explicit manual choice.
         proxyMode: isProxyMode(stored.proxyMode) ? stored.proxyMode : stored.proxy ? 'manual' : 'off', port: Number.isInteger(stored.port) && stored.port! > 0 && stored.port! < 65536 ? stored.port : undefined, accent: isAccent(stored.accent) ? stored.accent : 'orange', passwordPairing: stored.passwordPairing === true }
     } catch {
@@ -123,46 +121,31 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // so a gateway left running for weeks never starts answering 401 to every remote request.
     const credentialTimer = setInterval(() => { try { credential = hostCookie(ready.connection, upstreamPort) } catch { /* keep the current cookie */ } }, 12 * 3600_000)
     credentialTimer.unref()
-    const require = createRequire(import.meta.url)
-    const distRoot = join(dirname(require.resolve('@deepseek-ai/dsh-web-frontend/package.json')), 'dist')
-    const renderIndex = async (ui = preferences.ui) => {
-      let html = await readFile(join(distRoot, 'index.html'), 'utf8')
-      if (ui === 'custom') {
-        html = html.replace(/<script type="module"[^>]*src="[^"]+"[^>]*><\/script>/, '<script type="module" src="/rc-assets/remote.js"></script><link rel="stylesheet" href="/rc-assets/style.css">')
-          .replace('<div id="root"></div>', '<div id="root"><p>正在加载远程界面…</p><a href="/?ui=native">打开原生界面</a></div>')
-          .replace('<title>DeepSeek Harness</title>', '<title>DSH · 远程</title>')
+    // The phone runs the Host's own page. Asking the Host for it keeps the phone on the version the
+    // computer is actually running: a DSH update reaches phones without a plugin release, and no
+    // stale copy of the frontend can be served against a newer Host.
+    const upstreamIndex = (cookie: string): Promise<string> => new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: '127.0.0.1', port: upstreamPort, path: '/', method: 'GET', headers: { host: `127.0.0.1:${upstreamPort}`, cookie, 'accept-encoding': 'identity' } }, response => {
+        const status = response.statusCode ?? 502
+        if (status !== 200) { response.resume(); reject(Object.assign(new Error(`DSH 宿主首页返回 ${status}`), { status })); return }
+        let html = ''
+        response.setEncoding('utf8')
+        response.once('error', reject)
+        response.on('data', (chunk: string) => { html += chunk })
+        response.once('end', () => resolve(html))
+      })
+      request.once('error', (failure: NodeJS.ErrnoException) => reject(new Error(failure.code === 'ECONNREFUSED' ? '电脑上的 DSH 没有在监听。' : failure.message)))
+      request.setTimeout(10_000, () => request.destroy(new Error('DSH 宿主首页超时。')))
+      request.end()
+    })
+    const renderIndex = async (): Promise<string> => {
+      try { return await upstreamIndex(credential) }
+      catch (failure) {
+        // A gateway left running for weeks can outlive its Host session; renew once before failing.
+        if ((failure as { status?: number }).status !== 401) throw failure
+        credential = hostCookie(ready.connection, upstreamPort)
+        return upstreamIndex(credential)
       }
-      return ready.webServer.renderIndex(html)
-    }
-    // Files of the app are compressed once and kept: they are the bulk of what a phone first downloads.
-    const packed = new Map<string, Buffer>()
-    const send = (req: IncomingMessage | undefined, res: ServerResponse, headers: Record<string, string>, key: string, data: Buffer): void => {
-      if (data.length < 1024 || !gzipFor(req, headers['content-type'])) { res.writeHead(200, headers); res.end(data); return }
-      let small = packed.get(key)
-      if (!small) { if (packed.size > 256) packed.clear(); packed.set(key, small = gzipSync(data, { level: 9 })) }
-      res.writeHead(200, { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' }); res.end(small)
-    }
-    const asset = async (pathname: string, res: ServerResponse, req?: IncomingMessage): Promise<boolean> => {
-      if (pathname.startsWith('/rc-assets/')) {
-        const path = resolve(dirname(fileURLToPath(import.meta.url)), '.' + pathname.replace('/rc-assets/', '/'))
-        if (!/^\/rc-assets\/[a-zA-Z0-9_.-]+\.(js|css|woff2?|ttf)$/.test(pathname)) { res.writeHead(404).end(); return true }
-        try {
-          const info = await stat(path), etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`
-          // Chunks carry a content hash in their name. The entry and stylesheet do not, and must be
-          // revalidated: a stale entry after a plugin update would ask for chunks that no longer exist.
-          const hashed = /^\/rc-assets\/remote-.+-[A-Za-z0-9_-]{8}\.js$/.test(pathname)
-          const headers = { 'content-type': mime[extname(path)] ?? 'application/octet-stream', 'cache-control': hashed ? 'private, max-age=31536000, immutable' : 'private, no-cache', etag }
-          if (req?.headers['if-none-match'] === etag) { res.writeHead(304, headers).end(); return true }
-          send(req, res, headers, `${path}:${etag}`, await readFile(path))
-        } catch { res.writeHead(404).end() }
-        return true
-      }
-      if (!pathname.startsWith('/assets/') && !['/favicon.svg', '/favicon-dark.svg', '/manifest.webmanifest'].includes(pathname)) return false
-      const path = resolve(distRoot, `.${decodeURIComponent(pathname)}`)
-      if (!path.startsWith(resolve(distRoot) + sep)) { res.writeHead(403).end(); return true }
-      try { const info = await stat(path); send(req, res, { 'content-type': mime[extname(path)] ?? 'application/octet-stream', 'cache-control': 'private, max-age=3600' }, `${path}:${info.size}:${info.mtimeMs}`, await readFile(path)) }
-      catch { res.writeHead(404).end() }
-      return true
     }
     const baseURLs = () => !enabled || !gateway ? [] : activeMode === 'public' ? (access?.domain ? [access.domain] : []) : lanAddresses().map(ip => `http://${ip}:${gateway!.port}`)
     // The system's proxy is looked up at most every 15 seconds; the panel asks for status far more often.
@@ -193,7 +176,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         enabled, busy, mode: preferences.mode, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
         systemProxy: preferences.proxyMode === 'system' && preferences.mode === 'public' ? await systemProxy() : undefined,
-        accent: preferences.accent, ui: preferences.ui,
+        accent: preferences.accent,
         publicUrl: access?.domain, publicPort: PUBLIC_PORT, pairingPin: access?.password(local), pinFixed: access?.fixedPin, passwordPairing: preferences.passwordPairing === true,
         publicUrlCheck: local ? access?.lastCheck : undefined, certificate: local && access?.domain ? await access.certificateStatus() : undefined,
         phase: enabled ? 'ready' : error ? 'error' : 'off', error, gatewayPort: gateway?.port ?? 0, local,
@@ -234,7 +217,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         const stopping = stop(); ticket = generation
         await stopping; if (disposed || ticket !== generation) return
         credential = hostCookie(ready.connection, upstreamPort)
-        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, asset, addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, accent: () => preferences.accent, directPairing: () => preferences.passwordPairing === true, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
+        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(config.mobileShim !== false), addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, accent: () => preferences.accent, directPairing: () => preferences.passwordPairing === true, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
         const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
         let next = gateway = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.
@@ -264,7 +247,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           const service = ready.get('schedule') as { create(sessionId: string, request: unknown): Promise<unknown> } | undefined
           if (!service) throw new Error('此宿主尚未启用自动化服务。请在插件管理中启用实验性自动化插件。')
           if (typeof input.sessionId !== 'string' || !input.request || typeof input.request !== 'object') throw new Error('自动化请求格式不正确。')
-          // rc.2 exposes list/update/delete over Remote but no create RPC.
+          // rc.3 exposes list/update/delete over Remote but no create RPC.
           // Delegate directly to the existing Host service, retaining its validation,
           // persistence and scheduling semantics; no second task database.
           return service.create(input.sessionId, input.request)
@@ -299,7 +282,6 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           const previous = preferences, previousDomain = access?.domain
           if (busy && Object.keys(input).some(key => key !== 'action' && key !== 'accent')) throw new Error('请等待当前连接操作完成。')
           const next = { ...preferences }
-          if (input.ui !== undefined) { if (input.ui !== 'custom' && input.ui !== 'native') throw new Error('界面选项不正确。'); next.ui = input.ui }
           if (typeof input.autoStart === 'boolean') next.autoStart = input.autoStart
           if (input.mode !== undefined) { if (input.mode !== 'public' && input.mode !== 'lan') throw new Error('连接模式不正确。'); next.mode = input.mode }
           if (input.accent !== undefined) { if (!isAccent(input.accent)) throw new Error('强调色不正确。'); next.accent = input.accent }

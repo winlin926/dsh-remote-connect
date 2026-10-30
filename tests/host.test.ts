@@ -62,14 +62,13 @@ async function withHost(run: (command: (action: string, fields?: Record<string, 
   }
 }
 
-it('persists a default UI without restarting the live gateway and rejects unknown UIs', async () => withHost(async command => {
-  expect((await command('status')).ui).toBe('custom')
+it('ignores the retired phone-interface preference without restarting the live gateway', async () => withHost(async command => {
+  expect((await command('status')).ui).toBeUndefined()
   await command('preferences', { mode: 'lan' }); const started = await command('start')
-  const selected = await command('preferences', { ui: 'native' })
-  expect(selected).toMatchObject({ ui: 'native', gatewayPort: started.gatewayPort, enabled: true })
-  expect(selected.links).toEqual(started.links)
-  expect((await command('preferences', { ui: 'unknown' })).status).toBe(400)
-  expect((await command('status')).ui).toBe('native')
+  const saved = await command('preferences', { ui: 'native' })
+  expect(saved).toMatchObject({ gatewayPort: started.gatewayPort, enabled: true })
+  expect(saved.ui).toBeUndefined()
+  expect(saved.links).toEqual(started.links)
 }))
 
 it('keeps the running LAN entry and QR while saving a different mode or proxy', async () => withHost(async command => {
@@ -219,17 +218,17 @@ it('rolls back a saved public domain when preference persistence fails', async (
   await command('preferences', { mode: 'public', publicUrl: 'https://first.example.com' })
   const before = await command('start')
   await command('stop')
-  const file = join(process.env.DSH_HOME!, 'dsh-remote-control', 'default', 'preferences.json')
+  const file = join(process.env.DSH_HOME!, 'dsh-remote-connect', 'default', 'preferences.json')
   rmSync(file); mkdirSync(file)
   expect((await command('preferences', { publicUrl: 'https://second.example.com' })).status).toBe(400)
   expect((await command('status')).publicUrl).toBe('https://first.example.com')
-  expect(JSON.parse(readFileSync(join(process.env.DSH_HOME!, 'dsh-remote-control', 'default', 'public-url.json'), 'utf8')).publicUrl).toBe('https://first.example.com')
+  expect(JSON.parse(readFileSync(join(process.env.DSH_HOME!, 'dsh-remote-connect', 'default', 'public-url.json'), 'utf8')).publicUrl).toBe('https://first.example.com')
   expect(before.publicUrl).toBe('https://first.example.com')
 }))
 
 it('rolls back unsaved preferences and preserves the live entry when atomic persistence fails', async () => withHost(async command => {
   await command('preferences', { mode: 'lan' }); const before = await command('start')
-  const file = join(process.env.DSH_HOME!, 'dsh-remote-control', 'default', 'preferences.json')
+  const file = join(process.env.DSH_HOME!, 'dsh-remote-connect', 'default', 'preferences.json')
   rmSync(file); mkdirSync(file)
   expect((await command('preferences', { mode: 'public' })).status).toBe(400)
   const after = await command('status')

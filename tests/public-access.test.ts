@@ -14,16 +14,16 @@ async function folder() { const value = await mkdtemp(join(tmpdir(), 'dsh-rc-pub
 
 describe('fixed public URL', () => {
   it('normalizes HTTPS origins and rejects paths and private targets', () => {
-    expect(normalizePublicUrl(' https://Dsh2.Sanlin.Xin/ ')).toBe('https://dsh2.sanlin.xin')
+    expect(normalizePublicUrl(' https://Dsh.Example.Com/ ')).toBe('https://dsh.example.com')
     for (const value of ['http://dsh.example.com', 'https://dsh.example.com/path', 'https://127.0.0.1', 'https://192.168.1.2', 'https://user:secret@dsh.example.com', 'https://localhost']) expect(() => normalizePublicUrl(value)).toThrow()
   })
   it('migrates the existing roam domain without rewriting the legacy file', async () => {
     const root = await folder(), storage = join(root, 'new'), legacyStorage = join(root, 'legacy')
-    await mkdir(legacyStorage, { recursive: true }); await writeFile(join(legacyStorage, 'settings.json'), JSON.stringify({ publicUrl: 'https://dsh2.sanlin.xin/' }))
+    await mkdir(legacyStorage, { recursive: true }); await writeFile(join(legacyStorage, 'settings.json'), JSON.stringify({ publicUrl: 'https://dsh.example.com/' }))
     const access = new PublicAccess({ storage, legacyStorage, certificateDir: join(root, 'certificates'), proxy: async () => undefined })
     await access.migrate()
-    expect(access.domain).toBe('https://dsh2.sanlin.xin')
-    expect(readPublicUrl(join(storage, 'public-url.json'))).toBe('https://dsh2.sanlin.xin')
+    expect(access.domain).toBe('https://dsh.example.com')
+    expect(readPublicUrl(join(storage, 'public-url.json'))).toBe('https://dsh.example.com')
     expect(access.password(true)).toMatch(/^\d{6}$/)
     expect(access.password(false)).toBeUndefined()
   })
@@ -49,7 +49,7 @@ describe('connection password and public probe', () => {
     await access.saveDomain('https://dsh.example.com')
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'another-service' })))
     expect((await access.checkDomain()).reachable).toBe(false)
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'dsh-remote-control' })))
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'dsh-remote-connect' })))
     expect((await access.checkDomain()).reachable).toBe(true)
   })
 })
@@ -79,7 +79,7 @@ describe('fixed-domain gateway admission', () => {
       await mkdir(access.challengeDir, { recursive: true }); await writeFile(join(access.challengeDir, 'valid-token'), 'proof')
       expect((await call('/.well-known/acme-challenge/valid-token')).body).toBe('proof')
       expect((await call('/.well-known/acme-challenge/..%2Fsecret')).status).toBe(403)
-      expect((await call('/rc/health')).body).toContain('dsh-remote-control')
+      expect((await call('/rc/health')).body).toContain('dsh-remote-connect')
       expect((await call('/rc/pair/verify', 'POST', origin, { pin: 'wrong' })).status).toBe(401)
       const verify = await call('/rc/pair/verify', 'POST', origin, { pin: '051109' })
       expect(verify.status).toBe(200)

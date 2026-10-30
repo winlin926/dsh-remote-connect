@@ -14,7 +14,7 @@ try {
   const onboarding = desktop.getByRole('button', { name: '继续', exact: true })
   if (await onboarding.isVisible()) { await onboarding.click(); await desktop.waitForTimeout(500) }
   management = async (action, fields = {}) => desktop.evaluate(async ({ action, fields }) => {
-    const response = await fetch('/api/dsh-remote-control/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...fields }) }); return { status: response.status, data: await response.json() }
+    const response = await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...fields }) }); return { status: response.status, data: await response.json() }
   }, { action, fields })
   const initial = await management('status'); results.push({ name: 'local authenticated management', status: initial.status, enabled: initial.data.enabled })
   if (initial.status !== 200) throw new Error(`management failed: ${JSON.stringify(initial)}`)
@@ -48,7 +48,7 @@ try {
   const mobileOnboarding = mobile.getByRole('button', { name: '继续', exact: true })
   if (await mobileOnboarding.isVisible()) await mobileOnboarding.click()
   await mobile.screenshot({ path: resolve(qa, 'official-mobile.png'), fullPage: true })
-  const remoteStatus = await mobile.evaluate(async () => { const response = await fetch('/api/dsh-remote-control/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }); return { status: response.status, data: await response.json() } })
+  const remoteStatus = await mobile.evaluate(async () => { const response = await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }); return { status: response.status, data: await response.json() } })
   results.push({ name: 'remote management and host grant', status: remoteStatus.status, local: remoteStatus.data.local, title: await mobile.title(), hostGrant: await mobile.evaluate(() => globalThis.__DSH_TRANSPORT__?.ownsHost) })
   const urls = [], responses = []
   const promptRequests = []
@@ -88,14 +88,21 @@ try {
   results.push({ name: 'resource failures before revocation', resources: [...rejectedResources] })
   const preRevocationErrors = [...errors]
   if (preRevocationErrors.length) throw new Error('Official UI reported errors before revocation')
-  await mobile.getByRole('button', { name: '设置', exact: true }).click()
-  await mobile.waitForTimeout(1000)
-  if (!(await mobile.locator('body').innerText()).includes('远程控制')) throw new Error('Remote settings did not load')
-  results.push({ name: 'official remote settings opens with plugin section', passed: true })
-  await mobile.screenshot({ path: resolve(qa, 'official-mobile-settings.png'), fullPage: true })
+  // The plugin's own panel is where a phone user manages this connection, so it must load beside
+  // the Host sidebar rather than only inside the Host settings page.
+  const panelEntry = mobile.getByRole('button', { name: '远程控制', exact: true }).first()
+  if (!(await panelEntry.isVisible().catch(() => false))) await mobile.getByRole('button', { name: '打开侧边栏', exact: true }).click().catch(() => {})
+  await panelEntry.click({ timeout: 15000 })
+  await mobile.getByRole('heading', { name: '远程控制', exact: true }).waitFor({ timeout: 15000 })
+  await mobile.waitForTimeout(1500)
+  const panelText = await mobile.locator('body').innerText()
+  await mobile.screenshot({ path: resolve(qa, 'official-mobile-panel.png'), fullPage: true })
+  if (!panelText.includes('连接与外观设置')) throw new Error(`Remote panel did not load on the phone: ${panelText.slice(0, 400)}`)
+  results.push({ name: 'remote panel opens on the phone', passed: true })
+  await mobile.screenshot({ path: resolve(qa, 'official-mobile-panel.png'), fullPage: true })
   const deviceId = (await mobileContext.cookies()).find(cookie => cookie.name === 'dsh_rc').value.split('.')[0]
   await management('revoke', { id: deviceId }); await mobile.waitForTimeout(300)
-  const denied = await mobile.evaluate(async () => (await fetch('/api/dsh-remote-control/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) })).status)
+  const denied = await mobile.evaluate(async () => (await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) })).status)
   results.push({ name: 'revocation denies existing browser', status: denied })
   if (denied !== 403) throw new Error(`Revocation did not deny access: ${denied}`)
   await management('stop'); await mobileContext.close()

@@ -93,8 +93,8 @@ it('admits the addresses the computer has now, and marks what it forwards as rem
 it('loads with default preferences when the file is damaged, and refuses forwarded calls on the local route', async () => {
   const home = folder(), previous = process.env.DSH_HOME
   process.env.DSH_HOME = home
-  mkdirSync(join(home, 'dsh-remote-control', 'default'), { recursive: true })
-  writeFileSync(join(home, 'dsh-remote-control', 'default', 'preferences.json'), '{"autoStart": tru')
+  mkdirSync(join(home, 'dsh-remote-connect', 'default'), { recursive: true })
+  writeFileSync(join(home, 'dsh-remote-connect', 'default', 'preferences.json'), '{"autoStart": tru')
   const ctx = new Context(); let record: unknown
   const remove = ctx.provide('credentials', { modifyRecord: async (_key: unknown, update: (value: unknown) => Promise<unknown>) => { const next = await update(record); if (next !== undefined) record = next; return record } })
   const call = (headers: Record<string, string> = {}) => ctx.connection.createSharedFetchHandler('/api').fetch(new Request('http://desktop.internal' + MANAGE_PATH, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ action: 'status' }) }), OWNER)

@@ -1,5 +1,5 @@
 // Geometry regression for the remote entry sharing the Desktop footer.
-// Uses the production component/CSS and the official 0.2.1-rc.2 sidebar CSS.
+// Uses the production component/CSS and the official 0.2.1-rc.3 sidebar CSS.
 import { chromium, expect } from '@playwright/test'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'

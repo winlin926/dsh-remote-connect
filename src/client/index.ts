@@ -7,9 +7,8 @@ import { chooseAccent, syncAccent } from './accent-sync.js'
 import { registerNavIcon } from './nav-icon.js'
 import { mountInlineSidebarAction } from './sidebar-action.js'
 const h = React.createElement
-const ROUTE = '/api/dsh-remote-control/manage'
+const ROUTE = '/api/dsh-remote-connect/manage'
 interface Status {
-  ui?: 'custom' | 'native'
   enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null; accent?: Accent
   publicUrl?: string | null; publicPort: number; pairingPin?: string; pinFixed?: boolean; passwordPairing?: boolean
   publicUrlCheck?: { at: number; reachable: boolean; status: number | null; error: string | null }
@@ -371,9 +370,10 @@ export function RemoteControlPanel(): React.ReactElement {
       h('p', { className: 'dsrc-note' }, '仅用于电脑的域名检测和证书请求，不改变手机连接。'),
       block('div', 'dsrc-field dsrc-appearance', [
         h('span', { className: 'dsrc-field-label' }, '手机界面'),
-        block('div', 'dsrc-mode', ([['custom', '自定义界面'], ['native', '原生界面']] as const).map(([id, title]) => h('button', { key: id, type: 'button', 'aria-pressed': (state.ui ?? 'custom') === id, disabled, onClick: () => { void act('preferences', { ui: id }) } }, title)), { role: 'group', 'aria-label': '手机界面' }),
-        h('p', { className: 'dsrc-note' }, '刷新手机页面后生效，无需重新配对。'),
-        state.local ? null : h('a', { className: 'dsrc-native-link', href: '/?ui=native' }, '打开原生界面'),
+        state.links[0]?.base
+          ? h('a', { className: 'dsrc-button', href: state.links[0].base, target: '_blank', rel: 'noreferrer' }, '在浏览器打开手机界面')
+          : h('p', { className: 'dsrc-note' }, '开启远程连接后，这里会给出手机要打开的地址。'),
+        h('p', { className: 'dsrc-note' }, '手机打开的就是电脑当前版本的 DSH 界面；DSH 升级后不需要更新插件。'),
       ]),
       block('div', 'dsrc-field dsrc-appearance', [
         h('span', { className: 'dsrc-field-label' }, '界面强调色'),
@@ -391,7 +391,7 @@ export function RemoteControlPanel(): React.ReactElement {
     return h('details', { className: 'dsrc-surface dsrc-preferences', 'data-needed': !!settingsIssue, open: settingsOpen, onToggle: (event: React.SyntheticEvent<HTMLDetailsElement>) => setSettingsOpen(event.currentTarget.open) },
       h('summary', null,
         block('span', 'dsrc-settings-title', [cardIcon('slate', h(GearIcon, null)), '连接与外观设置']),
-        h('span', { className: `dsrc-summary-value${settingsIssue ? ' dsrc-needs-attention' : ''}` }, settingsIssue || `${publicUrl ? '域名已配置' : '域名未配置'} · ${(state.ui ?? 'custom') === 'custom' ? '自定义界面' : '原生界面'} · ${ACCENTS[accent].name}`)),
+        h('span', { className: `dsrc-summary-value${settingsIssue ? ' dsrc-needs-attention' : ''}` }, settingsIssue || `${publicUrl ? '域名已配置' : '域名未配置'} · ${ACCENTS[accent].name}`)),
       block('div', 'dsrc-preferences-body', [publicSettings, appearance]))
   }
   const requests = () => state?.local && state.requests.length ? block('section', 'dsrc-surface dsrc-requests', [
@@ -425,7 +425,7 @@ export function RemoteControlPanel(): React.ReactElement {
       block('div', 'dsrc-col dsrc-col-rail', [requests(), devices(), settings()]),
     ]),
     toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
-  ], { 'data-dsh-plugin': 'dsh-remote-control' })
+  ], { 'data-dsh-plugin': 'dsh-remote-connect' })
 }
 interface Waiting { enabled: boolean; accent?: Accent; requests: Array<{ id: string; name: string; expiresAt: number }> }
 

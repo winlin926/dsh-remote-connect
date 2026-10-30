@@ -1,11 +1,37 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
 import { localFilePath } from './local-file.js'
 
-function remoteBoot(parseLocalFile: (href: string) => string | undefined): void {
+function remoteBoot(parseLocalFile: (href: string) => string | undefined, shim: boolean): void {
   const globals = window as unknown as Record<string, any>
   globals.__DSH_REMOTE_CONTROL__ = true
   // The Host's page declares English; the app is Chinese, and browsers would offer to translate it.
   document.documentElement.lang = 'zh-CN'; document.documentElement.setAttribute('translate', 'no')
+  // Phone and tablet only, and only geometry the Host does not own: the keyboard policy, the
+  // form font size that stops iOS from zooming, and the browser chrome colour. Layout stays the
+  // Host's, whose own mobile work would only fight overrides from here.
+  function enhanceForMobile(): void {
+    if (shim !== true) return
+    const viewport = document.querySelector('meta[name="viewport"]')
+    const content = viewport?.getAttribute('content') ?? ''
+    // Android resizes the visual viewport for the keyboard instead of panning the whole page.
+    if (viewport && !/interactive-widget/.test(content)) viewport.setAttribute('content', `${content}, interactive-widget=resizes-content`)
+    const style = document.createElement('style'); style.id = 'dsh-rc-mobile'
+    // iOS zooms into any form control under 16px; every Host font setting stays readable without it.
+    style.textContent = '@media (max-width: 768px) { input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: max(16px, 1em) } }'
+    document.head.append(style)
+    const paint = (): void => {
+      // The page background may sit on <html> rather than <body>; transparent is never a colour.
+      const body = getComputedStyle(document.body).backgroundColor
+      const color = body && body !== 'rgba(0, 0, 0, 0)' ? body : getComputedStyle(document.documentElement).backgroundColor
+      let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null
+      if (!meta) { meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.append(meta) }
+      meta.content = color
+    }
+    if (document.body) paint(); else document.addEventListener('DOMContentLoaded', paint, { once: true })
+    // The Host switches theme on the root element, so the browser chrome follows it.
+    new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] })
+  }
+  enhanceForMobile()
   globals.__DSH_TRANSPORT__ = { ...globals.__DSH_TRANSPORT__, ownsHost: true }
   const originalFetch = window.fetch.bind(window)
   globals.__DSH_FILE_UPLOAD__ = { fetch: originalFetch }
@@ -142,7 +168,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
       super(url, protocols)
       this.addEventListener('open', () => window.dispatchEvent(new Event('dsh-rc-online')))
       this.addEventListener('close', () => {
-        void originalFetch('/api/dsh-remote-control/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }).then(async response => {
+        void originalFetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }).then(async response => {
           if (await unpaired(response)) disconnected('设备授权已撤销，远程连接已断开。请重新扫码。')
         }).catch(() => window.dispatchEvent(new Event('dsh-rc-offline')))
       })
@@ -203,12 +229,17 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
   }
   globals.EventSource = RemoteEventSource
 }
-export const BOOT_SCRIPT = `(${remoteBoot.toString()})(${localFilePath.toString()});`
+/** Built per request: the mobile shim is a plugin setting, so the served file carries its state. */
+export function bootScript(mobileShim: boolean): string {
+  return `(${remoteBoot.toString()})(${localFilePath.toString()}, ${mobileShim === true});`
+}
+/** The boot script is a same-origin file, not an inline script, so a Host CSP cannot block it. */
+export const BOOT_PATH = '/rc/boot.js'
+const BOOT_TAG = `<script src="${BOOT_PATH}"></script>`
 export function injectBoot(html: string): string {
-  const script = `<script>${BOOT_SCRIPT.replace(/<\/script/gi, '<\\/script')}</script>`
   // Android keeps the 980px fallback layout when a script runs before the viewport meta.
   const viewport = /<meta\b[^>]*\bname=["']viewport["'][^>]*>/i.exec(html)
-  if (viewport) return html.slice(0, viewport.index + viewport[0].length) + script + html.slice(viewport.index + viewport[0].length)
-  return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}<meta name="viewport" content="width=device-width, initial-scale=1">${script}`)
+  if (viewport) return html.slice(0, viewport.index + viewport[0].length) + BOOT_TAG + html.slice(viewport.index + viewport[0].length)
+  return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}<meta name="viewport" content="width=device-width, initial-scale=1">${BOOT_TAG}`)
 }
 

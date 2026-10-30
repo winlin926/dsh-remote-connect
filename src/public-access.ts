@@ -143,7 +143,7 @@ export class PublicAccess {
       try {
         const response = await this.fetch(address, { redirect: 'manual', signal: AbortSignal.timeout(12_000) })
         const identity = response.status === 200 ? await response.json().catch(() => null) : null
-        const reachable = response.status === 200 && identity?.service === 'dsh-remote-control'
+        const reachable = response.status === 200 && identity?.service === 'dsh-remote-connect'
         const error = reachable ? null : response.status >= 500 ? `HTTP ${response.status}` : '域名没有指向当前远程控制网关'
         const check = { at: this.now(), reachable, status: response.status, error }
         if (domain === this.domain) this.lastCheck = check

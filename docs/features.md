@@ -1,31 +1,23 @@
-# 0.2.0 功能与宿主接口对应
+# 0.3.0 能力与宿主接口对应
 
-远程普通页面由本插件实现，业务和持久化由当前 DSH 提供。本机继续使用官方主界面。以下清单描述实现覆盖，实际验证范围另见 verification.md。
+手机浏览器打开的是**宿主自己的 Web 界面**：网关取回宿主的页面原样转发，只注入一个同源 boot 脚本。所以"手机上能用什么"由宿主版本决定，不由本插件实现。本文件只描述插件自身的能力边界和它用到的宿主接口。
 
-| 页面／功能 | 宿主接口或服务 | 验证与限制 |
+| 能力 | 宿主接口或服务 | 说明 |
 |---|---|---|
-| 配对、授权、设备、模式切换 | 原认证网关、PairingService、manage | 安全与切换行为自动测试；首次批准仅本机 |
-| 会话列表、新建、搜索、分支 | Connection、sessions、remote.session | 新建、同步、发送、重命名、归档恢复通过真实隔离宿主；搜索／分支已实现 |
-| 工作区 | workspaces、workspace Remote | 读取及创建、重命名、移除；移除不删除电脑文件 |
-| 模型与思考强度 | session.modelCatalog/selectModel、modelSelection projection | 模型选择已实测；思考强度仅显示模型实际提供的选项 |
-| Agent 与权限 | agentPresets.list/select、permissions projection、permission command | 会话前选择 Agent，权限使用宿主目录；预设本身由宿主／插件定义 |
-| 消息、Markdown、代码、图片 | uiConversation 的 chat target / SDK MarkdownText / imageUrl | 不复制日志折叠、Agent 或模型请求业务；流式回复通过 |
-| 附件与停止 | conversation.createDrafts/sendSession、Session.cancel | 二进制附件上传通过；提交失败保留草稿 |
-| “+”菜单与斜杠指令 | commands.list、Session.command | 目标、计划、反馈、压缩、导出及会话的其他指令；结果作为会话里的指令节点显示；权限、模型两行打开本页自己的选择器 |
-| 工具审批 | uiSession pendingInteraction 的 approval carrier | 真实审批服务，测试工具仅执行一次 |
-| 用户问题与方案审核 | SDK PendingQuestion carrier | 单选、多选、自由回答、方案 Markdown；多选真实闭环通过；沿用宿主倒计时与答复渠道 |
-| 工具轨迹与子任务 | chat folded nodes、sessions lineage | 工具参数、结果、错误、思考、历史；子会话可切换查看 |
-| 通用、模型、Agent、技能目录及其他配置 | settings.describe/mutate | 统一递归表单；复杂结构使用带校验的 JSON 编辑；保留 expectedRevision 冲突控制 |
-| 凭据 | credentials.set/unset | 只写电脑，秘密不回显、不缓存；测试凭据写入与清空通过 |
-| 插件与安装任务 | pluginManager.inspect/installBundle/waitForInstall/cancelInstall/setBundleEnabled/removeBundle | 实测本地无依赖测试插件安装、停用、启用、卸载；刷新查询原任务 ID，不重复安装 |
-| 自动化 | schedule.catalog/update/delete/history；网关委托 schedule.create | rc.2 缺少 create Remote，适配只调用宿主原有 service；每日任务创建、读取、删除通过；需要启用官方自动化服务 |
-| 技能 | skills.list({sessionId})、技能相关 settings namespace | 元数据清单与目录配置；通过 /技能名 调用；未暴露的技能文件编辑不伪装为可用能力 |
-| 费用 | sessions 的 cost/usage/token projections | 只展示实际投影，不推算提供商账单；宿主未提供时明确说明 |
-| 文件 | workspaceFiles.list/read/readBytes | 浏览、文本／图片／PDF 预览、下载；文本分页／文件上限明确提示；上传在聊天输入区 |
-| 消息中的电脑 HTML | 认证网关临时预览站点 | 点击 `file://` HTML 在手机新标签页打开；相对路径 CSS、JS、图片和目录内网页链接可加载；预览脚本与 DSH 会话隔离 |
-| 原生打开 | session.canOpenWorkspacePath/openWorkspacePath | 明确作用于电脑；未启用时禁用，不冒充手机本地应用 |
-| 第三方自定义设置 | settings.section + Slots renderer compatibility adapter | computer-use、proxy 容器通过；保留插件服务、作用域及样式；不保证任意插件、未来 SDK 均兼容 |
+| 认证网关 | `connection.authorizeIndex` / `connection.requestRejection` | 远程请求先过设备授权，再用插件持有的宿主 cookie 转发；宿主 cookie 每 12 小时续一次，401 时立即重取 |
+| 首页 | 宿主 `GET /` | 原样取回并注入 `/rc/boot.js`；不缓存页面、不改写宿主资源，手机界面永远等于宿主当前版本 |
+| 资源与接口 | 透明代理 | `/assets/*`、插件模块、API、WebSocket 全部转发；剔除 `set-cookie`、归一 `accept-encoding`、重写回环 `location` |
+| 扫码配对 | `PairingService`、`manage` | 首次批准只能在本机面板完成；公网入口先过 6 位密码 |
+| 设备与撤销 | `devices.json`、网关注册表 | 撤销后立即断开该设备的在线连接与文件预览 |
+| 局域网入口 | 网卡枚举 | 虚拟网卡 / 隧道地址排在最后，不可达地址不展示 |
+| 公网入口 | 固定域名 + 密码闸门 | 只接受无路径、无用户信息的 HTTPS origin；密码错误按来源与全局限速 |
+| 证书 | ACME HTTP-01、SakuraFrp 目录约定 | 只写证书文件，不改系统服务；续期前复核域名与端口 |
+| 本机管理 | `MANAGE_PATH`（仅回环 + 宿主认证） | 带 `REMOTE_MARK` 的请求一律拒绝；远程只能读状态、开关注册的设备 |
+| 桌面面板 | `slots`（`settings.section`、`sidebar.footer.action`） | 宽屏双列，手机视图单列；不再提供"手机界面"切换 |
+| 自动化 | `schedule` 服务 | 宿主未启用自动化时明确报错，不伪造第二套任务库 |
+| 手机文件预览 | `/rc/workspace-file` + 预览站点 | 消息里的 `file://` 链接在手机上打开；HTML 站点用沙箱 CSP |
+| boot 脚本 | `/rc/boot.js`（同源，非内联） | 本机文件链接、断线 / 撤销遮罩、boot 报告、移动端元信息（键盘策略、表单字号、状态栏颜色） |
 
-宿主的原生窗口、语音设备、账户浏览器登录、系统文件选择器等能力不会在手机上假装成原生电脑操作。可描述的配置由表单提供；没有浏览器 Remote 能力的功能在“其他宿主功能”中说明，避免用占位按钮冒充实现。
+不在插件范围内：聊天界面布局、触控目标尺寸、软键盘交互、窄屏导航。这些是宿主 `apps/web` 的职责，插件覆盖它们只会与宿主自己的移动端改动互相打架。
 
-浏览器独立打包 React，加载宿主 client manifest 提供的 SDK 服务；官方桌面 AppFrame 从不在普通远程页面挂载。自定义插件兼容适配集中在 src/remote/compatibility.ts，使用 rc.2 的内部 Slots renderRoot/hostFace。升级 SDK 时应先回归此边界。
+`mobileShim` 配置项只控制 boot 脚本里的三条元信息增强，默认开启；关闭后除本机文件链接、断线提示和 boot 报告外不再改动页面。

@@ -9,14 +9,14 @@ import type { WebSocket, WebSocketServer } from 'ws'
 import type { PairingService, Device } from './pairing.js'
 import { body, cookie, gzipFor, json, sameOrigin } from './http.js'
 import { constants, createGzip } from 'node:zlib'
-import { deniedPage, pairingPage, passwordPage } from './pages.js'
+import { deniedPage, pairingPage, passwordPage, unavailablePage } from './pages.js'
 import { ACME_CHALLENGE_PREFIX } from './acme-certificate.js'
 import type { PublicAccess } from './public-access.js'
-import { injectBoot } from './boot.js'
+import { BOOT_PATH, injectBoot } from './boot.js'
 import type { Accent } from './accent.js'
 import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from './workspace-preview.js'
 
-export const MANAGE_PATH = '/api/dsh-remote-control/manage'
+export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** Set by the gateway on every request it forwards; the Host's local-only handlers refuse it. */
 export const REMOTE_MARK = 'x-dsh-rc-remote'
 /** Accept absolute Windows/Unix paths only; relative segments and UNC hosts stay out. */
@@ -31,9 +31,10 @@ export interface GatewayOptions {
   upstreamPort: number
   upstreamCookie: () => string
   manage: (input: Record<string, unknown>, local: boolean) => Promise<unknown>
-  /** Render the official Web GUI when the Desktop Host has no HTTP index. */
-  index?: (ui?: 'custom' | 'native') => Promise<string>
-  asset?: (path: string, res: ServerResponse, req: IncomingMessage) => Promise<boolean>
+  /** The Host's own index page, rendered by the Host so the phone always runs its current version. */
+  index: () => Promise<string>
+  /** The boot script the page loads from {@link BOOT_PATH}, built per request from the plugin settings. */
+  boot: () => string
   /** Addresses this computer can currently be reached at (LAN mode); read on every request, since they change with the network. */
   addresses?: () => string[]
   /** The accent colour the user chose, for the pages the gateway serves itself. */
@@ -156,7 +157,7 @@ export class Gateway {
     }
     if (url.pathname === '/rc/health') {
       if (!publicRequest) { json(res, 404, { error: 'not found' }); return }
-      json(res, 200, { ok: true, service: 'dsh-remote-control' }); return
+      json(res, 200, { ok: true, service: 'dsh-remote-connect' }); return
     }
     if (url.pathname === '/pair' && req.method === 'GET') {
       const direct = publicRequest && this.options.directPairing?.() === true
@@ -286,12 +287,25 @@ export class Gateway {
       } catch { json(res, 404, { error: '文件不存在或无法读取，可能已被移动或删除。' }) }
       return
     }
-    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html') && this.options.index) {
-      const ui = url.searchParams.get('ui')
-      const html = injectBoot(await this.options.index(ui === 'custom' || ui === 'native' ? ui : undefined))
+    if (url.pathname === BOOT_PATH) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { error: 'GET only' }); return }
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-cache', 'x-content-type-options': 'nosniff' })
+      res.end(req.method === 'HEAD' ? undefined : this.options.boot())
+      return
+    }
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      // `?ui=custom` and `?ui=native` were two phone interfaces in earlier releases; the phone now
+      // shows the Host's own page, and a saved link or QR code must not 404 on the way there.
+      if (url.searchParams.has('ui')) { res.writeHead(302, { location: '/', 'cache-control': 'no-store' }); res.end(); return }
+      let html: string
+      try { html = injectBoot(await this.options.index()) }
+      catch (failure) {
+        res.writeHead(502, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
+        res.end(unavailablePage(this.options.accent?.(), failure instanceof Error ? failure.message : undefined))
+        return
+      }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(html); return
     }
-    if ((req.method === 'GET' || req.method === 'HEAD') && this.options.asset && await this.options.asset(url.pathname, res, req)) return
     this.proxy(req, res, device.id)
   }
   private headers(req: IncomingMessage): Record<string, string | string[]> {
