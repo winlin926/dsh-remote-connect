@@ -12,12 +12,22 @@
 - **删除 `mobileShim`**：实测宿主 0.2.2 自己负责 `interactive-widget`、表单字号、`theme-color` 与 `lang`。官方 `dsh-client-ui-conversation` 的补丁说明明确按「键盘平移整页」实现，而 shim 注入的 `resizes-content` 是另一套模型，二者冲突。boot 脚本现在只做远程链路自己的事（本机文件链接、断线遮罩、boot 报告、拒绝翻译提示）。
 - **自有页面重排**：配对页、密码页、拒绝页、不可用页改用实测的官方 token —— 亮色 `#FFFFFF` / `#0F1115` / `#61666B` / `#818588` / `rgba(0,0,0,.12)`，暗色 `#151517` / `#F9FAFB` / `#ADB2B8` / `rgba(255,255,255,.16)`；标题 26px/500，正文 14px，卡片 12px 圆角并去掉重投影；`theme-color` 跟随深浅色。主操作固定用陶土橙 `#D97757`（docs/ui-spec.md 的例外条目）。
 
+### 手机端面板与网关加固
+
+用手机视口（320×568 / 390×844 / 430×932，深浅色，软键盘）逐状态核过之后修掉的一批缺陷：
+
+- **面板**：关闭键、侧栏入口、折叠标题与重命名框统一到 44px 触控目标（断点 `@media (max-width:560px), (pointer:coarse)`，桌面不被放大）；设备列表不再套内层滚动（`max-height`/`overflow` 在窄屏与粗指针下取消）；按 `visualViewport` 把面板钳在软键盘上方，收起后复原；复制走 `execCommand` 兜底（局域网 http 下 `navigator.clipboard` 不存在）；2.5s 轮询单飞并在页面隐藏时暂停；两个对话框补 `aria-label` / `aria-labelledby` 与初始焦点。
+- **网关**：发给手机的 close 码先规范化（1005/1006/1004 等 `ws` 拒发的值转 1011），`ws.close` 抛错时 `terminate` 兜底 —— 原来一个空 close 帧就能让宿主进程未捕获异常退出；`response` 一开始就撤掉 120s 空闲计时，长流不再被掐断；`/rc/boot.js` 带内容 `etag` 并支持 `304`；预览能力 URL 增加 12 小时绝对寿命（原来只有 2 小时滑动闲置，持续使用可无限续期）。
+- **boot 脚本**：撤销探测单飞，且不跟随 `/rc/sse` 载体；重连按 3s→6s→…→30s 退避，连上后归零；随机 UUID 兜底改为可再次覆盖的属性；blob 打开的窗口断开 `opener`；断线遮罩改为 `aria-modal` 对话框，焦点落在唯一按钮上。
+- **配对密码入口**：从只渲染在「任意网络」主栏移到「密码直连配对」开关下方，局域网连接的用户也能设置。
+- **强调色**：固定陶土橙 `#D97757`，删除三色选择与跟随宿主 `--cl-accent` 的整套同步机制。
+
 ### 自动化
 
 - `pnpm typecheck`：通过。
-- `pnpm test`：8 个测试文件、69 条测试通过。新增：`304` 保持 `etag`、无体、无二次压缩；WebSocket 两段协商出 `permessage-deflate` 并完成消息回环；boot 脚本不再包含 `interactive-widget` / `dsh-rc-mobile`。
-- `pnpm build`：通过，`lib/index.js` 109.08 kB、`lib/client.js` 77.10 kB。
-- 打包检查：`npm pack --dry-run --json --ignore-scripts` → 27 个文件、71.9 kB；`lib/types` 与 `src` 一一对应（清掉 `lib/` 重建后没有残留的 `remote/*` 声明）。
+- `pnpm test`：8 个测试文件、78 条测试通过。新增：`304` 保持 `etag`、无体、无二次压缩；WebSocket 两段协商出 `permessage-deflate` 并完成消息回环；boot 脚本不再包含 `interactive-widget` / `dsh-rc-mobile`；`ws` 拒发的 close 码全量规范化、空 close 帧不让宿主崩；`/rc/boot.js` 用内容 `etag` 走 304；跨源 `EventSource` 交还浏览器；撤销探测单飞且跳过 SSE 载体；重连退避 3s→30s 并在连上后归零；预览能力超过 12 小时绝对寿命即退役；撤销遮罩是可聚焦确认按钮的模态对话框。
+- `pnpm build`：通过，`lib/index.js` 108.42 kB（gzip 33.50 kB）、`lib/client.js` 73.29 kB（gzip 19.68 kB）。
+- 打包检查：`npm pack --dry-run --json --ignore-scripts` → 27 个文件、70.4 kB；`lib/types` 与 `src` 一一对应（清掉 `lib/` 重建后没有残留的 `remote/*` 声明）。
 
 ### 隔离的真实 DSH 与 Chrome
 

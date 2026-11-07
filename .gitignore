@@ -6,4 +6,5 @@ lib/types/**/*.js.map
 playwright-report/
 test-results/
 package-manifest.json
+.mnemon/
 lib/
