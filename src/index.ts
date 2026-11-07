@@ -22,9 +22,9 @@ export const inject = ['connection']
 export const Config = z.object({
   gatewayPort: z.natural().max(65535).default(0).i18n({ 'zh-CN': { $description: '局域网网关端口；0 表示自动选择空闲端口。' } }),
   certificateDir: z.string().default('').i18n({ 'zh-CN': { $description: '证书部署目录；留空使用 SakuraFrp 的 FrpcWorkingDirectory。' } }),
-  mobileShim: z.boolean().default(true).i18n({ 'zh-CN': { $description: '手机浏览器微调（键盘策略、表单字号、浏览器状态栏颜色）；界面布局仍由 DSH 自己负责。' } }),
+  websocketCompression: z.boolean().default(true).i18n({ 'zh-CN': { $description: '压缩远程连接的 WebSocket 消息，减少长会话历史的传输量；连接两端不再压缩时更省电但更费流量。' } }),
 })
-export interface Config { gatewayPort?: number; certificateDir?: string; mobileShim?: boolean }
+export interface Config { gatewayPort?: number; certificateDir?: string; websocketCompression?: boolean }
 type Mode = 'public' | 'lan'
 /** Where outbound domain checks and certificate requests get their proxy. */
 type ProxyMode = 'system' | 'manual' | 'off'
@@ -217,7 +217,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         const stopping = stop(); ticket = generation
         await stopping; if (disposed || ticket !== generation) return
         credential = hostCookie(ready.connection, upstreamPort)
-        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(config.mobileShim !== false), addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, accent: () => preferences.accent, directPairing: () => preferences.passwordPairing === true, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
+        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, accent: () => preferences.accent, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
         const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
         let next = gateway = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.

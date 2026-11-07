@@ -12,14 +12,18 @@ it('loads the same-origin boot script only after the viewport meta', () => {
   expect(viewport).toBeGreaterThan(0)
   expect(script).toBeGreaterThan(viewport)
   expect(title).toBeGreaterThan(script)
-  expect(html).not.toContain(`<script>${bootScript(true)}`)
+  expect(html).not.toContain(`<script>${bootScript()}`)
   expect(injectBoot('<head><title>x</title></head>')).toMatch(/^<head><meta name="viewport" content="width=device-width, initial-scale=1"><script src="\/rc\/boot\.js"><\/script>/)
 })
 
-it('carries the mobile shim switch into the served script', () => {
-  expect(bootScript(true)).toContain('__DSH_REMOTE_CONTROL__')
-  expect(bootScript(true)).toMatch(/, true\);$/)
-  expect(bootScript(false)).toMatch(/, false\);$/)
+it('leaves the Host mobile layout alone and only refuses the browser translate offer', () => {
+  const script = bootScript()
+  expect(script).toContain('__DSH_REMOTE_CONTROL__')
+  expect(script).toContain('translate')
+  // 0.2.2 owns the viewport, the theme colour, the document language and the keyboard policy.
+  expect(script).not.toContain('interactive-widget')
+  expect(script).not.toContain('dsh-rc-mobile')
+  expect(script).toContain('__DSH_TRANSPORT__')
 })
 
 it('converts local file links to computer paths without losing Unix roots', () => {

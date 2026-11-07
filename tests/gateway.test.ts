@@ -14,24 +14,31 @@ async function fixture() {
   const folder = mkdtempSync(join(tmpdir(), 'dsh-rc-gateway-')); cleanup.push(() => rmSync(folder, { recursive: true, force: true }))
   let gateway: Gateway; let calls = 0
   const reports: Array<{ report: Record<string, unknown>; device?: { id: string; name: string } }> = []
+  const upstreamCompression: Array<string> = []
   const pairing = new PairingService({ file: join(folder, 'devices.json'), onRevoke: id => gateway.revoke(id) })
   const upstream = createServer((req, res) => {
     calls++
     if (req.url?.startsWith('/api/sse')) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('id: 1\ndata: 第一条\n\n'); const timer = setInterval(() => res.write('event: tick\ndata: second\n\n'), 50); res.once('close', () => clearInterval(timer)); return }
     if (req.url === '/api/hold') { res.writeHead(200); res.write('start'); return }
     if (req.url === '/api/upload') { let size = 0; req.on('data', chunk => size += chunk.length); req.on('end', () => res.end(JSON.stringify({ size }))); return }
+    // A cached asset: the Host now offers an ETag and answers 304 for a phone that already has it.
+    if (req.url === '/api/asset') {
+      const etag = '"asset-1"'
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag }); res.end(); return }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', etag }); res.end('<p>one</p>'); return
+    }
     res.setHeader('set-cookie', 'host-secret=should-never-reach-client'); res.end(JSON.stringify({ cookie: req.headers.cookie, origin: req.headers.origin }))
   })
-  const wss = new WebSocketServer({ server: upstream }); wss.on('connection', ws => ws.on('message', (data, binary) => ws.send(data, { binary })))
+  const wss = new WebSocketServer({ server: upstream, perMessageDeflate: true }); wss.on('connection', ws => { upstreamCompression.push(String(ws.extensions)); ws.on('message', (data, binary) => ws.send(data, { binary })) })
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
   cleanup.push(async () => { for (const client of wss.clients) client.terminate(); wss.close(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())) })
   const port = (upstream.address() as { port: number }).port
-  gateway = new Gateway({ pairing, upstreamPort: port, upstreamCookie: () => 'host-private=secret', manage: async (input, local) => { if (input.action === 'approve' && !local) throw new Error('本机确认'); return { local } }, index: async () => '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Host</title></head><body><div id="root"></div></body></html>', boot: () => bootScript(true), onBootReport: (report, device) => reports.push({ report, device }) })
+  gateway = new Gateway({ pairing, upstreamPort: port, upstreamCookie: () => 'host-private=secret', manage: async (input, local) => { if (input.action === 'approve' && !local) throw new Error('本机确认'); return { local } }, index: async () => '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Host</title></head><body><div id="root"></div></body></html>', boot: () => bootScript(), onBootReport: (report, device) => reports.push({ report, device }) })
   await gateway.listen('127.0.0.1'); cleanup.push(() => gateway.close())
   const base = `http://127.0.0.1:${gateway.port}`
   const claim = pairing.request(pairing.issue().token, 'Android'); pairing.approve(claim.id)
   const credential = pairing.claim(claim.id, claim.key).credential!
-  return { base, pairing, gateway, credential, folder, calls: () => calls, cookie: `dsh_rc=${credential}`, reports }
+  return { base, pairing, gateway, credential, folder, calls: () => calls, cookie: `dsh_rc=${credential}`, reports, upstreamCompression }
 }
 describe('gateway admission and transport', () => {
   it('refuses unauthenticated requests without reaching the Host', async () => {
@@ -153,6 +160,29 @@ describe('gateway admission and transport', () => {
     const f = await fixture(), data = new Uint8Array(262144).fill(251)
     const response = await fetch(`${f.base}/api/upload`, { method: 'POST', headers: { cookie: f.cookie }, body: data })
     expect(await response.json()).toEqual({ size: data.length })
+  })
+  it('keeps the Host ETag and answers 304 without a body or a second compression', async () => {
+    const f = await fixture()
+    const first = await fetch(`${f.base}/api/asset`, { headers: { cookie: f.cookie, 'accept-encoding': 'gzip' } })
+    expect(first.status).toBe(200)
+    expect(first.headers.get('content-encoding')).toBe('gzip')
+    expect(first.headers.get('vary')).toContain('accept-encoding')
+    expect(first.headers.get('etag')).toBe('"asset-1"')
+    expect(await first.text()).toBe('<p>one</p>')
+    // The phone revalidates with the ETag it kept; the cached copy was this gateway's gzip variant.
+    const cached = await fetch(`${f.base}/api/asset`, { headers: { cookie: f.cookie, 'accept-encoding': 'gzip', 'if-none-match': '"asset-1"' } })
+    expect(cached.status).toBe(304)
+    expect(cached.headers.get('content-encoding')).toBeNull()
+    expect(cached.headers.get('vary')).toContain('accept-encoding')
+    expect(await cached.text()).toBe('')
+  })
+  it('compresses the WebSocket legs a phone uses to load a long session', async () => {
+    const f = await fixture(), ws = new WebSocket(f.base.replace('http:', 'ws:') + '/api/remote.mux', { headers: { cookie: f.cookie, origin: f.base }, perMessageDeflate: true })
+    await once(ws, 'open')
+    expect(ws.extensions).toContain('permessage-deflate')
+    ws.send('compressed hello'); expect(String((await once(ws, 'message'))[0])).toBe('compressed hello')
+    await vi.waitFor(() => expect(f.upstreamCompression.join()).toContain('permessage-deflate'))
+    ws.close()
   })
   it('forwards WS text and binary, then closes both legs on revocation', async () => {
     const f = await fixture(), ws = new WebSocket(f.base.replace('http:', 'ws:') + '/api/remote.mux', { headers: { cookie: f.cookie, origin: f.base } })

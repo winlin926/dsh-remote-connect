@@ -43,6 +43,8 @@ export interface GatewayOptions {
   public?: () => PublicAccess | undefined
   /** Password-direct pairing switch; read on every request so panel changes apply at once. */
   directPairing?: () => boolean
+  /** Compress the WebSocket legs; a phone with a long session history spends most of its time here. */
+  websocketCompression?: boolean
   /** Receives one diagnostic report per remote boot, also from devices that fail to pair. */
   onBootReport?: (report: Record<string, unknown>, device: { id: string; name: string } | undefined) => void
 }
@@ -73,6 +75,8 @@ export class Gateway {
   private readonly entries = new Map<string, number>()
   port = 0
   constructor(private readonly options: GatewayOptions) {}
+  /** Compression is on unless the user turns it off; both legs read it once per connection. */
+  private get deflate(): boolean { return this.options.websocketCompression !== false }
   allowAuthority(authority: string): void { this.authorities.add(authority.toLowerCase()) }
   disallowAuthority(authority: string): void { this.authorities.delete(authority.toLowerCase()) }
   private validHost(req: IncomingMessage): boolean {
@@ -84,7 +88,7 @@ export class Gateway {
   async listen(host: '127.0.0.1' | '0.0.0.0', port = 0): Promise<number> {
     if (this.server) throw new Error('远程网关已启动。')
     this.ws ??= await import('ws')
-    this.wss ??= new this.ws.WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, perMessageDeflate: false })
+    this.wss ??= new this.ws.WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, perMessageDeflate: this.deflate })
     const server = this.server = createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: '请求处理失败，请在本机查看状态。' }); else res.destroy() }) })
     server.on('connection', socket => { this.sockets.add(socket); socket.on('error', () => {}); socket.once('close', () => this.sockets.delete(socket)) })
     server.on('upgrade', (req, socket, head) => { socket.on('error', () => {}); void this.upgrade(req, socket, head).catch(() => socket.destroy()) })
@@ -324,16 +328,23 @@ export class Gateway {
         try { const target = new URL(headers.location, `http://127.0.0.1:${this.options.upstreamPort}`); if (target.host === `127.0.0.1:${this.options.upstreamPort}`) headers.location = target.pathname + target.search } catch { delete headers.location }
       }
       res.once('close', () => incoming.destroy())
-      if (!headers['content-encoding'] && req.method !== 'HEAD' && gzipFor(req, String(headers['content-type'] ?? ''))) {
+      const status = incoming.statusCode ?? 502
+      // The Host now answers with ETag and 304, and a 304 must arrive without a body: it tells the
+      // phone to reuse the copy it already has, which was this plugin's gzip variant.
+      // A 304 carries no representation type, so it is always treated as the variant this gateway
+      // would have compressed: the copy the phone kept is that gzip body.
+      const compressible = !headers['content-encoding'] && req.headers.range === undefined && (status === 304 || gzipFor(req, String(headers['content-type'] ?? '')))
+      if (compressible && (status === 304 || req.method === 'HEAD')) headers.vary = 'accept-encoding'
+      if (compressible && status !== 204 && status !== 304 && req.method !== 'HEAD' && headers['content-length'] !== '0') {
         delete headers['content-length']
-        res.writeHead(incoming.statusCode ?? 502, { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' })
+        res.writeHead(status, { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' })
         // Flushed as it goes, so a response the Host writes in pieces still arrives in pieces.
         const gzip = createGzip({ flush: constants.Z_SYNC_FLUSH })
         gzip.on('error', () => res.destroy()); incoming.on('error', () => gzip.destroy())
         incoming.pipe(gzip).pipe(res)
         return
       }
-      res.writeHead(incoming.statusCode ?? 502, headers)
+      res.writeHead(status, headers)
       incoming.pipe(res)
     })
     const untrack = this.track(deviceId, () => upstream.destroy()); upstream.once('close', untrack)
@@ -354,7 +365,7 @@ export class Gateway {
     // Only registered Host WS routes are reachable; no port or destination supplied by clients.
     const headers = this.headers(req); delete headers['sec-websocket-protocol']
     const protocols = req.headers['sec-websocket-protocol']?.split(',').map(p => p.trim()) ?? []
-    const upstream = new this.ws.WebSocket(`ws://127.0.0.1:${this.options.upstreamPort}${url.pathname}${url.search}`, protocols, { headers, maxPayload: 32 * 1024 * 1024, perMessageDeflate: false })
+    const upstream = new this.ws.WebSocket(`ws://127.0.0.1:${this.options.upstreamPort}${url.pathname}${url.search}`, protocols, { headers, maxPayload: 32 * 1024 * 1024, perMessageDeflate: this.deflate })
     const release = this.track(device.id, () => { upstream.terminate(); socket.destroy() })
     socket.once('close', () => { upstream.terminate(); release() })
     upstream.on('error', () => socket.destroy())

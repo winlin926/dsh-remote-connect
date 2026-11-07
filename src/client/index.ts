@@ -4,7 +4,7 @@ import { CSS } from './style.js'
 import type { Accent } from '../accent.js'
 import { ACCENTS, ACCENT_IDS, installAccent, useAccent } from './shared-accent.js'
 import { chooseAccent, syncAccent } from './accent-sync.js'
-import { registerNavIcon } from './nav-icon.js'
+import { PhoneIcon } from './nav-icon.js'
 import { mountInlineSidebarAction } from './sidebar-action.js'
 const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
@@ -369,9 +369,9 @@ export function RemoteControlPanel(): React.ReactElement {
       ]) : null,
       h('p', { className: 'dsrc-note' }, '仅用于电脑的域名检测和证书请求，不改变手机连接。'),
       block('div', 'dsrc-field dsrc-appearance', [
-        h('span', { className: 'dsrc-field-label' }, '手机界面'),
+        h('span', { className: 'dsrc-field-label' }, '手机入口'),
         state.links[0]?.base
-          ? h('a', { className: 'dsrc-button', href: state.links[0].base, target: '_blank', rel: 'noreferrer' }, '在浏览器打开手机界面')
+          ? h('a', { className: 'dsrc-button', href: state.links[0].base, target: '_blank', rel: 'noreferrer' }, '在浏览器打开')
           : h('p', { className: 'dsrc-note' }, '开启远程连接后，这里会给出手机要打开的地址。'),
         h('p', { className: 'dsrc-note' }, '手机打开的就是电脑当前版本的 DSH 界面；DSH 升级后不需要更新插件。'),
       ]),
@@ -488,7 +488,8 @@ export const inject = ['slots', 'connection']
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => installAccent(), 'remote-control accent colour')
   ctx.effect(() => { const style = document.createElement('style'); style.dataset.dshRemoteControl = 'true'; style.textContent = CSS; document.head.append(style); return () => style.remove() }, 'remote-control styles')
-  ctx.effect(() => registerNavIcon('远程控制'), 'remote-control: settings nav icon')
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'copylee-remote-control', order: 65, label: () => '远程控制' }, () => h(RemoteControlPanel)))
+  // Addressed by section id: the shell skips ids it has no section for.
+  ctx.slots.inject('settings.section.icon', () => ctx.slots.register({ name: 'settings.section.icon', id: 'copylee-remote-control' }, (props: { size?: number; active?: boolean }) => h(PhoneIcon, props)))
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'copylee-remote-control', order: 65 }, (props: { wide?: boolean }) => h(SidebarEntry, { wide: props?.wide })))
 }

@@ -10,7 +10,7 @@ writeFileSync(join(profile, 'cordis.yml'), '[]\n')
 const qaPlugin = join(root, 'scripts', 'qa-llm.mjs').replaceAll('\\', '/')
 const workspace = join(qa, 'workspace'); mkdirSync(workspace, { recursive: true })
 writeFileSync(join(profile, 'cordis.patch.yml'), `- id: agent-default-model\n  config:\n    provider: remote-qa\n    model: qa-model\n- id: workspace-controller\n  config:\n    documentsDirectory: '${workspace.replaceAll('\\', '/')}'\n- insert:\n    - id: remote-qa-llm\n      name: '${qaPlugin}'\n`)
-writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: { '@copylee/dsh-remote-control': `link:${root}` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@copylee/dsh-remote-control'] } } }, null, 2))
+writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: { '@winlin926/dsh-remote-connect': `link:${root}` }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@winlin926/dsh-remote-connect'] } } }, null, 2))
 if (process.env.DSH_QA_COMPAT === '1') {
   const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
   for (const name of ['dsh-computer-use', 'dsh-proxy']) {
@@ -20,7 +20,7 @@ if (process.env.DSH_QA_COMPAT === '1') {
   }
   writeFileSync(join(profile, 'package.json'), JSON.stringify(manifest, null, 2))
 }
-const link = join(profile, 'node_modules', '@copylee', 'dsh-remote-control')
+const link = join(profile, 'node_modules', '@winlin926', 'dsh-remote-connect')
 mkdirSync(dirname(link), { recursive: true }); if (!existsSync(link)) symlinkSync(root, link, 'junction')
 const require = createRequire(import.meta.url)
 if (process.env.DSH_QA_COMPAT === '1') {

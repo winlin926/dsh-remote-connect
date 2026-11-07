@@ -2,7 +2,7 @@
 
 **远程连接** —— 用手机浏览器继续电脑上的 DeepSeek Harness（DSH）会话，支持扫码配对、消息发送、工具审批、附件与文件管理。
 
-基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 修改，保留原项目 MIT 许可证。当前适配 **DSH 0.2.1-rc.5**。
+基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 修改，保留原项目 MIT 许可证。当前适配 **DSH 0.2.2-rc.1**。
 
 ## 界面预览
 
@@ -16,19 +16,21 @@
 - DSH 对手机、平板、窄窗口做的适配（软键盘、触屏、窄屏设置页等）随宿主一起生效。
 - 插件只负责它真正该负责的部分：认证网关、扫码配对、局域网 / 公网入口、证书与本机管理面板。
 
-因为界面属于宿主，插件只能在元信息层面提手机体验：`interactive-widget=resizes-content`（Android 键盘压缩布局而不是顶起整页）、表单字号不小于 16px（消除 iOS 聚焦自动放大）、浏览器状态栏跟随主题。这些默认开启，可用配置项 `mobileShim: false` 关闭。
+宿主 0.2.2 起，手机体验（视口、键盘策略、状态栏颜色、文档语言、触控与窄屏布局）全部由宿主自己负责，插件不再往页面里注入任何覆盖样式。插件保留的 boot 脚本只做远程链路自己的事：同源传输、本机文件预览、断线 / 撤销遮罩、拒绝浏览器翻译提示。
 
 ## 相比原项目的修改
 
 - 把"原生界面"从内置前端改为**代理宿主的当前页面**：删除 `@deepseek-ai/dsh-web-frontend` 运行依赖和整套静态资源分发，手机不再拿到旧版本前端。
 - 删除自带的自定义手机聊天界面（约 1400 行、依赖 rc.3 内部 Slots/hostFace），插件只保留宿主稳定接口（webServer / connection / schedule）。
-- 依赖统一到 **0.2.1-rc.5**，插件入口与宿主同版本编译。
+- 依赖统一到 **0.2.2-rc.1**，插件入口与宿主同版本编译。
+- 跟随宿主 0.2.2 的三处变化：宿主的 `etag` / `304` 原样透传（不再对 `304` 加 `content-encoding`）、WebSocket 两段默认开 `permessage-deflate`（可用 `websocketCompression: false` 关闭）、面板图标改用新的 `settings.section.icon` 插槽。
+- 配对页、密码页、拒绝页的配色与字号换成宿主自己的设计 token（#FFFFFF / #0F1115 / #61666B / 12px 圆角 / 26px 标题），主操作仍使用插件共享的强调色。
 - 保留扫码配对、局域网 / 公网两种连接、固定域名与 ACME 证书、断线恢复、手机本机文件预览。
 - 自动化回归覆盖配对、官方界面挂载、聊天、审批、附件上传、面板与设备撤销。
 
 ## 安装
 
-环境要求：Node.js 22.19+ 或 24+，DSH **0.2.1-rc.5 以上**（`dsh.engines.dsh = >=0.2.1-rc.5 <0.3.0-0`）。
+环境要求：Node.js 22.19+ 或 24+，DSH **0.2.2-rc.1 以上**（`dsh.engines.dsh = >=0.2.2-rc.1 <0.3.0-0`）。
 
 在 DSH 插件管理中添加：
 
@@ -85,6 +87,10 @@ DSH 桌面版和 `dsh web` 使用各自的配置，需要分别安装。
 ## 从旧版本升级
 
 旧版保存的“手机界面”选择（自定义 / 原生）在升级后失效并被忽略：只剩宿主界面这一种。旧的 `/?ui=custom`、`/?ui=native` 链接会自动跳回 `/`，不需要重新配对。
+
+0.2.2 起宿主按**包自身的 `package.json` 名字**加载插件，不再跟随安装时的依赖键名。如果之前用 `link:` 以别的名字（例如 `@copylee/dsh-remote-control`）挂在本机 profile 里，升级宿主后会报 `Cannot find package`，需要把依赖键名改成 `@winlin926/dsh-remote-connect` 后重启。
+
+`mobileShim` 配置项已在 0.4.0 删除：宿主自己拥有手机布局，插件不再注入覆盖样式。配置里留着这一项会被忽略，不会报错。
 
 ## 安全提示
 

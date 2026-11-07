@@ -51,14 +51,13 @@ const page = await mobile.evaluate(() => ({
   lang: document.documentElement.lang,
   viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? '',
   themeColor: document.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? '',
-  mobileStyle: !!document.querySelector('style#dsh-rc-mobile'),
 }))
 check('the boot script is served same-origin', page.bootTag && page.remoteFlag, JSON.stringify(page))
 check('the Host page provides its boot payload', page.hostBoot && page.moduleLoader, JSON.stringify(page))
 check('the Host app mounts on the phone', page.mounted, JSON.stringify(page))
 check('the shell is the Host build', page.shellScripts.length === 1, JSON.stringify(page.shellScripts))
 check('the page speaks Chinese', page.lang === 'zh-CN', page.lang)
-check('the mobile shim sets the keyboard policy and form size', page.mobileStyle && page.viewport.includes('interactive-widget=resizes-content'), JSON.stringify({ viewport: page.viewport }))
+check('the Host keeps its own viewport and mobile layout', page.viewport === 'width=device-width, initial-scale=1', page.viewport)
 check('the browser chrome follows the theme', /rgb|#/.test(page.themeColor), page.themeColor)
 check('no failed requests or console errors after pairing', errors.length === 0, JSON.stringify(errors.slice(0, 6)))
 
