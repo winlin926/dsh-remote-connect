@@ -10,7 +10,7 @@
 - **条件请求**：宿主开始发 `etag` 并回 `304`。网关对 `304` 只补 `vary`，不加 `content-encoding`、不二次压缩，`range` 请求也不重压缩（否则手机拿到的是坏缓存）。
 - **面板图标**：宿主新增 `settings.section.icon` 插槽，`nav-icon.ts` 从「往 DOM 里塞 marker + CSS mask」改成直接导出一个 React 手机图标组件，id 与 `settings.section` 一致。
 - **删除 `mobileShim`**：实测宿主 0.2.2 自己负责 `interactive-widget`、表单字号、`theme-color` 与 `lang`。官方 `dsh-client-ui-conversation` 的补丁说明明确按「键盘平移整页」实现，而 shim 注入的 `resizes-content` 是另一套模型，二者冲突。boot 脚本现在只做远程链路自己的事（本机文件链接、断线遮罩、boot 报告、拒绝翻译提示）。
-- **自有页面重排**：配对页、密码页、拒绝页、不可用页改用实测的官方 token —— 亮色 `#FFFFFF` / `#0F1115` / `#61666B` / `#818588` / `rgba(0,0,0,.12)`，暗色 `#151517` / `#F9FAFB` / `#ADB2B8` / `rgba(255,255,255,.16)`；标题 26px/500，正文 14px，卡片 12px 圆角并去掉重投影；`theme-color` 跟随深浅色。主操作仍是插件共享的强调色（docs/ui-spec.md）。
+- **自有页面重排**：配对页、密码页、拒绝页、不可用页改用实测的官方 token —— 亮色 `#FFFFFF` / `#0F1115` / `#61666B` / `#818588` / `rgba(0,0,0,.12)`，暗色 `#151517` / `#F9FAFB` / `#ADB2B8` / `rgba(255,255,255,.16)`；标题 26px/500，正文 14px，卡片 12px 圆角并去掉重投影；`theme-color` 跟随深浅色。主操作固定用陶土橙 `#D97757`（docs/ui-spec.md 的例外条目）。
 
 ### 自动化
 

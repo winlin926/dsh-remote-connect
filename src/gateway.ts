@@ -13,7 +13,6 @@ import { deniedPage, pairingPage, passwordPage, unavailablePage } from './pages.
 import { ACME_CHALLENGE_PREFIX } from './acme-certificate.js'
 import type { PublicAccess } from './public-access.js'
 import { BOOT_PATH, injectBoot } from './boot.js'
-import type { Accent } from './accent.js'
 import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from './workspace-preview.js'
 
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
@@ -37,8 +36,6 @@ export interface GatewayOptions {
   boot: () => string
   /** Addresses this computer can currently be reached at (LAN mode); read on every request, since they change with the network. */
   addresses?: () => string[]
-  /** The accent colour the user chose, for the pages the gateway serves itself. */
-  accent?: () => Accent
   /** Fixed-domain public entry and its additional password gate. */
   public?: () => PublicAccess | undefined
   /** Password-direct pairing switch; read on every request so panel changes apply at once. */
@@ -173,7 +170,7 @@ export class Gateway {
       // Password verification is only the first gate. Once it has issued an entry,
       // resume the QR pairing flow instead of rendering the same blocking form again.
       const gate = direct ? 'direct' : !publicRequest || this.device(req) || this.hasEntry(req) ? 'open' : 'password'
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY' }); res.end(pairingPage(this.options.accent?.(), gate)); return
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY' }); res.end(pairingPage(gate)); return
     }
     if (url.pathname === '/rc/pair/verify') {
       const access = this.options.public?.()
@@ -250,10 +247,10 @@ export class Gateway {
     // With direct pairing on, an unpaired visitor is always offered the password page; entering the
     // correct password pairs the device on the spot, so no entry cookie can ever strand them on a denial.
     if (!device && publicRequest && req.headers.accept?.includes('text/html') && req.method === 'GET' && (!this.hasEntry(req) || this.options.directPairing?.() === true)) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY' }); res.end(passwordPage(this.options.accent?.(), this.options.directPairing?.() === true)); req.resume(); return
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY' }); res.end(passwordPage(this.options.directPairing?.() === true)); req.resume(); return
     }
     if (!device) {
-      if (req.headers.accept?.includes('text/html') && req.method === 'GET') { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(deniedPage(this.options.accent?.())) }
+      if (req.headers.accept?.includes('text/html') && req.method === 'GET') { res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(deniedPage()) }
       else json(res, 403, { error: '设备尚未配对或授权已撤销。', code: 'unpaired' })
       req.resume(); return
     }
@@ -315,7 +312,7 @@ export class Gateway {
       try { html = injectBoot(await this.options.index()) }
       catch (failure) {
         res.writeHead(502, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
-        res.end(unavailablePage(this.options.accent?.(), failure instanceof Error ? failure.message : undefined))
+        res.end(unavailablePage(failure instanceof Error ? failure.message : undefined))
         return
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(html); return

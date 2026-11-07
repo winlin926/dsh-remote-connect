@@ -103,19 +103,17 @@ it('loads with default preferences when the file is damaged, and refuses forward
     await vi.waitFor(async () => expect((await call()).status).toBe(200))
     expect(await (await call()).json()).toMatchObject({ enabled: false, autoStart: false, mode: 'lan', error: expect.stringContaining('偏好设置') })
     expect((await call({ [REMOTE_MARK]: '1' })).status).toBe(403)
-    // One accent colour for every surface of the plugin, kept with the preferences.
-    const prefer = (accent: string) => ctx.connection.createSharedFetchHandler('/api').fetch(new Request('http://desktop.internal' + MANAGE_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'preferences', accent }) }), OWNER)
-    expect(await (await prefer('blue')).json()).toMatchObject({ accent: 'blue' })
-    expect((await prefer('pink')).status).toBe(400)
-    expect(await (await call()).json()).toMatchObject({ accent: 'blue' })
+    // The accent colour is built in, so it is no longer a preference the panel can set.
+    expect(await (await call()).json()).not.toHaveProperty('accent')
   } finally {
     ctx.registry.delete(Plugin); ctx.registry.delete(Connection); await new Promise(resolve => setTimeout(resolve, 100)); await remove()
     if (previous === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previous
   }
 })
 
-it('renders the pairing pages in the chosen accent colour', () => {
-  expect(pairingPage('black')).toContain('<html lang="zh-CN" data-rc-accent="black">')
-  expect(deniedPage()).toContain('data-rc-accent="orange"')
-  expect(pairingPage()).toContain(':root[data-rc-accent=blue]{--rc-accent:#3D63E6')
+it('paints every page with the one built-in accent colour', () => {
+  for (const html of [pairingPage(), pairingPage('password'), deniedPage()]) {
+    expect(html).toContain('--rc-accent:#D97757')
+    expect(html).not.toContain('data-rc-accent')
+  }
 })

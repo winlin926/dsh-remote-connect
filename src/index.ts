@@ -14,7 +14,6 @@ import { FRPC_CERTIFICATE_DIR, PUBLIC_PORT, PublicAccess } from './public-access
 import { normalizePublicUrl } from './public-url-settings.js'
 import { body, isLoopback, json, sameOrigin } from './http.js'
 import { bootScript } from './boot.js'
-import { isAccent, type Accent } from './accent.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 
 export const name = '@winlin926/dsh-remote-connect'
@@ -30,7 +29,7 @@ type Mode = 'public' | 'lan'
 type ProxyMode = 'system' | 'manual' | 'off'
 const isProxyMode = (value: unknown): value is ProxyMode => value === 'system' || value === 'manual' || value === 'off'
 interface Preferences {
-  autoStart: boolean; mode: Mode; proxy?: string; proxyMode: ProxyMode; accent: Accent
+  autoStart: boolean; mode: Mode; proxy?: string; proxyMode: ProxyMode
   /** The port last used, tried again so the address a phone knows keeps working after a restart. */
   port?: number
   /** Password-direct pairing: a new device that enters the fixed public password is paired at once. Off by default. */
@@ -83,14 +82,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const storage = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-remote-connect', String(profile?.name || process.env.DSH_PROFILE || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'))
   mkdirSync(storage, { recursive: true })
   const prefsFile = join(storage, 'preferences.json')
-  let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off', accent: 'orange' }
+  let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off' }
   let error: string | undefined
   if (existsSync(prefsFile)) {
     try {
       const stored = JSON.parse(readFileSync(prefsFile, 'utf8')) as Partial<Preferences>
       preferences = { autoStart: stored.autoStart === true, mode: stored.mode === 'public' ? 'public' : 'lan', proxy: typeof stored.proxy === 'string' ? stored.proxy : undefined,
         // An address typed before proxy modes existed is still an explicit manual choice.
-        proxyMode: isProxyMode(stored.proxyMode) ? stored.proxyMode : stored.proxy ? 'manual' : 'off', port: Number.isInteger(stored.port) && stored.port! > 0 && stored.port! < 65536 ? stored.port : undefined, accent: isAccent(stored.accent) ? stored.accent : 'orange', passwordPairing: stored.passwordPairing === true }
+        proxyMode: isProxyMode(stored.proxyMode) ? stored.proxyMode : stored.proxy ? 'manual' : 'off', port: Number.isInteger(stored.port) && stored.port! > 0 && stored.port! < 65536 ? stored.port : undefined, passwordPairing: stored.passwordPairing === true }
     } catch {
       // A damaged preferences file must not keep the plugin from loading; device authorizations live elsewhere.
       error = '远程控制的偏好设置文件已损坏，已恢复默认设置（设备授权不受影响）。'
@@ -176,7 +175,6 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         enabled, busy, mode: preferences.mode, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
         systemProxy: preferences.proxyMode === 'system' && preferences.mode === 'public' ? await systemProxy() : undefined,
-        accent: preferences.accent,
         publicUrl: access?.domain, publicPort: PUBLIC_PORT, pairingPin: access?.password(local), pinFixed: access?.fixedPin, passwordPairing: preferences.passwordPairing === true,
         publicUrlCheck: local ? access?.lastCheck : undefined, certificate: local && access?.domain ? await access.certificateStatus() : undefined,
         phase: enabled ? 'ready' : error ? 'error' : 'off', error, gatewayPort: gateway?.port ?? 0, local,
@@ -217,7 +215,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         const stopping = stop(); ticket = generation
         await stopping; if (disposed || ticket !== generation) return
         credential = hostCookie(ready.connection, upstreamPort)
-        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, accent: () => preferences.accent, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
+        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
         const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
         let next = gateway = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.
@@ -241,7 +239,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       switch (input.action) {
         case 'status': return status(local)
         // What the always-mounted sidebar entry polls: no QR code is rendered for it.
-        case 'requests': return { enabled, accent: preferences.accent, requests: local ? pairing.requests() : [] }
+        case 'requests': return { enabled, requests: local ? pairing.requests() : [] }
         case 'scheduleCapabilities': return { available: !!ready.get('schedule') }
         case 'scheduleCreate': {
           const service = ready.get('schedule') as { create(sessionId: string, request: unknown): Promise<unknown> } | undefined
@@ -280,11 +278,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         case 'revokeAll': setTimeout(() => { try { pairing.revokeAll(); qr = undefined } catch { error = '撤销失败，请在本机重试。' } }, 75); return { revoked: true }
         case 'preferences': {
           const previous = preferences, previousDomain = access?.domain
-          if (busy && Object.keys(input).some(key => key !== 'action' && key !== 'accent')) throw new Error('请等待当前连接操作完成。')
+          if (busy && Object.keys(input).some(key => key !== 'action')) throw new Error('请等待当前连接操作完成。')
           const next = { ...preferences }
           if (typeof input.autoStart === 'boolean') next.autoStart = input.autoStart
           if (input.mode !== undefined) { if (input.mode !== 'public' && input.mode !== 'lan') throw new Error('连接模式不正确。'); next.mode = input.mode }
-          if (input.accent !== undefined) { if (!isAccent(input.accent)) throw new Error('强调色不正确。'); next.accent = input.accent }
           if (input.passwordPairing !== undefined) {
             if (!local) throw new Error('密码直连配对开关只能在本机面板修改。')
             if (typeof input.passwordPairing !== 'boolean') throw new Error('密码直连配对选项不正确。')

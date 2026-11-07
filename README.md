@@ -24,7 +24,7 @@
 - 删除自带的自定义手机聊天界面（约 1400 行、依赖 rc.3 内部 Slots/hostFace），插件只保留宿主稳定接口（webServer / connection / schedule）。
 - 依赖统一到 **0.2.2-rc.1**，插件入口与宿主同版本编译。
 - 跟随宿主 0.2.2 的三处变化：宿主的 `etag` / `304` 原样透传（不再对 `304` 加 `content-encoding`）、WebSocket 两段默认开 `permessage-deflate`（可用 `websocketCompression: false` 关闭）、面板图标改用新的 `settings.section.icon` 插槽。
-- 配对页、密码页、拒绝页的配色与字号换成宿主自己的设计 token（#FFFFFF / #0F1115 / #61666B / 12px 圆角 / 26px 标题），主操作仍使用插件共享的强调色。
+- 配对页、密码页、拒绝页的配色与字号换成宿主自己的设计 token（#FFFFFF / #0F1115 / #61666B / 12px 圆角 / 26px 标题），主操作固定使用陶土橙 `#D97757`。
 - 保留扫码配对、局域网 / 公网两种连接、固定域名与 ACME 证书、断线恢复、手机本机文件预览。
 - 自动化回归覆盖配对、官方界面挂载、聊天、审批、附件上传、面板与设备撤销。
 

@@ -1,15 +1,12 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { CSS } from './style.js'
-import type { Accent } from '../accent.js'
-import { ACCENTS, ACCENT_IDS, installAccent, useAccent } from './shared-accent.js'
-import { chooseAccent, syncAccent } from './accent-sync.js'
 import { PhoneIcon } from './nav-icon.js'
 import { mountInlineSidebarAction } from './sidebar-action.js'
 const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
 interface Status {
-  enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null; accent?: Accent
+  enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null
   publicUrl?: string | null; publicPort: number; pairingPin?: string; pinFixed?: boolean; passwordPairing?: boolean
   publicUrlCheck?: { at: number; reachable: boolean; status: number | null; error: string | null }
   certificate?: { domain?: string; expiresAt?: number; renewAt?: number; selfSigned: boolean; pending: boolean; restartRequired: boolean; error?: string }
@@ -248,8 +245,6 @@ export function RemoteControlPanel(): React.ReactElement {
     }
     void act('start')
   }
-  const [accent] = useAccent()
-  React.useEffect(() => { syncAccent(state?.accent, next => { void act('preferences', { accent: next }) }) }, [state?.accent])
   const firstURL = state?.links[0]?.url
   const online = state?.devices.filter(device => device.online).length ?? 0
   const connectionState = !state ? 'loading' : state.error ? 'error' : state.busy || working ? 'busy' : state.enabled ? 'ready' : domainBlocked ? 'blocked' : 'off'
@@ -387,23 +382,11 @@ export function RemoteControlPanel(): React.ReactElement {
           : h('p', { className: 'dsrc-note' }, '开启远程连接后，这里会给出手机要打开的地址。'),
         h('p', { className: 'dsrc-note' }, '手机打开的就是电脑当前版本的 DSH 界面；DSH 升级后不需要更新插件。'),
       ]),
-      block('div', 'dsrc-field dsrc-appearance', [
-        h('span', { className: 'dsrc-field-label' }, '界面强调色'),
-        block('div', 'dsrc-appearance-row', [
-          block('span', 'dsrc-swatches', ACCENT_IDS.map((id, index) => h('button', {
-            key: id, type: 'button', className: 'dsrc-swatch', role: 'radio', 'aria-checked': accent === id, tabIndex: accent === id ? 0 : -1, 'aria-label': ACCENTS[id].name, title: ACCENTS[id].name,
-            style: { '--rc-swatch': ACCENTS[id].accent } as React.CSSProperties,
-            onClick: () => { chooseAccent(id); void act('preferences', { accent: id }) },
-            onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => moveRadio(event, index, ACCENT_IDS.length, next => { const selected = ACCENT_IDS[next]!; chooseAccent(selected); void act('preferences', { accent: selected }) }),
-          })), { role: 'radiogroup', 'aria-label': '界面强调色' }),
-          h('span', { className: 'dsrc-muted' }, '对全部 copylee 插件生效'),
-        ]),
-      ]),
     ], { 'aria-label': '代理与外观' })
     return h('details', { className: 'dsrc-surface dsrc-preferences', 'data-needed': !!settingsIssue, open: settingsOpen, onToggle: (event: React.SyntheticEvent<HTMLDetailsElement>) => setSettingsOpen(event.currentTarget.open) },
       h('summary', null,
         block('span', 'dsrc-settings-title', [cardIcon('slate', h(GearIcon, null)), '连接与外观设置']),
-        h('span', { className: `dsrc-summary-value${settingsIssue ? ' dsrc-needs-attention' : ''}` }, settingsIssue || `${publicUrl ? '域名已配置' : '域名未配置'} · ${ACCENTS[accent].name}`)),
+        h('span', { className: `dsrc-summary-value${settingsIssue ? ' dsrc-needs-attention' : ''}` }, settingsIssue || `${publicUrl ? '域名已配置' : '域名未配置'}`)),
       block('div', 'dsrc-preferences-body', [publicSettings, appearance]))
   }
   const requests = () => state?.local && state.requests.length ? block('section', 'dsrc-surface dsrc-requests', [
@@ -439,7 +422,7 @@ export function RemoteControlPanel(): React.ReactElement {
     toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
   ], { 'data-dsh-plugin': 'dsh-remote-connect' })
 }
-interface Waiting { enabled: boolean; accent?: Accent; requests: Array<{ id: string; name: string; expiresAt: number }> }
+interface Waiting { enabled: boolean; requests: Array<{ id: string; name: string; expiresAt: number }> }
 
 /** Pairing requests pop up on the computer as they arrive, so they are not missed while the panel is closed. */
 function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => void }): React.ReactElement | null {
@@ -506,7 +489,6 @@ function SidebarEntry({ wide }: { wide?: boolean }): React.ReactElement {
     try {
       const next = await command({ action: 'requests' }) as unknown as Waiting
       setWaiting(next)
-      syncAccent(next.accent, accent => { void command({ action: 'preferences', accent }).catch(() => {}) })
     } catch { /* the Host is restarting: ask again on the next tick */ }
     finally { checking.current = false }
   }, [])
@@ -527,7 +509,6 @@ function SidebarEntry({ wide }: { wide?: boolean }): React.ReactElement {
 }
 export const inject = ['slots', 'connection']
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => installAccent(), 'remote-control accent colour')
   ctx.effect(() => { const style = document.createElement('style'); style.dataset.dshRemoteControl = 'true'; style.textContent = CSS; document.head.append(style); return () => style.remove() }, 'remote-control styles')
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'copylee-remote-control', order: 65, label: () => '远程控制' }, () => h(RemoteControlPanel)))
   // Addressed by section id: the shell skips ids it has no section for.

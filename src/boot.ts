@@ -127,10 +127,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     const box = document.createElement('div'), text = document.createElement('p'), retry = document.createElement('button')
     text.id = 'dsh-rc-disconnected-text'; text.textContent = message; retry.textContent = '重新连接'; retry.onclick = () => location.reload()
     notice.setAttribute('aria-labelledby', text.id)
-    let accent = ''
-    try { accent = localStorage.getItem('dsrc-accent') ?? '' } catch { /* storage unavailable: default colour */ }
-    const fill = accent === 'blue' ? '#3D63E6' : accent === 'black' ? (dark ? '#F0EEE8' : '#1F1E1D') : '#D97757'
-    retry.style.cssText = `padding:12px 20px;border:0;border-radius:999px;background:${fill};color:${accent === 'black' && dark ? '#242321' : '#fff'};font:inherit`
+    retry.style.cssText = 'padding:12px 20px;border:0;border-radius:999px;background:#D97757;color:#fff;font:inherit'
     box.append(text, retry); notice.append(box); (document.body ?? document.documentElement).append(notice)
     // The overlay covers the page, so the keyboard and the screen reader start on its only action.
     retry.focus()
