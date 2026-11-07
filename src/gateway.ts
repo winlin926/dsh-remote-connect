@@ -1,6 +1,6 @@
 import { createServer, request as httpRequest } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse, ClientRequest } from 'node:http'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -60,6 +60,11 @@ export function safePath(path: string): boolean {
 
 /** `WebSocket.OPEN`, without needing the class at hand. */
 const OPEN = 1
+
+/** `ws` throws on a close code it may not send, and a Host close frame can carry 1005/1006. */
+export function closeCode(code: number): number {
+  return (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) || (code >= 3000 && code <= 4999) ? code : 1011
+}
 
 /** Authenticates every remote request before the privileged loopback leg. */
 export class Gateway {
@@ -293,8 +298,13 @@ export class Gateway {
     }
     if (url.pathname === BOOT_PATH) {
       if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { error: 'GET only' }); return }
-      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-cache', 'x-content-type-options': 'nosniff' })
-      res.end(req.method === 'HEAD' ? undefined : this.options.boot())
+      // This is a blocking script in the page head, so a phone that already holds this exact
+      // build must be able to revalidate it instead of downloading it again on every cold start.
+      const script = this.options.boot()
+      const etag = '"' + createHash('sha256').update(script).digest('base64url').slice(0, 22) + '"'
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'cache-control': 'private, no-cache', etag }); res.end(); return }
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-cache', etag, 'x-content-type-options': 'nosniff' })
+      res.end(req.method === 'HEAD' ? undefined : script)
       return
     }
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
@@ -349,7 +359,10 @@ export class Gateway {
     })
     const untrack = this.track(deviceId, () => upstream.destroy()); upstream.once('close', untrack)
     upstream.on('error', () => { if (!res.headersSent) json(res, 502, { error: 'DSH 宿主连接失败。' }); else res.destroy() })
+    // The idle timer only covers the wait for response headers: a Host that streams a long
+    // answer quietly for over two minutes is working, not stuck.
     upstream.setTimeout(120_000, () => upstream.destroy())
+    upstream.once('response', () => upstream.setTimeout(0))
     req.once('aborted', () => upstream.destroy()); res.once('close', () => upstream.destroy())
     req.pipe(upstream)
   }
@@ -383,7 +396,12 @@ export class Gateway {
         upstream.on('message', (data, binary) => send(ws, data as Buffer, binary))
         ws.on('error', () => upstream.terminate())
         ws.once('close', () => { clearInterval(heartbeat); upstream.terminate(); release() })
-        upstream.once('close', (code, reason) => { if (ws.readyState === OPEN) ws.close(code === 1006 ? 1011 : code, reason) })
+        // A close frame the Host sent with no code arrives as 1005, which `ws` refuses to send:
+        // the throw happens inside an EventEmitter callback, where nothing can catch it for us.
+        upstream.once('close', (code, reason) => {
+          if (ws.readyState !== OPEN) return
+          try { ws.close(closeCode(code), reason) } catch { ws.terminate() }
+        })
       })
     })
   }

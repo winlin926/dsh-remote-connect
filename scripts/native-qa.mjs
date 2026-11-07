@@ -80,9 +80,13 @@ await mobile.getByRole('button', { name: '发送消息', exact: true }).click()
 let replied = true
 await mobile.getByText('远程链路验证通过', { exact: false }).first().waitFor({ timeout: 45000 }).catch(() => { replied = false })
 check('a message sent from the phone gets a reply', replied)
-check('the plugin panel entry loads beside the Host sidebar', (await mobile.getByRole('button', { name: '远程控制', exact: true }).count()) > 0)
-
 await mobile.screenshot({ path: '.qa/native-mobile.png', fullPage: false })
+
+// The mobile Host starts with its sidebar collapsed, so the footer entry only reaches the accessibility tree once the drawer opens.
+const drawer = mobile.getByRole('button', { name: /^(打开|关闭)侧边栏$/ })
+if (await drawer.count()) { await drawer.first().click(); await mobile.waitForTimeout(600) }
+const entry = mobile.getByRole('button', { name: '远程控制', exact: true }).first()
+check('the plugin panel entry loads beside the Host sidebar', (await entry.count()) > 0 && await entry.isVisible())
 await manage('stop')
 await browser.close()
 console.log(JSON.stringify({ passed: failures.length === 0, page, failures }, null, 2))

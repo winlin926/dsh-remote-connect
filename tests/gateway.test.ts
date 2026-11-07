@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createServer, request } from 'node:http'
 import { once } from 'node:events'
 import { WebSocket, WebSocketServer } from 'ws'
-import { Gateway, MANAGE_PATH, safePath } from '../src/gateway.js'
+import { Gateway, MANAGE_PATH, closeCode, safePath } from '../src/gateway.js'
 import { PairingService } from '../src/pairing.js'
 import { bootScript } from '../src/boot.js'
 const cleanup: Array<() => Promise<unknown> | void> = []
@@ -29,7 +29,7 @@ async function fixture() {
     }
     res.setHeader('set-cookie', 'host-secret=should-never-reach-client'); res.end(JSON.stringify({ cookie: req.headers.cookie, origin: req.headers.origin }))
   })
-  const wss = new WebSocketServer({ server: upstream, perMessageDeflate: true }); wss.on('connection', ws => { upstreamCompression.push(String(ws.extensions)); ws.on('message', (data, binary) => ws.send(data, { binary })) })
+  const wss = new WebSocketServer({ server: upstream, perMessageDeflate: true }); wss.on('connection', ws => { upstreamCompression.push(String(ws.extensions)); ws.on('message', (data, binary) => { if (String(data) === 'close-without-code') { ws.close(); return } ws.send(data, { binary }) }) })
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
   cleanup.push(async () => { for (const client of wss.clients) client.terminate(); wss.close(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())) })
   const port = (upstream.address() as { port: number }).port
@@ -124,6 +124,22 @@ describe('gateway admission and transport', () => {
     await f.gateway.close()
     await expect(fetch(f.base + next)).rejects.toThrow()
   })
+  it('retires a preview capability that stays in use past its absolute lifetime', async () => {
+    const f = await fixture(), site = join(f.folder, 'site')
+    mkdirSync(site); writeFileSync(join(site, 'index.html'), '<p>page</p>')
+    const open = await fetch(`${f.base}/rc/workspace-file?p=${encodeURIComponent(join(site, 'index.html'))}`, { headers: { cookie: f.cookie }, redirect: 'manual' })
+    const location = open.headers.get('location')!, issued = Date.now()
+    vi.useFakeTimers()
+    try {
+      for (const hours of [1.5, 3, 4.5, 6, 7.5, 9, 10.5]) {
+        vi.setSystemTime(issued + hours * 3600_000)
+        expect((await fetch(f.base + location)).status).toBe(200)
+      }
+      vi.setSystemTime(issued + 12 * 3600_000 + 1)
+      expect((await fetch(f.base + location)).status).toBe(404)
+    } finally { vi.useRealTimers() }
+    await f.gateway.close()
+  })
   it('serves the Host page itself with the boot script instead of a bundled copy', async () => {
     const f = await fixture()
     const page = await fetch(`${f.base}/`, { headers: { cookie: f.cookie } })
@@ -137,6 +153,26 @@ describe('gateway admission and transport', () => {
     expect(boot.headers.get('content-type')).toContain('text/javascript')
     expect(await boot.text()).toContain('__DSH_REMOTE_CONTROL__')
     expect((await fetch(`${f.base}/rc/boot.js`, { method: 'POST', headers: { cookie: f.cookie } })).status).toBe(405)
+    expect(f.calls()).toBe(0)
+  })
+  it('revalidates the blocking boot script with a content Etag instead of resending it', async () => {
+    const f = await fixture()
+    const first = await fetch(`${f.base}/rc/boot.js`, { headers: { cookie: f.cookie } })
+    const etag = first.headers.get('etag')!
+    expect(first.status).toBe(200)
+    expect(etag).toMatch(/^"[A-Za-z0-9_-]{22}"$/)
+    expect(first.headers.get('cache-control')).toBe('private, no-cache')
+    expect(await first.text()).toContain('__DSH_REMOTE_CONTROL__')
+    const cached = await fetch(`${f.base}/rc/boot.js`, { headers: { cookie: f.cookie, 'if-none-match': etag } })
+    expect(cached.status).toBe(304)
+    expect(cached.headers.get('etag')).toBe(etag)
+    expect(await cached.text()).toBe('')
+    const head = await fetch(`${f.base}/rc/boot.js`, { method: 'HEAD', headers: { cookie: f.cookie } })
+    expect(head.status).toBe(200)
+    expect(head.headers.get('etag')).toBe(etag)
+    expect(await head.text()).toBe('')
+    // A copy from an older build is not this build.
+    expect((await fetch(`${f.base}/rc/boot.js`, { headers: { cookie: f.cookie, 'if-none-match': '"stale"' } })).status).toBe(200)
     expect(f.calls()).toBe(0)
   })
   it('sends retired phone-interface links to the Host page, after authorization only', async () => {
@@ -191,6 +227,14 @@ describe('gateway admission and transport', () => {
     const closed = once(ws, 'close'); f.pairing.revoke(f.pairing.list()[0]!.id); await closed
     expect((await fetch(`${f.base}/api/data`, { headers: { cookie: f.cookie } })).status).toBe(403)
   })
+  it('closes the phone with a sendable code when the Host sent an empty close frame', async () => {
+    const f = await fixture(), ws = new WebSocket(f.base.replace('http:', 'ws:') + '/api/remote.mux', { headers: { cookie: f.cookie, origin: f.base } })
+    await once(ws, 'open'); ws.send('close-without-code')
+    // The Host's empty frame normalizes to 1005, which `ws` refuses to send: before the fix the
+    // throw escaped an EventEmitter callback and took the whole Host process down.
+    const [code] = await once(ws, 'close')
+    expect(code).toBe(1011)
+  })
   it('rejects unpaired WS before opening upstream', async () => {
     const f = await fixture(), ws = new WebSocket(f.base.replace('http:', 'ws:') + '/api/remote.mux')
     ws.on('error', () => {}); const [, response] = await once(ws, 'unexpected-response'); expect(response.statusCode).toBe(403); ws.terminate()
@@ -232,6 +276,21 @@ describe('gateway admission and transport', () => {
     expect(f.reports[1]!.device).toEqual({ id: expect.any(String), name: expect.any(String) })
     expect(f.reports[0]!.report.errors).toEqual(['资源加载失败: <script> x'])
   })
+})
+it('normalizes every close code ws refuses to send', () => {
+  expect(closeCode(1005)).toBe(1011)
+  expect(closeCode(1006)).toBe(1011)
+  expect(closeCode(1004)).toBe(1011)
+  expect(closeCode(999)).toBe(1011)
+  expect(closeCode(1015)).toBe(1011)
+  expect(closeCode(2999)).toBe(1011)
+  expect(closeCode(5000)).toBe(1011)
+  expect(closeCode(1000)).toBe(1000)
+  expect(closeCode(1001)).toBe(1001)
+  expect(closeCode(1012)).toBe(1012)
+  expect(closeCode(1014)).toBe(1014)
+  expect(closeCode(3000)).toBe(3000)
+  expect(closeCode(4999)).toBe(4999)
 })
 it('rejects traversal and malformed paths', () => {
   for (const path of ['//evil', '/a/../b', '/a/%2e%2e/b', '/a/%252e%252e/b', '/a%5cb', '/%00', '/%xx']) expect(safePath(path)).toBe(false)

@@ -28,6 +28,18 @@ function deadline(ms: number): AbortSignal {
   setTimeout(() => controller.abort(), ms)
   return controller.signal
 }
+/** An insecure origin (a phone on http://LAN-IP) exposes no clipboard API; the legacy command is the only way to copy there. */
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) { try { await navigator.clipboard.writeText(text); return true } catch { /* the legacy command below is the fallback */ } }
+  const area = document.createElement('textarea')
+  area.value = text
+  // inputmode=none keeps the soft keyboard closed while the selection satisfies execCommand.
+  area.setAttribute('inputmode', 'none'); area.setAttribute('aria-hidden', 'true')
+  area.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0'
+  document.body.append(area)
+  area.focus(); area.setSelectionRange(0, text.length)
+  try { return document.execCommand('copy') } catch { return false } finally { area.remove() }
+}
 export async function command(input: Record<string, unknown>): Promise<Status> {
   const transport = (globalThis as unknown as { __DSH_TRANSPORT__?: { fetch?: typeof fetch } }).__DSH_TRANSPORT__?.fetch ?? fetch
   let response: Response
@@ -164,8 +176,8 @@ export function RemoteControlPanel(): React.ReactElement {
     } finally { setWorkingAction('') }
   }
   const copy = async (url: string, message = '已复制配对链接') => {
-    try { await navigator.clipboard.writeText(url); setNotice(''); say(message) }
-    catch { setNotice('浏览器不允许自动复制，请选中下方的完整链接手动复制。') }
+    if (await copyText(url)) { setNotice(''); say(message); return }
+    setNotice('浏览器不允许自动复制，请选中下方的完整链接手动复制。')
   }
   const working = !!workingAction
   const disabled = working || !!state?.busy
@@ -439,16 +451,16 @@ function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => vo
     if (!element) return
     if (request && !element.open) element.showModal()
     if (!request && element.open) element.close()
-  }, [request?.id])
+  }, [request])
   const answer = async (action: 'approve' | 'reject') => {
     if (!request) return
     setWorking(true); setError('')
     try { await command({ action, id: request.id }) } catch (failure) { setError(failure instanceof Error ? failure.message : '操作失败。') }
     finally { setWorking(false); onDone() }
   }
-  return h('dialog', { className: 'dsrc-dialog dsrc-prompt', ref: dialog, onCancel: (event: React.SyntheticEvent) => event.preventDefault() },
+  return h('dialog', { className: 'dsrc-dialog dsrc-prompt', ref: dialog, 'aria-labelledby': 'dsrc-pairing-title', onCancel: (event: React.SyntheticEvent) => event.preventDefault() },
     request ? block('div', 'dsrc', [
-      h('h2', null, '新的配对请求'),
+      h('h2', { id: 'dsrc-pairing-title', tabIndex: -1, autoFocus: true }, '新的配对请求'),
       h('p', { className: 'dsrc-prompt-device' }, request.name),
       h('p', { className: 'dsrc-note' }, '这台设备扫描了远程控制二维码。允许后，它与本机拥有相同的权限，可以管理设置、凭据和插件。不是你本人操作请拒绝。'),
       waiting.requests.length > 1 ? h('p', { className: 'dsrc-note' }, `还有 ${waiting.requests.length - 1} 个请求在等待。`) : null,
@@ -468,19 +480,48 @@ function SidebarEntry({ wide }: { wide?: boolean }): React.ReactElement {
   const [open, setOpen] = React.useState(false), dialog = React.useRef<HTMLDialogElement>(null)
   const [waiting, setWaiting] = React.useState<Waiting>({ enabled: false, requests: [] })
   React.useEffect(() => { if (open) dialog.current?.showModal(); else dialog.current?.close() }, [open])
+  React.useEffect(() => {
+    const element = dialog.current, view = window.visualViewport
+    if (!open || !element || !view) return
+    // A soft keyboard shrinks the visual viewport without moving the layout viewport, so the dialog
+    // is laid out against a height the keyboard then covers. Clamp it to what is actually visible.
+    const sync = () => {
+      if (view.height >= window.innerHeight - 80) { element.style.cssText = ''; return }
+      element.style.position = 'fixed'
+      element.style.top = `${Math.round(view.offsetTop + 8)}px`
+      element.style.left = '8px'; element.style.right = '8px'; element.style.bottom = 'auto'
+      element.style.width = 'auto'; element.style.margin = '0'
+      element.style.maxHeight = `${Math.max(200, Math.round(view.height - 16))}px`
+    }
+    sync()
+    view.addEventListener('resize', sync); view.addEventListener('scroll', sync)
+    return () => { view.removeEventListener('resize', sync); view.removeEventListener('scroll', sync); element.style.cssText = '' }
+  }, [open])
+  const checking = React.useRef(false)
   const check = React.useCallback(async () => {
+    // A slow tunnel answers later than the next tick; one probe in flight at a time keeps an older
+    // answer from overwriting a newer one, and a hidden page does not need to ask at all.
+    if (checking.current || document.hidden) return
+    checking.current = true
     try {
       const next = await command({ action: 'requests' }) as unknown as Waiting
       setWaiting(next)
       syncAccent(next.accent, accent => { void command({ action: 'preferences', accent }).catch(() => {}) })
     } catch { /* the Host is restarting: ask again on the next tick */ }
+    finally { checking.current = false }
   }, [])
-  React.useEffect(() => { void check(); const timer = setInterval(() => { void check() }, 2500); return () => clearInterval(timer) }, [check])
+  React.useEffect(() => {
+    void check()
+    const timer = setInterval(() => { void check() }, 2500)
+    const wake = () => { if (!document.hidden) void check() }
+    document.addEventListener('visibilitychange', wake)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', wake) }
+  }, [check])
   const pending = waiting.requests.length > 0
   const button = h('button', { type: 'button', className: 'dsrc-entry', title: pending ? '远程控制 · 有配对请求' : '远程控制', 'aria-label': '远程控制', onClick: () => setOpen(true) }, icon(), pending ? h('span', { className: 'dsrc-entry-dot' }) : null)
   return h(React.Fragment, null,
     h('span', { className: 'dsrc-entry-anchor', ref: anchor }, inlineTarget ? createPortal(button, inlineTarget) : button),
-    h('dialog', { className: 'dsrc-dialog', ref: dialog, onCancel: () => setOpen(false), onClick: (event: React.MouseEvent<HTMLDialogElement>) => { if (event.target === event.currentTarget) { const r = event.currentTarget.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) setOpen(false) } } },
+    h('dialog', { className: 'dsrc-dialog', ref: dialog, 'aria-label': '远程控制', onCancel: () => setOpen(false), onClick: (event: React.MouseEvent<HTMLDialogElement>) => { if (event.target === event.currentTarget) { const r = event.currentTarget.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) setOpen(false) } } },
       h('button', { type: 'button', className: 'dsrc-close', 'aria-label': '关闭远程控制面板', onClick: () => setOpen(false) }, '×'), open ? h(RemoteControlPanel) : null),
     h(PairingPrompt, { waiting, onDone: () => { void check() } }))
 }

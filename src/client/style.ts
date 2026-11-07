@@ -91,7 +91,7 @@ export const CSS = `
 .dsrc-code{width:100%;max-width:154px;aspect-ratio:1;border:1px solid #d9dce5;border-radius:10px;background:#fff;display:grid;place-items:center;overflow:hidden;box-shadow:0 2px 7px #2530480b;transition:box-shadow .2s}
 .dsrc-code[data-ready=true]{box-shadow:0 0 0 2.5px color-mix(in srgb,var(--rc-accent) 36%,transparent),0 2px 9px #25304814}
 .dsrc-code img{width:100%;height:100%;display:block}
-.dsrc-placeholder{width:100%;height:100%;display:grid;place-items:center;text-align:center;padding:12px;font-size:11px;line-height:1.6;color:#687080;background:repeating-linear-gradient(135deg,#f4f6fa 0 7px,#fafbfc 7px 14px)}
+.dsrc-placeholder{width:100%;height:100%;display:grid;place-items:center;text-align:center;padding:12px;font-size:11px;line-height:1.6;color:var(--rc-muted);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--rc-ink) 4%,var(--rc-paper)) 0 7px,color-mix(in srgb,var(--rc-ink) 2%,var(--rc-paper)) 7px 14px)}
 .dsrc-code-refresh{min-height:28px;margin-top:6px;font-size:12px}
 .dsrc-steps{display:flex;flex-direction:column;align-items:flex-start;gap:7px;width:100%;margin-top:13px;padding-top:11px;border-top:1px dashed var(--rc-line)}
 .dsrc-step{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:11px;line-height:1.5;color:var(--rc-muted)}
@@ -144,13 +144,13 @@ export const CSS = `
 
 .dsrc-preferences{padding:0 15px}
 .dsrc-preferences[data-needed=true]{border-color:color-mix(in srgb,var(--rc-warm) 42%,var(--rc-line))}
-.dsrc summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:28px;cursor:pointer;list-style:none;font-weight:600}
+.dsrc summary{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;min-height:28px;cursor:pointer;list-style:none;font-weight:600}
 .dsrc summary::-webkit-details-marker{display:none}
 .dsrc summary::after{content:'';flex:none;width:7px;height:7px;margin:0 5px 4px 0;border-right:1.5px solid var(--rc-muted);border-bottom:1.5px solid var(--rc-muted);transform:rotate(45deg);transition:transform .15s}
 .dsrc details[open]>summary::after{transform:rotate(225deg);margin-bottom:-5px;margin-top:4px}
 .dsrc-preferences>summary{min-height:52px}
 .dsrc-settings-title{display:flex;align-items:center;gap:9px;flex:none}
-.dsrc-summary-value{margin-left:auto;color:var(--rc-muted);font-size:11px;font-weight:400;text-align:right;overflow-wrap:anywhere}
+.dsrc-summary-value{margin-left:auto;flex:0 1 auto;min-width:min(100%,14em);color:var(--rc-muted);font-size:11px;font-weight:400;text-align:right;overflow-wrap:anywhere}
 .dsrc-needs-attention{color:var(--rc-warm);font-weight:600}
 .dsrc-preferences-body{display:flex;flex-direction:column;gap:16px;padding:13px 0 4px;border-top:1px solid var(--rc-line)}
 .dsrc-setting-group{min-width:0}
@@ -197,7 +197,7 @@ export const CSS = `
 .dsrc-entry svg{width:18px;height:18px}
 .dsrc-dialog{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,#e4e0d8);background:var(--dsw-alias-background-primary,#fff);color:inherit;border-radius:16px;padding:20px 22px 22px;width:min(960px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;font:13px/1.55 var(--dsh-font-family,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif);box-shadow:0 24px 80px #00000040}
 .dsrc-dialog::backdrop{background:#20233480;backdrop-filter:blur(3px)}
-.dsrc-close{position:sticky;top:0;float:right;z-index:1;width:30px;height:30px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:inherit;font-size:20px;line-height:1;cursor:pointer;margin:-4px -6px 0 8px}
+.dsrc-close{position:sticky;top:0;float:right;z-index:1;width:30px;height:30px;display:grid;place-items:center;border:0;border-radius:8px;background:var(--dsw-alias-background-primary,#fff);color:inherit;font-size:20px;line-height:1;cursor:pointer;margin:-4px -6px 0 8px;box-shadow:0 0 0 6px var(--dsw-alias-background-primary,#fff)}
 .dsrc-close:hover{background:#77736c22}
 .dsrc-dialog.dsrc-prompt{width:min(400px,calc(100vw - 32px))}
 .dsrc-prompt-device{font-size:15px;font-weight:600;margin-top:12px!important}
@@ -225,7 +225,7 @@ export const CSS = `
 .dsrc-device>.dsrc-actions{justify-content:flex-end;width:100%}
 .dsrc-preferences>summary{align-items:flex-start;gap:8px;padding:12px 0}
 .dsrc-settings-title{min-height:26px}
-.dsrc-summary-value{max-width:46%;line-height:1.5;padding-top:2px}
+.dsrc-summary-value{line-height:1.5;padding-top:2px}
 .dsrc-input{align-items:stretch;flex-wrap:wrap}
 .dsrc-input input{flex-basis:100%}
 .dsrc-input .dsrc-button{flex:1}
@@ -235,14 +235,20 @@ export const CSS = `
 .dsrc-notice-action{margin-left:auto}
 .dsrc-mode{display:flex;width:100%}
 .dsrc-mode button{flex:1;min-width:0;padding-right:5px;padding-left:5px;white-space:normal}
-.dsrc-dialog{padding:16px}
 }
 @container(max-width:350px){
 .dsrc-pair-link{align-items:stretch;flex-direction:column}
 .dsrc-link{width:100%;flex:none}
 .dsrc-pair-link .dsrc-button{align-self:flex-end}
 }
-@media(max-width:560px){
+@media(max-width:560px),(pointer:coarse){
+.dsrc-dialog{padding:16px}
+.dsrc-close{width:44px;height:44px;margin:-8px -8px 0 8px;font-size:24px}
+.dsrc-entry{min-width:44px;min-height:44px}
+.dsrc summary{min-height:44px}
+.dsrc-networks summary{min-height:44px}
+.dsrc-rename{height:44px;font-size:16px}
+.dsrc-device-list{max-height:none;overflow:visible;overscroll-behavior:auto}
 .dsrc{font-size:16px}
 .dsrc h3{font-size:16px}
 .dsrc-button{min-height:44px;font-size:16px}
@@ -264,7 +270,6 @@ export const CSS = `
 @media(prefers-color-scheme:dark){
 .dsrc{--rc-ink:var(--dsw-alias-label-primary,#eeedf4);--rc-muted:var(--dsw-alias-label-secondary,#adaeba);--rc-line:var(--dsw-alias-border-l2,#414451);--rc-paper:var(--dsw-alias-background-primary,#292b33);--rc-indigo:#a8b4ff;--rc-teal:#78cec0;--rc-violet:#b7a5f5;--rc-warm:#e4ae75;--rc-slate:#9aa7b4;--rc-danger:var(--dsw-alias-color-error,#EF9181);--rc-success:var(--dsw-alias-color-success,#83d2a6)}
 .dsrc-code{border-color:#4a4e5c}
-.dsrc-placeholder{color:#9aa2b1;background:repeating-linear-gradient(135deg,#32353f 0 7px,#2e313b 7px 14px)}
 .dsrc-dialog{background:var(--dsw-alias-background-primary,#24262d)}
 }
 .dsrc{--rc-accent:var(--cl-accent,#D97757);--rc-accent-ink:var(--cl-accent-ink,#fff)}

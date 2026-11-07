@@ -5,6 +5,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export const PREVIEW_PREFIX = '/rc/workspace-preview/'
 const IDLE_TIME = 2 * 60 * 60 * 1000
+// Silence retires an unused preview; total age retires one that is still being used.
+const LIFETIME = 12 * 60 * 60 * 1000
 const MAX_SITES = 32
 
 export const PREVIEW_MIME: Record<string, string> = {
@@ -21,6 +23,7 @@ export const PREVIEW_MIME: Record<string, string> = {
 interface PreviewSite {
   deviceId: string
   root: string
+  issued: number
   lastUsed: number
 }
 export interface PreviewRequest {
@@ -41,7 +44,8 @@ export class WorkspacePreviews {
   add(token: string, deviceId: string, root: string): void {
     this.sites.delete(token)
     if (this.sites.size >= MAX_SITES) this.sites.delete(this.sites.keys().next().value!)
-    this.sites.set(token, { deviceId, root, lastUsed: Date.now() })
+    const now = Date.now()
+    this.sites.set(token, { deviceId, root, issued: now, lastUsed: now })
   }
 
   match(pathname: string): PreviewRequest | undefined {
@@ -52,8 +56,9 @@ export class WorkspacePreviews {
     const token = rest.slice(0, slash)
     const site = this.sites.get(token)
     if (!site) return undefined
-    if (Date.now() - site.lastUsed > IDLE_TIME) { this.sites.delete(token); return undefined }
-    this.sites.delete(token); this.sites.set(token, { ...site, lastUsed: Date.now() })
+    const now = Date.now()
+    if (now - site.issued > LIFETIME || now - site.lastUsed > IDLE_TIME) { this.sites.delete(token); return undefined }
+    this.sites.delete(token); this.sites.set(token, { ...site, lastUsed: now })
     return { deviceId: site.deviceId, root: site.root, path: rest.slice(slash + 1) }
   }
 

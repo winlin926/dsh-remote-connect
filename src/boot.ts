@@ -42,9 +42,12 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
         return
       }
       const objectUrl = URL.createObjectURL(await response.blob())
+      // A blob URL inherits the gateway origin, so the page opened from it must not hold a handle back.
+      const opened = window.open(objectUrl, '_blank')
+      if (opened) opened.opener = null
       // A tap grants popup permission on real browsers; where it is withheld, fall back to
       // navigating this tab — the file renders and the back button returns to the app.
-      if (!window.open(objectUrl, '_blank')) location.assign(objectUrl)
+      else location.assign(objectUrl)
       setTimeout(() => URL.revokeObjectURL(objectUrl), 120000)
     } catch { notice('读取文件失败，请检查电脑上的远程连接。') }
   }
@@ -116,17 +119,21 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
   scheduleReport(8000)
   function disconnected(message: string): void {
     if (document.getElementById('dsh-rc-disconnected')) return
-    const notice = document.createElement('div'); notice.id = 'dsh-rc-disconnected'; notice.setAttribute('role', 'alert')
-    const theme = document.documentElement.dataset.rcTheme
-    const dark = theme === 'dark' || (!theme && matchMedia('(prefers-color-scheme: dark)').matches)
+    const notice = document.createElement('div'); notice.id = 'dsh-rc-disconnected'; notice.setAttribute('role', 'dialog'); notice.setAttribute('aria-modal', 'true')
+    // The Host states its theme through color-scheme on the root element; fall back to the media query when it states none.
+    const declared = getComputedStyle(document.documentElement).colorScheme.trim()
+    const dark = declared === 'dark' || (declared !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
     notice.style.cssText = `position:fixed;inset:0;z-index:2147483647;background:${dark ? 'rgba(36,35,33,.97)' : 'rgba(250,249,245,.97)'};display:flex;align-items:center;justify-content:center;padding:24px;font:16px/1.7 system-ui,sans-serif;text-align:center;color:${dark ? '#F0EEE8' : '#292724'}`
     const box = document.createElement('div'), text = document.createElement('p'), retry = document.createElement('button')
-    text.textContent = message; retry.textContent = '重新连接'; retry.onclick = () => location.reload()
+    text.id = 'dsh-rc-disconnected-text'; text.textContent = message; retry.textContent = '重新连接'; retry.onclick = () => location.reload()
+    notice.setAttribute('aria-labelledby', text.id)
     let accent = ''
     try { accent = localStorage.getItem('dsrc-accent') ?? '' } catch { /* storage unavailable: default colour */ }
     const fill = accent === 'blue' ? '#3D63E6' : accent === 'black' ? (dark ? '#F0EEE8' : '#1F1E1D') : '#D97757'
     retry.style.cssText = `padding:12px 20px;border:0;border-radius:999px;background:${fill};color:${accent === 'black' && dark ? '#242321' : '#fff'};font:inherit`
     box.append(text, retry); notice.append(box); (document.body ?? document.documentElement).append(notice)
+    // The overlay covers the page, so the keyboard and the screen reader start on its only action.
+    retry.focus()
   }
   /** The gateway's own refusal. A 403 from the Host (a path it will not read, say) is an ordinary error. */
   async function unpaired(response: Response): Promise<boolean> {
@@ -139,20 +146,29 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     return response
   }
   const OriginalSocket = window.WebSocket
+  /** One revocation probe at a time: a phone that reconnects in a loop closes faster than the Host answers. */
+  let probing: Promise<unknown> | undefined
+  const probeAuthorization = (): void => {
+    if (probing) return
+    probing = originalFetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }).then(async response => {
+      if (await unpaired(response)) disconnected('设备授权已撤销，远程连接已断开。请重新扫码。')
+    }).catch(() => window.dispatchEvent(new Event('dsh-rc-offline'))).finally(() => { probing = undefined })
+  }
   globals.WebSocket = class extends OriginalSocket {
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols)
-      this.addEventListener('open', () => window.dispatchEvent(new Event('dsh-rc-online')))
-      this.addEventListener('close', () => {
-        void originalFetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }).then(async response => {
-          if (await unpaired(response)) disconnected('设备授权已撤销，远程连接已断开。请重新扫码。')
-        }).catch(() => window.dispatchEvent(new Event('dsh-rc-offline')))
-      })
+      // Only a socket that reached the Host says anything about the authorization, and the SSE
+      // carrier reconnects by design, so probing it would be a heartbeat request of its own.
+      const carrier = /\/rc\/sse(?:[?#]|$)/.test(String(url))
+      let opened = false
+      this.addEventListener('open', () => { opened = true; window.dispatchEvent(new Event('dsh-rc-online')) })
+      this.addEventListener('close', () => { if (opened && !carrier) probeAuthorization() })
     }
   }
-  if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', { value: () => '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0]! & 15 >> Number(c) / 4).toString(16)) })
+  if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', { value: () => '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0]! & 15 >> Number(c) / 4).toString(16)), writable: true, configurable: true })
   // EventSource uses one authenticated WS carrier for both LAN and fixed-domain connections.
   const NativeSocket = window.WebSocket
+  const NativeEventSource = globals.EventSource
   class RemoteEventSource extends EventTarget {
     static CONNECTING = 0; static OPEN = 1; static CLOSED = 2
     readonly CONNECTING = 0; readonly OPEN = 1; readonly CLOSED = 2
@@ -161,10 +177,12 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     onmessage: ((event: MessageEvent) => void) | null = null
     onerror: ((event: Event) => void) | null = null
     private socket?: WebSocket; private timer?: ReturnType<typeof setTimeout>
-    private buffer = ''; private lastId = ''; private retry = 3000
+    private buffer = ''; private lastId = ''; private retry = 3000; private backoff = 0
     constructor(url: string | URL, init?: EventSourceInit) {
       super(); this.url = new URL(String(url), location.href).href; this.withCredentials = init?.withCredentials ?? false
-      if (new URL(this.url).origin !== location.origin) throw new Error('远程 EventSource 仅允许同源地址。')
+      // The carrier only carries this origin. Anywhere else the browser's own EventSource owns the
+      // cross-origin rules: it reports a refusal as an error event and honours CORS.
+      if (new URL(this.url).origin !== location.origin) return new NativeEventSource(url, init)
       this.connect()
     }
     private emit(type: string, event: Event): void {
@@ -180,7 +198,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
       const socket = this.socket = new NativeSocket(url)
       socket.onmessage = event => {
         const frame = JSON.parse(event.data)
-        if (frame.type === 'ready') { this.readyState = 1; this.emit('open', new Event('open')); return }
+        if (frame.type === 'ready') { this.readyState = 1; this.backoff = 0; this.emit('open', new Event('open')); return }
         if (frame.type === 'error') { this.close(); this.emit('error', new Event('error')); return }
         if (frame.type !== 'chunk') return
         this.buffer += frame.data
@@ -199,7 +217,10 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
         }
       }
       socket.onerror = () => this.emit('error', new Event('error'))
-      socket.onclose = () => { if (this.readyState !== 2) { this.readyState = 0; this.buffer = ''; this.timer = setTimeout(() => this.connect(), this.retry) } }
+      // A sleeping computer or a restarting Host comes back in minutes, not in one fixed interval:
+      // every failed attempt waits twice as long as the one before, up to 30s, and a live
+      // connection resets the wait.
+      socket.onclose = () => { if (this.readyState !== 2) { this.readyState = 0; this.buffer = ''; this.backoff = Math.min(30000, this.backoff ? this.backoff * 2 : this.retry); this.timer = setTimeout(() => this.connect(), this.backoff) } }
     }
     close(): void { this.readyState = 2; clearTimeout(this.timer); this.socket?.close() }
   }
