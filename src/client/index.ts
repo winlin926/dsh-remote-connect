@@ -282,20 +282,6 @@ export function RemoteControlPanel(): React.ReactElement {
       shown === 'public' && state.local && state.publicUrlCheck && !state.publicUrlCheck.reachable ? h('p', { className: 'dsrc-error', role: 'alert' }, '公网入口当前不可达，现在扫码打不开。请先启动电脑上的 SakuraFrp / frpc 服务。') : null,
       block('div', 'dsrc-steps', ['手机相机扫码', shown === 'public' ? state.passwordPairing ? '输入密码直接进入' : '输入密码，本机确认' : '在本机确认配对', '继续会话与审批'].map((step, index) => block('span', 'dsrc-step', [h('span', { className: 'dsrc-number' }, String(index + 1)), h('span', null, step)], { key: step }))),
     ])
-    const pairingPassword = shown === 'public' && state.local ? block('div', 'dsrc-pin', [
-      block('div', 'dsrc-pin-head', [h('span', { className: 'dsrc-field-label' }, '连接密码'), h('span', { className: 'dsrc-pin-kind' }, state.pinFixed ? '固定' : '随机')]),
-      pin === null ? block('div', 'dsrc-secret', [
-        h('code', null, state.pairingPin ?? '------'),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: disabled || !state.pairingPin, onClick: () => { if (state.pairingPin) void copy(state.pairingPin, '已复制连接密码') } }, '复制'),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled, onClick: () => setPin(state.pinFixed ? state.pairingPin ?? '' : '') }, state.pinFixed ? '修改' : '设为固定'),
-      ]) : block('div', 'dsrc-input', [
-        h('input', { 'aria-label': '固定连接密码', inputMode: 'numeric', maxLength: 6, placeholder: '6 位数字', value: pinDraft, 'aria-invalid': pinInvalid, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setPin(event.target.value.replace(/\D/g, '')) }),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: disabled || pinInvalid, onClick: () => { if (confirm('修改连接密码会断开所有已授权手机，需要重新配对。继续？')) void act('setPin', { pin: pinDraft }).then(saved => { if (saved) setPin(null) }) } }, '保存'),
-        h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setPin(null) }, '取消'),
-      ]),
-      h('p', { className: 'dsrc-note' }, pin === null ? '仅配对本人设备；修改密码会撤销授权。' : '留空恢复随机密码；保存将撤销授权。'),
-      pinInvalid ? h('p', { className: 'dsrc-error' }, '连接密码必须是 6 位数字。') : null,
-    ]) : shown === 'public' ? h('p', { className: 'dsrc-note dsrc-pin' }, '连接密码仅能在本机面板查看和修改。') : null
     const brief = block('div', 'dsrc-brief', [
       block('div', 'dsrc-connection-state', [
         h('strong', null, state.busy ? '正在启动连接…' : state.enabled ? online ? '手机已连接，可以继续使用' : '连接已就绪，等待手机扫码' : domainBlocked ? '还差一个固定公网域名' : '开启后，用手机继续操作'),
@@ -307,7 +293,6 @@ export function RemoteControlPanel(): React.ReactElement {
       block('div', 'dsrc-connection-actions', [state.enabled ? h('button', { type: 'button', className: 'dsrc-button dsrc-stop', disabled, onClick: stopConnection }, workingAction === 'stop' ? '正在关闭…' : '关闭远程连接')
         : h('button', { type: 'button', className: 'dsrc-button dsrc-primary dsrc-start', disabled, onClick: start }, state.busy || workingAction === 'start' ? '正在开启…' : domainBlocked ? '先配置域名' : '开启远程连接')]),
       h('label', { className: 'dsrc-toggle' }, h('input', { type: 'checkbox', checked: state.autoStart, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { autoStart: event.target.checked }) } }), '随 DSH 自动开启'),
-      pairingPassword,
       firstURL && !expired ? block('div', 'dsrc-pair-link', [
         h('code', { className: 'dsrc-link', title: address(firstURL) }, address(firstURL)),
         h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void copy(firstURL) } }, '复制链接'),
@@ -332,6 +317,22 @@ export function RemoteControlPanel(): React.ReactElement {
 
   const settings = () => {
     if (!state) return null
+    // The password sits next to the switch that depends on it: it used to live in the public pane only, which a
+    // computer connected over Wi-Fi never sees.
+    const pinField = state.local && publicUrl ? block('div', 'dsrc-pin', [
+      block('div', 'dsrc-pin-head', [h('span', { className: 'dsrc-field-label' }, '连接密码'), h('span', { className: 'dsrc-pin-kind' }, state.pinFixed ? '固定' : '随机')]),
+      pin === null ? block('div', 'dsrc-secret', [
+        h('code', null, state.pairingPin ?? '------'),
+        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: disabled || !state.pairingPin, onClick: () => { if (state.pairingPin) void copy(state.pairingPin, '已复制连接密码') } }, '复制'),
+        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled, onClick: () => setPin(state.pinFixed ? state.pairingPin ?? '' : '') }, state.pinFixed ? '修改' : '设为固定'),
+      ]) : block('div', 'dsrc-input', [
+        h('input', { 'aria-label': '固定连接密码', inputMode: 'numeric', maxLength: 6, placeholder: '6 位数字', value: pinDraft, 'aria-invalid': pinInvalid, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setPin(event.target.value.replace(/\D/g, '')) }),
+        h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: disabled || pinInvalid, onClick: () => { if (confirm('修改连接密码会断开所有已授权手机，需要重新配对。继续？')) void act('setPin', { pin: pinDraft }).then(saved => { if (saved) setPin(null) }) } }, '保存'),
+        h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setPin(null) }, '取消'),
+      ]),
+      h('p', { className: 'dsrc-note' }, pin === null ? '手机打开公网入口时需要输入它；修改密码会撤销授权。' : '留空恢复随机密码；保存将撤销授权。'),
+      pinInvalid ? h('p', { className: 'dsrc-error' }, '连接密码必须是 6 位数字。') : null,
+    ]) : publicUrl ? h('p', { className: 'dsrc-note' }, '连接密码仅能在本机面板查看和修改。') : null
     const publicSettings = block('section', 'dsrc-setting-group', [
       block('div', 'dsrc-setting-heading', [h('h3', null, '公网连接'), h('span', { className: 'dsrc-setting-kicker' }, '固定域名与证书')]),
       block('div', 'dsrc-field dsrc-domain-field', [
@@ -359,8 +360,9 @@ export function RemoteControlPanel(): React.ReactElement {
         h('input', { type: 'checkbox', checked: state.passwordPairing === true, disabled: disabled || !state.local, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { passwordPairing: event.target.checked }) } }),
         block('span', 'dsrc-check-copy', [
           h('span', { className: 'dsrc-field-label' }, '密码直连配对'),
-          h('span', { className: 'dsrc-note' }, '开启后，新设备在浏览器输入连接密码即可直接配对进入，无需扫码和电脑确认；建议配合固定密码使用。'),
+          h('span', { className: 'dsrc-note' }, '开启后，新设备在浏览器输入连接密码即可直接配对进入，无需扫码和电脑确认。'),
         ])) : null,
+      pinField,
     ], { 'aria-label': '公网连接' })
     const appearance = block('section', 'dsrc-setting-group', [
       block('div', 'dsrc-setting-heading', [h('h3', null, '电脑网络代理'), h('span', { className: 'dsrc-setting-kicker' }, proxyMode === 'system' ? '自动检测' : proxyMode === 'manual' ? '手动设置' : '不使用')]),
