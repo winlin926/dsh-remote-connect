@@ -1,10 +1,10 @@
 import { createServer, request as httpRequest } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse, ClientRequest } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import type { Duplex } from 'node:stream'
+import { pipeline, type Duplex } from 'node:stream'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { PairingService, Device } from './pairing.js'
 import { body, cookie, gzipFor, json, sameOrigin } from './http.js'
@@ -163,7 +163,7 @@ export class Gateway {
     }
     if (url.pathname === '/rc/health') {
       if (!publicRequest) { json(res, 404, { error: 'not found' }); return }
-      json(res, 200, { ok: true, service: 'dsh-remote-connect' }); return
+      json(res, 200, { ok: true, service: 'dsh-remote-connect', instanceId: this.options.public?.()?.instanceId }); return
     }
     if (url.pathname === '/pair' && req.method === 'GET') {
       const direct = publicRequest && this.options.directPairing?.() === true
@@ -286,10 +286,18 @@ export class Gateway {
       }
       const mime = PREVIEW_MIME[cleaned.split('.').at(-1)?.toLowerCase() ?? ''] ?? 'application/octet-stream'
       try {
-        const content = await readFile(cleaned)
-        if (content.length > 48 * 1024 * 1024) { json(res, 413, { error: '文件超过 48 MB，请在电脑上打开。' }); return }
-        res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...(mime === 'image/svg+xml' ? { 'content-security-policy': 'sandbox' } : {}) })
-        res.end(content)
+        const file = await open(cleaned, 'r')
+        try {
+          const info = await file.stat()
+          if (!info.isFile()) { json(res, 404, { error: '请选择普通文件。' }); return }
+          if (info.size > 48 * 1024 * 1024) { json(res, 413, { error: '文件超过 48 MiB，请在电脑上打开。' }); return }
+          if (res.destroyed) return
+          const stream = file.createReadStream({ autoClose: false })
+          stream.on('error', () => res.destroy())
+          res.once('close', () => stream.destroy())
+          res.writeHead(200, { 'content-type': mime, 'content-length': info.size, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...(mime === 'image/svg+xml' ? { 'content-security-policy': 'sandbox' } : {}) })
+          await new Promise<void>(resolve => { stream.once('close', resolve); stream.once('end', resolve); stream.pipe(res) })
+        } finally { await file.close() }
       } catch { json(res, 404, { error: '文件不存在或无法读取，可能已被移动或删除。' }) }
       return
     }
@@ -334,7 +342,6 @@ export class Gateway {
       if (headers.location) {
         try { const target = new URL(headers.location, `http://127.0.0.1:${this.options.upstreamPort}`); if (target.host === `127.0.0.1:${this.options.upstreamPort}`) headers.location = target.pathname + target.search } catch { delete headers.location }
       }
-      res.once('close', () => incoming.destroy())
       const status = incoming.statusCode ?? 502
       // The Host now answers with ETag and 304, and a 304 must arrive without a body: it tells the
       // phone to reuse the copy it already has, which was this plugin's gzip variant.
@@ -347,12 +354,11 @@ export class Gateway {
         res.writeHead(status, { ...headers, 'content-encoding': 'gzip', vary: 'accept-encoding' })
         // Flushed as it goes, so a response the Host writes in pieces still arrives in pieces.
         const gzip = createGzip({ flush: constants.Z_SYNC_FLUSH })
-        gzip.on('error', () => res.destroy()); incoming.on('error', () => gzip.destroy())
-        incoming.pipe(gzip).pipe(res)
+        pipeline(incoming, gzip, res, () => {})
         return
       }
       res.writeHead(status, headers)
-      incoming.pipe(res)
+      pipeline(incoming, res, () => {})
     })
     const untrack = this.track(deviceId, () => upstream.destroy()); upstream.once('close', untrack)
     upstream.on('error', () => { if (!res.headersSent) json(res, 502, { error: 'DSH 宿主连接失败。' }); else res.destroy() })

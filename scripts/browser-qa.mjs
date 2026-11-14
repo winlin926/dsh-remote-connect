@@ -1,113 +1,190 @@
-import { chromium } from '@playwright/test'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { resolve } from 'node:path'
-const qa = resolve('.qa'), connection = JSON.parse(readFileSync(resolve(qa, 'connection.json'), 'utf8'))
-const browser = await chromium.launch({ executablePath: process.env.DSH_QA_BROWSER || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', headless: true })
-const errors = [], results = []
-const local = await browser.newContext({ viewport: { width: 1280, height: 960 } })
-const desktop = await local.newPage()
-let management
-desktop.on('pageerror', error => errors.push(`local: ${error.message}`))
-desktop.on('console', message => { if (message.type() === 'error') errors.push(`local console: ${message.text()}`) })
-try {
-  await desktop.goto(connection.url); await desktop.waitForTimeout(4000)
-  const onboarding = desktop.getByRole('button', { name: '继续', exact: true })
-  if (await onboarding.isVisible()) { await onboarding.click(); await desktop.waitForTimeout(500) }
-  management = async (action, fields = {}) => desktop.evaluate(async ({ action, fields }) => {
-    const response = await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...fields }) }); return { status: response.status, data: await response.json() }
-  }, { action, fields })
-  const initial = await management('status'); results.push({ name: 'local authenticated management', status: initial.status, enabled: initial.data.enabled })
-  if (initial.status !== 200) throw new Error(`management failed: ${JSON.stringify(initial)}`)
-  await desktop.getByRole('button', { name: '远程控制', exact: true }).click({ timeout: 15000 })
-  await desktop.getByRole('heading', { name: '远程控制', exact: true }).waitFor()
-  await desktop.screenshot({ path: resolve(qa, 'panel-desktop.png'), fullPage: true })
-  const mode = process.env.DSH_QA_MODE || 'lan'
-  await management('stop'); await desktop.waitForTimeout(200)
-  await management('preferences', { mode, proxy: process.env.DSH_QA_PROXY || '' }); let started = await management('start')
-  if (mode === 'public') {
-    const deadline = Date.now() + 150000
-    while (started.data.phase !== 'ready' && started.data.phase !== 'error' && Date.now() < deadline) {
-      console.log('Public tunnel:', started.data.phase)
-      await desktop.waitForTimeout(3000); started = await management('status')
+import { readFileSync, rmSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
+import assert from 'node:assert/strict'
+
+if (typeof taskSpace !== 'function') {
+  const result = spawnSync('ego-browser.exe', ['nodejs', '-e', `await import('${import.meta.url.replaceAll("'", '%27')}')`], { stdio: 'inherit', windowsHide: true })
+  if (result.error) throw result.error
+  process.exitCode = result.status ?? 1
+} else {
+  const run = join(dirname(fileURLToPath(import.meta.url)), '..', '.qa', 'smoke')
+  const connection = JSON.parse(readFileSync(join(run, 'connection.json'), 'utf8'))
+  for (const name of ['desktop-light', 'desktop-dark', 'phone-320-light', 'phone-320-dark', 'phone-390-light', 'phone-390-dark']) rmSync(join(run, name + '.png'), { force: true })
+  const task = await taskSpace('DSH remote plugin smoke')
+  for (const tab of await task.tabs()) if (tab.label && tab.label !== 'p1' && tab.openedBy === 'agent') await task.page(tab.label).close()
+  const desktop = task.page('p1'), results = [], captureWarnings = [], captures = []
+  const originalCookies = (await desktop.cdp('Network.getCookies', { urls: [connection.url] })).cookies
+  const managedOrigins = new Set([new URL(connection.url).origin])
+  const manage = async (action, fields = {}) => {
+    const response = await desktop.fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...fields }) })
+    assert.equal(response.status, 200, `management ${action} failed`)
+    return JSON.parse(response.body)
+  }
+  const clickButton = async (page, name) => {
+    await page.cdp('Page.bringToFront')
+    await page.evaluate(name => {
+      const button = [...document.querySelectorAll('button')].find(node => (node.getAttribute('aria-label') || node.textContent.trim()) === name && node.getBoundingClientRect().width)
+      if (!button) throw new Error('Missing visible button: ' + name)
+      button.click()
+    }, name)
+  }
+  const dismissOnboarding = async page => {
+    await page.cdp('Page.bringToFront')
+    await page.waitForSelector('.dsrc-entry', { state: 'attached', timeout: 20000 })
+    for (let step = 0; step < 3; step++) {
+      await page.waitForSelector('dialog[open] button, [role="dialog"] button[aria-label="Close"], [role="dialog"] button[aria-label="关闭"]', { state: 'visible', timeout: 5000 }).catch(() => {})
+      const actions = await page.evaluate(() => [...document.querySelectorAll('dialog[open] button,[role="dialog"] button')].filter(button => button.getBoundingClientRect().width).map(button => ({ name: button.getAttribute('aria-label') || button.textContent.trim(), text: button.closest('dialog,[role="dialog"]').innerText })))
+      const action = actions.find(item => /^(继续|Continue|关闭|Close)$/.test(item.name))
+      if (!action) break
+      await page.evaluate(name => [...document.querySelectorAll('dialog[open] button,[role="dialog"] button')].find(button => (button.getAttribute('aria-label') || button.textContent.trim()) === name && button.getBoundingClientRect().width)?.click(), action.name)
+      await page.waitForFunction(text => ![...document.querySelectorAll('dialog[open],[role="dialog"]')].some(dialog => dialog.getBoundingClientRect().width && dialog.innerText === text), action.text, { timeout: 5000 })
     }
-    results.push({ name: 'public tunnel validation', phase: started.data.phase, error: started.data.error })
   }
-  if (!started.data.enabled || !started.data.links?.[0]?.url) throw new Error(`${mode} start failed: ${started.data.error || started.data.phase}`)
-  const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile Safari/604.1' })
-  const mobile = await mobileContext.newPage()
-  mobile.on('pageerror', error => errors.push(`mobile: ${error.message}`))
-  mobile.on('console', message => { if (message.type() === 'error' && !message.text().includes('status of 403')) errors.push(`mobile console: ${message.text()}`) })
-  const rejectedResources = []
-  mobile.on('response', response => { if (response.status() >= 400) rejectedResources.push({ path: new URL(response.url()).pathname, status: response.status() }) })
-  await mobile.goto(started.data.links[0].url)
-  await mobile.getByText('等待电脑确认，请查看本机远程控制面板').waitFor()
-  const waiting = await management('status'); results.push({ name: 'pair waits for local approval', pending: waiting.data.requests.length })
-  await desktop.screenshot({ path: resolve(qa, 'panel-request.png'), fullPage: true })
-  await management('approve', { id: waiting.data.requests[0].id })
-  await mobile.waitForURL(url => url.pathname === '/', { timeout: 15000 }); await mobile.waitForTimeout(5000)
-  const mobileOnboarding = mobile.getByRole('button', { name: '继续', exact: true })
-  if (await mobileOnboarding.isVisible()) await mobileOnboarding.click()
-  await mobile.screenshot({ path: resolve(qa, 'official-mobile.png'), fullPage: true })
-  const remoteStatus = await mobile.evaluate(async () => { const response = await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }); return { status: response.status, data: await response.json() } })
-  results.push({ name: 'remote management and host grant', status: remoteStatus.status, local: remoteStatus.data.local, title: await mobile.title(), hostGrant: await mobile.evaluate(() => globalThis.__DSH_TRANSPORT__?.ownsHost) })
-  const urls = [], responses = []
-  const promptRequests = []
-  mobile.on('request', request => { if (new URL(request.url()).pathname === '/api/session/prompt') promptRequests.push(request.postDataJSON()) })
-  mobile.on('websocket', ws => urls.push(new URL(ws.url()).pathname))
-  mobile.on('response', response => { if (new URL(response.url()).pathname.startsWith('/api/')) responses.push({ path: new URL(response.url()).pathname, status: response.status() }) })
-  await mobile.reload(); await mobile.waitForTimeout(4000)
-  results.push({ name: 'official WS mux reconnect', paths: urls, failures: responses.filter(response => response.status >= 400) })
-  const editor = mobile.locator('[contenteditable="true"]').first()
-  await editor.fill('验证远程消息')
-  await mobile.getByRole('button', { name: '发送消息', exact: true }).click()
-  await mobile.getByText('远程链路验证通过：这条回复由隔离 DSH 的本地测试模型逐段生成。', { exact: false }).first().waitFor({ timeout: 30000 })
-  results.push({ name: 'real DSH session prompt and streamed local-model reply', passed: true })
-  const uploadResponse = mobile.waitForResponse(response => new URL(response.url()).pathname === '/api/session/uploadFileBinary', { timeout: 15000 })
-  await mobile.locator('input[type="file"]').first().setInputFiles({ name: 'remote-qa.txt', mimeType: 'text/plain', buffer: Buffer.from('真实 DSH 二进制上传验证\n') })
-  const uploaded = await uploadResponse
-  if (!uploaded.ok()) throw new Error(`Real upload failed: ${uploaded.status()}`)
-  results.push({ name: 'real DSH binary file upload', status: uploaded.status(), response: await uploaded.json() })
-  if (process.env.DSH_QA_APPROVAL === '1') {
-    const executionFile = resolve(qa, 'approval-executions.jsonl')
-    const executionCount = () => existsSync(executionFile) ? readFileSync(executionFile, 'utf8').trim().split('\n').filter(Boolean).length : 0
-    const beforeApproval = executionCount()
-    await editor.fill('验证工具审批')
-    await mobile.getByRole('button', { name: '发送消息', exact: true }).click()
-    await mobile.waitForTimeout(3000)
-    await mobile.screenshot({ path: resolve(qa, 'approval-mobile.png'), fullPage: true })
-    const approval = mobile.getByRole('button', { name: '允许一次', exact: true })
-    await approval.waitFor({ timeout: 15000 }); await approval.click()
-    await approval.waitFor({ state: 'hidden', timeout: 15000 }); await mobile.waitForTimeout(1500)
-    await mobile.screenshot({ path: resolve(qa, 'approval-result-mobile.png'), fullPage: true })
-    writeFileSync(resolve(qa, 'approval-result-text.txt'), await mobile.locator('body').innerText())
-    if (executionCount() !== beforeApproval + 1) throw new Error('Approval did not execute exactly once in the Host')
-    results.push({ name: 'real DSH remote one-time tool approval', passed: true, executionCount: 1 })
+  const layout = async (page, name, width = 1280) => {
+    const { windowId, bounds } = await task.cdp('Browser.getWindowForTarget', { targetId: page.targetId })
+    if (bounds.windowState === 'minimized') await task.cdp('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } })
+    await page.cdp('Page.bringToFront')
+    await page.cdp('Emulation.setDeviceMetricsOverride', { width, height: width === 1280 ? 900 : 844, mobile: width < 560, deviceScaleFactor: 1 })
+    await page.waitForFunction(() => [...document.querySelectorAll('.dsrc-dialog[open]')].every(panel => panel.getAnimations({ subtree: true }).every(animation => animation.playState !== 'running' || !Number.isFinite(animation.effect.getComputedTiming().endTime))), undefined, { timeout: 5000 })
+    const geometry = await page.evaluate(() => {
+      const panel = document.querySelector('.dsrc-dialog[open]'), box = panel?.getBoundingClientRect()
+      const close = panel?.querySelector('.dsrc-close'), style = close && getComputedStyle(close)
+      const luminance = value => value.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0)
+      const foreground = style ? luminance(style.color) : 0, background = style ? luminance(style.backgroundColor) : 0
+      return { closeContrast: (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05), width: innerWidth, overflow: document.documentElement.scrollWidth > innerWidth + 1, inside: !!box && box.x >= -1 && box.right <= innerWidth + 1, entries: document.querySelectorAll('.dsrc-entry').length }
+    })
+    assert.ok(width === 1280 ? geometry.width >= 960 : Math.abs(geometry.width - width) <= 1, name + ': viewport changed')
+    assert.equal(geometry.overflow, false, name + ': horizontal overflow')
+    assert.equal(geometry.inside, true, name + ': dialog outside viewport')
+    assert.equal(geometry.entries, 1, name + ': duplicate entry')
+    assert.ok(geometry.closeContrast >= 4.5, name + ': close button contrast')
+    if (!captureWarnings.length) {
+      try { captures.push(await page.screenshot({ path: join(run, name + '.png'), raw: true })) }
+      catch (error) {
+        if (!/captureScreenshot|window is minimized/.test(error.message)) throw error
+        captureWarnings.push({ name, error: error.message })
+        console.warn('Screenshot capture unavailable; remaining captures skipped.')
+      }
+    }
+    results.push(name)
+    console.log('PASS', name)
   }
-  await mobile.screenshot({ path: resolve(qa, 'official-mobile-chat.png'), fullPage: true })
-  console.log('Session route:', new URL(mobile.url()).pathname)
-  results.push({ name: 'resource failures before revocation', resources: [...rejectedResources] })
-  const preRevocationErrors = [...errors]
-  if (preRevocationErrors.length) throw new Error('Official UI reported errors before revocation')
-  // The plugin's own panel is where a phone user manages this connection, so it must load beside
-  // the Host sidebar rather than only inside the Host settings page.
-  const panelEntry = mobile.getByRole('button', { name: '远程控制', exact: true }).first()
-  if (!(await panelEntry.isVisible().catch(() => false))) await mobile.getByRole('button', { name: '打开侧边栏', exact: true }).click().catch(() => {})
-  await panelEntry.click({ timeout: 15000 })
-  await mobile.getByRole('heading', { name: '远程控制', exact: true }).waitFor({ timeout: 15000 })
-  await mobile.waitForTimeout(1500)
-  const panelText = await mobile.locator('body').innerText()
-  await mobile.screenshot({ path: resolve(qa, 'official-mobile-panel.png'), fullPage: true })
-  if (!panelText.includes('连接与外观设置')) throw new Error(`Remote panel did not load on the phone: ${panelText.slice(0, 400)}`)
-  results.push({ name: 'remote panel opens on the phone', passed: true })
-  await mobile.screenshot({ path: resolve(qa, 'official-mobile-panel.png'), fullPage: true })
-  const deviceId = (await mobileContext.cookies()).find(cookie => cookie.name === 'dsh_rc').value.split('.')[0]
-  await management('revoke', { id: deviceId }); await mobile.waitForTimeout(300)
-  const denied = await mobile.evaluate(async () => (await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) })).status)
-  results.push({ name: 'revocation denies existing browser', status: denied })
-  if (denied !== 403) throw new Error(`Revocation did not deny access: ${denied}`)
-  await management('stop'); await mobileContext.close()
-  writeFileSync(resolve(qa, 'browser-results.json'), JSON.stringify({ results, preRevocationErrors, expectedRevocationErrors: errors }, null, 2)); console.log(JSON.stringify({ results, preRevocationErrors, expectedRevocationErrors: errors }, null, 2))
-} catch (error) {
-  await desktop.screenshot({ path: resolve(qa, 'failure.png'), fullPage: true }).catch(() => {})
-  writeFileSync(resolve(qa, 'browser-results.json'), JSON.stringify({ results, errors, failure: error.message }, null, 2)); console.log(JSON.stringify({ results, errors, failure: error.message }, null, 2)); process.exitCode = 1
-} finally { if (management) { await management('stop').catch(() => {}); await desktop.waitForTimeout(300).catch(() => {}) }; await browser.close() }
+  let phone, passed = false
+  try {
+    await desktop.cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, mobile: false, deviceScaleFactor: 1 })
+    await desktop.goto(connection.url)
+    console.log(await desktop.snapshot())
+    await dismissOnboarding(desktop)
+    await manage('stop')
+    await manage('preferences', { autoStart: false, mode: 'lan', publicUrl: '' })
+    if ((await manage('status')).devices.length) {
+      await manage('revokeAll')
+      await desktop.waitForFunction(async () => !(await (await fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"action":"status"}' })).json()).devices.length, undefined, { timeout: 5000 })
+    }
+    await desktop.click('loc=role:button[name="远程控制"]', { label: '打开远程连接面板' })
+    await desktop.waitForSelector('loc=role:button[name="开启远程连接"]', { state: 'visible' })
+    await desktop.click('loc=role:button[name="开启远程连接"]', { label: '开启隔离局域网连接' })
+    await desktop.waitForSelector('loc=role:button[name="关闭远程连接"]', { state: 'visible' })
+    const started = await manage('status')
+    const base = `http://127.0.0.1:${started.gatewayPort}`
+    managedOrigins.add(base)
+    const link = base + '/pair' + new URL(started.links[0].url).hash
+    results.push('production management and LAN startup')
+    await layout(desktop, 'desktop-light')
+    await desktop.cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] })
+    await layout(desktop, 'desktop-dark')
+    phone = await task.newPage()
+    await phone.cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, mobile: true, deviceScaleFactor: 1 })
+    await phone.cdp('Emulation.setTouchEmulationEnabled', { enabled: true })
+    await phone.goto(link)
+    await phone.waitForFunction(() => document.getElementById('state')?.textContent.includes('等待电脑确认'), undefined, { timeout: 10000 })
+    await desktop.waitForSelector('.dsrc-prompt[open]', { state: 'visible', timeout: 10000 })
+    await desktop.click('.dsrc-prompt[open] button.dsrc-primary', { label: '批准隔离手机配对' })
+    await phone.waitForURL(url => new URL(url).pathname === '/', { timeout: 15000 })
+    await dismissOnboarding(phone)
+    await phone.waitForFunction(() => !!document.querySelector('#root [data-sidebar-drawer]') && !document.getElementById('root').innerText.includes('Loading plugins'), undefined, { timeout: 20000 })
+    results.push('QR approval and current Host mobile application ready')
+    console.log('PASS pairing and Host application ready')
+    await desktop.cdp('Page.bringToFront')
+    await desktop.waitForSelector('button:text-is("重命名")', { state: 'visible' })
+    await desktop.click('button:text-is("重命名")', { label: '重命名隔离测试设备' })
+    await desktop.fill('.dsrc-rename', '中文测试设备')
+    await desktop.evaluate(() => document.querySelector('.dsrc-rename').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })))
+    assert.equal(await desktop.evaluate(() => !!document.querySelector('.dsrc-rename')), true, 'IME Enter committed the name')
+    await desktop.press('.dsrc-rename', 'Enter')
+    await desktop.waitForFunction(() => [...document.querySelectorAll('.dsrc-device-name')].some(node => node.textContent.includes('中文测试设备')), undefined, { timeout: 10000 })
+    results.push('composition Enter ignored; ordinary Enter saves')
+    await manage('preferences', { publicUrl: 'https://smoke.example.com' })
+    if (!await desktop.evaluate(() => document.querySelector('.dsrc-preferences')?.open)) await desktop.click('.dsrc-preferences > summary', { label: '展开连接设置' })
+    await desktop.waitForSelector('.dsrc-pin .dsrc-secret button', { state: 'visible' })
+    await desktop.evaluate(() => {
+      if (navigator.clipboard) Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { throw new Error('clipboard denied') } })
+      document.execCommand = () => false
+    })
+    await desktop.click('.dsrc-pin .dsrc-secret button:text-is("复制")', { label: '验证密码复制失败反馈' })
+    const expectedPin = (await manage('status')).pairingPin
+    assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-copy-fallback')?.value), expectedPin)
+    await desktop.click('.dsrc-pair-link button', { label: '验证链接复制失败反馈' })
+    assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-copy-fallback')?.value), started.links[0].url)
+    results.push('copy fallback preserves requested password or link')
+    await desktop.evaluate(() => {
+      const transport = window.__DSH_TRANSPORT__ ??= {}, original = transport.fetch ?? window.fetch
+      const state = window.__qaPoll = { held: false, released: false, resume: null, restore: () => { transport.fetch = original } }
+      transport.fetch = async (input, init) => {
+        const response = await original(input, init)
+        if (!state.held && JSON.parse(init?.body || '{}').action === 'status') {
+          state.held = true
+          await new Promise(resolve => { state.resume = () => { state.released = true; resolve() } })
+        }
+        return response
+      }
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await desktop.waitForFunction(() => window.__qaPoll.held, undefined, { timeout: 5000 })
+    await desktop.click('.dsrc-toggle input', { label: '验证轮询与操作顺序' })
+    await desktop.waitForFunction(() => document.querySelector('.dsrc-toggle input')?.checked && !document.querySelector('.dsrc-toggle input')?.disabled, undefined, { timeout: 5000 })
+    await desktop.evaluate(() => { window.__qaPoll.resume(); window.__qaPoll.restore() })
+    await desktop.waitForFunction(() => window.__qaPoll.released, undefined, { timeout: 5000 })
+    assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-toggle input')?.checked), true)
+    await desktop.click('.dsrc-toggle input', { label: '恢复隔离自动开启设置' })
+    results.push('late status response cannot overwrite a saved preference')
+    const previewPath = '/rc/workspace-file?p=' + encodeURIComponent(connection.preview)
+    const opened = await phone.fetch(previewPath)
+    assert.equal(opened.status, 200)
+    assert.ok(opened.body.includes('隔离文件预览通过'))
+    const capability = opened.url
+    const text = await phone.fetch('/rc/workspace-file?p=' + encodeURIComponent(connection.text))
+    assert.equal(text.body, '隔离文本预览通过')
+    results.push('sandboxed HTML and streamed text preview')
+    const drawer = await phone.evaluate(() => [...document.querySelectorAll('button[aria-label]')].map(node => node.getAttribute('aria-label')).find(name => /^(打开侧边栏|Open sidebar)$/.test(name)))
+    if (drawer) await clickButton(phone, drawer)
+    await clickButton(phone, '远程控制')
+    await phone.waitForSelector('.dsrc-dialog[open]', { state: 'visible', timeout: 10000 })
+    for (const width of [320, 390]) {
+      await phone.cdp('Emulation.setDeviceMetricsOverride', { width, height: 844, mobile: true, deviceScaleFactor: 1 })
+      for (const theme of ['light', 'dark']) {
+        await phone.cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] })
+        await layout(phone, `phone-${width}-${theme}`, width)
+      }
+    }
+    const device = (await manage('status')).devices.find(row => row.name === '中文测试设备')
+    await manage('revoke', { id: device.id })
+    await phone.waitForFunction(() => !!document.getElementById('dsh-rc-disconnected'), undefined, { timeout: 10000 })
+    assert.equal((await phone.fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"action":"status"}' })).status, 403)
+    assert.equal((await phone.fetch(new URL(capability).pathname)).status, 404)
+    results.push('revocation blocks management and preview immediately')
+    passed = true
+    console.log(JSON.stringify({ passed, results, captureWarnings, screenshots: captures }, null, 2))
+  } finally {
+    await manage('stop').catch(() => {})
+    const current = (await desktop.cdp('Network.getCookies', { urls: [...managedOrigins] })).cookies
+    for (const cookie of current) {
+      if (!originalCookies.some(original => original.name === cookie.name && original.domain === cookie.domain && original.path === cookie.path)) await desktop.cdp('Network.deleteCookies', { name: cookie.name, domain: cookie.domain, path: cookie.path })
+    }
+    if (originalCookies.length) await desktop.cdp('Network.setCookies', { cookies: originalCookies.map(({ name, value, domain, path, secure, httpOnly, sameSite, expires }) => ({ name, value, domain, path, secure, httpOnly, ...(sameSite ? { sameSite } : {}), ...(expires > 0 ? { expires } : {}) })) })
+    if (passed) await task.finish({ keep: [] })
+    else console.error(`Browser check stopped in workspace ${task.spaceId}; inspect and resume this workspace before closing it.`)
+  }
+}

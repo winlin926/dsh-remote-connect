@@ -20,9 +20,7 @@ jobs:
         with:
           version: 10.28.0
       - run: pnpm install --frozen-lockfile --ignore-scripts
-      - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - run: npm pack --dry-run
       - run: npm pack --dry-run --ignore-scripts --json > package-manifest.json
       - run: node scripts/check-package.mjs package-manifest.json

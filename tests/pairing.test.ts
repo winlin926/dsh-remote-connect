@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { IDLE_MS, PairingService, deviceName } from '../src/pairing.js'
+import { pairingPage } from '../src/pages.js'
 const folders: string[] = []
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }) })
 function fixture(onRevoke?: (id: string) => void) {
@@ -25,7 +27,8 @@ describe('pairing admission and durable revocation', () => {
     const credential = service.claim(one.id, one.key).credential!
     expect(service.authenticate(credential)?.name).toBe('Android')
     expect(service.claim(two.id, two.key).state).toBe('pending')
-    expect(() => service.claim(one.id, one.key)).toThrow()
+    expect(service.claim(one.id, one.key)).toEqual({ state: 'approved', credential })
+    expect(() => service.claim(one.id, two.key)).toThrow()
   })
   it('invalidates old QR and pending requests on refresh, and expires tokens', () => {
     const { service, advance } = fixture(), qr = service.issue(), request = service.request(qr.token, '')
@@ -76,6 +79,17 @@ describe('pairing admission and durable revocation', () => {
     service.approve(claim.id); service.revoke(service.list()[0]!.id)
     expect(() => service.claim(claim.id, claim.key)).toThrow()
   })
+  it.each(['refresh', 'expire', 'stop', 'revokeAll'])('invalidates a collected claim on %s', action => {
+    const { service, advance } = fixture(), claim = service.request(service.issue().token, '')
+    service.approve(claim.id)
+    const first = service.claim(claim.id, claim.key)
+    expect(service.claim(claim.id, claim.key)).toEqual(first)
+    if (action === 'refresh') service.issue()
+    else if (action === 'expire') advance(300001)
+    else if (action === 'stop') service.invalidate()
+    else service.revokeAll()
+    expect(() => service.claim(claim.id, claim.key)).toThrow()
+  })
 })
 
 it('names a device by model or system and browser', () => {
@@ -97,4 +111,33 @@ it('records the pairing address and renames authorized devices', () => {
   service.prune(device => !!device.host?.endsWith('.trycloudflare.com'))
   expect(service.authenticate(tunnel)).toBeUndefined()
   expect(service.authenticate(lan)?.name).toBe('我的手机')
+})
+
+it.each(['request', 'claim'])('resumes pairing after a failed %s without rescanning', async failed => {
+  const enter = { hidden: true, textContent: '', onclick: undefined as (() => Promise<void>) | undefined }
+  const state = { textContent: '' }
+  const tokens: string[] = [], claims: string[] = []
+  let interrupted = false, redirected = ''
+  const location = { hash: '#pair=scan-token', replace: (path: string) => { redirected = path } }
+  const script = [...pairingPage().matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)![1]!
+  await runInNewContext(script, {
+    document: { getElementById: (id: string) => id === 'enter' ? enter : id === 'state' ? state : {} },
+    location, history: { replaceState: () => { location.hash = '' } }, URLSearchParams, navigator: {},
+    setTimeout: (resolve: () => void) => resolve(),
+    fetch: async (path: string, input: { body: string }) => {
+      const data = JSON.parse(input.body)
+      if (path.endsWith('/manage')) return Response.json({}, { status: 403 })
+      if (path.endsWith('/request')) tokens.push(data.token)
+      else claims.push(data.id)
+      if (path.endsWith('/' + failed) && !interrupted) { interrupted = true; throw new Error('网络中断') }
+      return Response.json(path.endsWith('/request') ? { id: 'pending-device', key: 'claim-key', expiresAt: Date.now() + 300000 } : { state: 'approved' })
+    },
+  })
+  expect(state.textContent).toBe('网络中断')
+  expect(enter.hidden).toBe(false)
+  expect(location.hash).toBe('')
+  await enter.onclick!()
+  expect(redirected).toBe('/')
+  expect(tokens).toEqual(failed === 'request' ? ['scan-token', 'scan-token'] : ['scan-token'])
+  expect(claims).toEqual(failed === 'claim' ? ['pending-device', 'pending-device'] : ['pending-device'])
 })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, ftruncateSync, mkdtempSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, request } from 'node:http'
@@ -20,6 +20,12 @@ async function fixture() {
     calls++
     if (req.url?.startsWith('/api/sse')) { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('id: 1\ndata: 第一条\n\n'); const timer = setInterval(() => res.write('event: tick\ndata: second\n\n'), 50); res.once('close', () => clearInterval(timer)); return }
     if (req.url === '/api/hold') { res.writeHead(200); res.write('start'); return }
+    if (req.url === '/api/interrupted-asset') {
+      res.writeHead(200, { 'content-type': 'text/javascript', 'content-length': 1024 * 1024 })
+      res.write('window.partial = true;')
+      setImmediate(() => res.destroy())
+      return
+    }
     if (req.url === '/api/upload') { let size = 0; req.on('data', chunk => size += chunk.length); req.on('end', () => res.end(JSON.stringify({ size }))); return }
     // A cached asset: the Host now offers an ETag and answers 304 for a phone that already has it.
     if (req.url === '/api/asset') {
@@ -105,6 +111,18 @@ describe('gateway admission and transport', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('image/svg+xml')
     expect(response.headers.get('content-security-policy')).toBe('sandbox')
+  })
+  it('rejects oversized files before reading and streams ordinary files with their size', async () => {
+    const f = await fixture(), large = join(f.folder, 'large.bin'), small = join(f.folder, 'message.txt')
+    const descriptor = openSync(large, 'w')
+    try { ftruncateSync(descriptor, 48 * 1024 * 1024 + 1) } finally { closeSync(descriptor) }
+    writeFileSync(small, '手机文件预览')
+    const getFile = (path: string) => fetch(`${f.base}/rc/workspace-file?p=${encodeURIComponent(path)}`, { headers: { cookie: f.cookie } })
+    expect((await getFile(large)).status).toBe(413)
+    expect((await getFile(f.folder)).status).toBe(404)
+    const response = await getFile(small)
+    expect(response.headers.get('content-length')).toBe(String(Buffer.byteLength('手机文件预览')))
+    expect(await response.text()).toBe('手机文件预览')
   })
   it('expires unused preview capabilities and keeps resources inside their real directory', async () => {
     const f = await fixture(), site = join(f.folder, 'site')
@@ -211,6 +229,14 @@ describe('gateway admission and transport', () => {
     expect(cached.headers.get('content-encoding')).toBeNull()
     expect(cached.headers.get('vary')).toContain('accept-encoding')
     expect(await cached.text()).toBe('')
+  })
+  it('ends an interrupted asset response instead of leaving the browser waiting', async () => {
+    const f = await fixture()
+    for (const encoding of ['gzip', 'identity']) {
+      const response = fetch(`${f.base}/api/interrupted-asset`, { headers: { cookie: f.cookie, 'accept-encoding': encoding }, signal: AbortSignal.timeout(1000) }).then(response => response.text())
+      await expect(response).rejects.toMatchObject({ name: 'TypeError' })
+    }
+    expect((await fetch(`${f.base}/api/asset`, { headers: { cookie: f.cookie } })).status).toBe(200)
   })
   it('compresses the WebSocket legs a phone uses to load a long session', async () => {
     const f = await fixture(), ws = new WebSocket(f.base.replace('http:', 'ws:') + '/api/remote.mux', { headers: { cookie: f.cookie, origin: f.base }, perMessageDeflate: true })

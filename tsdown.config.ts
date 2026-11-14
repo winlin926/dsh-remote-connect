@@ -5,7 +5,7 @@ const host: UserConfig = {
 }
 const client: UserConfig = {
   entry: { client: 'lib/types/client/index.js' }, outDir: 'lib', format: 'cjs', platform: 'browser', target: 'es2022', clean: false, dts: false,
-  deps: { neverBundle: ['react', 'react/jsx-runtime', 'react-dom'], onlyBundle: false },
+  deps: { neverBundle: ['react', 'react/jsx-runtime'], onlyBundle: false },
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   outputOptions: {
     entryFileNames: 'client.js', banner: 'window.__ModuleLoader__.load({ id: "@winlin926/dsh-remote-connect", factory: (require) => {',

@@ -25,16 +25,18 @@ export function pairingPage(gate: 'open' | 'password' | 'direct' = 'open'): stri
   (async()=>{const state=document.getElementById('state'),enter=document.getElementById('enter'),form=document.getElementById('password');
   if(${direct}){try{if(await (async()=>{${healthCheck}})())return}catch{}form.hidden=false;return}
   if(${passwordRequired})return;
-  try{const token=new URLSearchParams(location.hash.slice(1)).get('pair');history.replaceState(null,'','/pair');
+  const token=new URLSearchParams(location.hash.slice(1)).get('pair');history.replaceState(null,'','/pair');let claim;
+  const connect=async()=>{enter.hidden=true;state.textContent='正在检查连接…';try{
     if(await (async()=>{${healthCheck}})()){state.textContent='这台设备已经配对过，正在打开…'}
     else{
-    if(!token)throw Error('请在电脑上开启远程控制并扫描新的二维码。');
+    if(!claim){if(!token)throw Error('请在电脑上开启远程控制并扫描新的二维码。');
     let model='';try{const hints=await navigator.userAgentData?.getHighEntropyValues(['model']);model=hints?.model||''}catch{}
-    const request=await fetch('/rc/pair/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,model})});const claim=await request.json();if(!request.ok)throw Error(claim.error||'配对请求失败');
+    const request=await fetch('/rc/pair/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,model})});const result=await request.json();if(!request.ok)throw Error(result.error||'配对请求失败');claim=result}
     state.textContent='等待电脑确认，请查看本机远程控制面板';
     while(Date.now()<claim.expiresAt){await new Promise(r=>setTimeout(r,1500));const response=await fetch('/rc/pair/claim',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:claim.id,key:claim.key})});const result=await response.json();if(!response.ok)throw Error(result.error||'请求已失效');if(result.state==='rejected')throw Error('电脑已拒绝本次配对。');if(result.state==='approved'){state.textContent='已连接，正在打开远程界面…';location.replace('/');return}}
     throw Error('配对请求已过期，请重新扫码。')}
-  }catch(error){state.textContent=error.message;enter.hidden=false;enter.textContent='重新检查连接';enter.onclick=()=>location.reload()}})();
+  }catch(error){state.textContent=error.message;enter.hidden=false;enter.textContent='重新检查连接'}};
+  enter.onclick=connect;await connect()})();
   </script></body></html>`
 }
 

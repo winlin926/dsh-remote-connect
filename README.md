@@ -1,36 +1,54 @@
 # DSH 远程连接
 
-**远程连接** —— 用手机浏览器继续电脑上的 DeepSeek Harness（DSH）会话，支持扫码配对、消息发送、工具审批、附件与文件管理。
+用手机浏览器继续电脑上的 **DeepSeek Harness（DSH）** 会话：扫码配对，发送消息，查看工具执行并确认审批，也能打开电脑上的文件预览。
 
-基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 修改，保留原项目 MIT 许可证。当前适配 **DSH 0.2.2-rc.1**。
+适配 **DSH 0.2.2 系列**，当前验证基线为 **0.2.2-rc.3**。基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 修改，保留原项目署名与 MIT 许可证。
 
 ## 界面预览
 
-![电脑端远程连接面板](assets/desktop-connect.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-session.png" alt="手机浏览器中的 DSH 新会话界面" width="300" />
+  &nbsp;&nbsp;
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-settings.png" alt="手机浏览器中的 DSH 通用设置界面" width="300" />
+</p>
+
+<p align="center"><strong>手机会话</strong> · <strong>通用设置</strong></p>
+
+在手机上选择工作区与模型、继续对话，或调整语言、主题和字号。界面由电脑上的 DSH 版本及已启用扩展共同决定。
+
+<details>
+<summary><strong>查看电脑端：连接与设备授权管理</strong></summary>
+
+开启局域网或公网入口，扫描二维码配对，并在电脑上批准新设备、管理已授权设备。
+
+![电脑端远程连接面板](https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/desktop-connect.png)
+
+</details>
+
+## 功能一览
+
+| 功能 | 使用方式 |
+| --- | --- |
+| 同一 Wi-Fi 连接 | 手机与电脑在同一网络，扫码后由电脑确认配对。 |
+| 公网连接 | 使用固定 HTTPS 域名与已有转发通道，在其他网络继续访问。 |
+| 设备管理 | 查看在线状态、重命名设备、撤销单台或全部设备授权。 |
+| 宿主原生界面 | 聊天、设置和自动化使用电脑当前的 DSH Web 界面。 |
+| 文件预览 | 从会话链接打开电脑上的 HTML 页面及其资源，或预览普通文件。 |
+| 证书管理 | 支持 ACME 申请与续期，并按转发工具的约定部署证书。 |
 
 ## 手机打开的就是电脑上的界面
 
-插件不再自带一套手机聊天界面。手机浏览器打开远程连接地址时，运行的是**电脑上正在使用的那一份 DSH Web 界面**：
+手机浏览器打开远程连接地址时，运行的是**电脑上正在使用的那一份 DSH Web 界面**：
 
-- 电脑升级 DSH 后，手机刷新即同步，不需要更新插件；插件也不再有自己的一套前端版本号要跟。
+- 电脑升级 DSH 后，手机刷新即加载宿主当前界面，插件不另存一份前端；宿主接口变化时仍需检查插件兼容性。
 - DSH 对手机、平板、窄窗口做的适配（软键盘、触屏、窄屏设置页等）随宿主一起生效。
-- 插件只负责它真正该负责的部分：认证网关、扫码配对、局域网 / 公网入口、证书与本机管理面板。
+- 插件提供认证网关、扫码配对、局域网 / 公网入口、证书与本机管理面板。
 
-宿主 0.2.2 起，手机体验（视口、键盘策略、状态栏颜色、文档语言、触控与窄屏布局）全部由宿主自己负责，插件不再往页面里注入任何覆盖样式。插件保留的 boot 脚本只做远程链路自己的事：同源传输、本机文件预览、断线 / 撤销遮罩、拒绝浏览器翻译提示。
-
-## 相比原项目的修改
-
-- 把"原生界面"从内置前端改为**代理宿主的当前页面**：删除 `@deepseek-ai/dsh-web-frontend` 运行依赖和整套静态资源分发，手机不再拿到旧版本前端。
-- 删除自带的自定义手机聊天界面（约 1400 行、依赖 rc.3 内部 Slots/hostFace），插件只保留宿主稳定接口（webServer / connection / schedule）。
-- 依赖统一到 **0.2.2-rc.1**，插件入口与宿主同版本编译。
-- 跟随宿主 0.2.2 的三处变化：宿主的 `etag` / `304` 原样透传（不再对 `304` 加 `content-encoding`）、WebSocket 两段默认开 `permessage-deflate`（可用 `websocketCompression: false` 关闭）、面板图标改用新的 `settings.section.icon` 插槽。
-- 配对页、密码页、拒绝页的配色与字号换成宿主自己的设计 token（#FFFFFF / #0F1115 / #61666B / 12px 圆角 / 26px 标题），主操作固定使用陶土橙 `#D97757`。
-- 保留扫码配对、局域网 / 公网两种连接、固定域名与 ACME 证书、断线恢复、手机本机文件预览。
-- 自动化回归覆盖配对、官方界面挂载、聊天、审批、附件上传、面板与设备撤销。
+宿主负责视口、键盘策略、状态栏颜色、文档语言、触控与窄屏布局。插件的启动脚本负责远程传输、本机文件预览和断线 / 撤销提示，并关闭浏览器翻译提示；不覆盖宿主的聊天布局。
 
 ## 安装
 
-环境要求：Node.js 22.19+ 或 24+，DSH **0.2.2-rc.1 以上**（`dsh.engines.dsh = >=0.2.2-rc.1 <0.3.0-0`）。
+环境要求：Node.js **24.9+**，DSH **0.2.2-rc.1 以上**（`dsh.engines.dsh = >=0.2.2-rc.1 <0.3.0-0`）。
 
 在 DSH 插件管理中添加：
 
@@ -71,7 +89,7 @@ DSH 桌面版和 `dsh web` 使用各自的配置，需要分别安装。
 
 1. 准备一个域名，并配置 HTTP 80、HTTPS 443 到本插件网关 `127.0.0.1:43128`。
 2. 确保转发服务正在运行，证书与域名匹配。
-3. 打开插件，选择 **任意网络**，在“连接与外观设置”填写域名，例如：
+3. 打开插件，选择 **任意网络**，在“连接设置”填写域名，例如：
 
    ```text
    https://dsh.example.com
@@ -86,11 +104,19 @@ DSH 桌面版和 `dsh web` 使用各自的配置，需要分别安装。
 
 ## 从旧版本升级
 
+更新插件并重载后，刷新手机页面即可。已有设备凭据、偏好设置和存储位置保持兼容。
+
 旧版保存的“手机界面”选择（自定义 / 原生）在升级后失效并被忽略：只剩宿主界面这一种。旧的 `/?ui=custom`、`/?ui=native` 链接会自动跳回 `/`，不需要重新配对。
 
 0.2.2 起宿主按**包自身的 `package.json` 名字**加载插件，不再跟随安装时的依赖键名。如果之前用 `link:` 以别的名字（例如 `@copylee/dsh-remote-control`）挂在本机 profile 里，升级宿主后会报 `Cannot find package`，需要把依赖键名改成 `@winlin926/dsh-remote-connect` 后重启。
 
 `mobileShim` 配置项已在 0.4.0 删除：宿主自己拥有手机布局，插件不再注入覆盖样式。配置里留着这一项会被忽略，不会报错。
+
+### 同时安装了第三方 Web UI 扩展
+
+`@linxin666/dsh-web-all@0.4.18` 的兼容层有一条旧网格样式，可能导致手机新会话右偏，而历史会话看起来正常。仓库提供[针对该版本的补丁](https://github.com/winlin926/dsh-remote-connect/blob/main/patches/@linxin666__dsh-web-all@0.4.18.patch)，只删除这条冲突声明。
+
+此补丁需通过宿主 profile 的 pnpm `patchedDependencies` 单独应用。更新远程连接插件不会自动修改其他扩展；升级该扩展时，应先核对上游是否已修复，再移除版本补丁。
 
 ## 安全提示
 
@@ -100,15 +126,16 @@ DSH 桌面版和 `dsh web` 使用各自的配置，需要分别安装。
 
 ```bash
 pnpm install
-pnpm typecheck
-pnpm test          # 单元测试：网关准入、配对、公网、证书、桌面面板
+pnpm test          # SDK 升级或涉及多个模块时运行；普通修复选择受影响的文件
 pnpm build         # tsc + tsdown，产物在 lib/
-pnpm qa:host       # 启动隔离的真实 DSH 宿主（独立 DSH_HOME，不碰用户数据）
-pnpm qa:native     # 手机视口验收：配对后必须加载宿主界面并能对话
-pnpm qa:browser    # 完整链路：面板、配对、官方界面、上传、审批、设备撤销
+pnpm qa:host       # 启动隔离 DSH；保持运行，停止时清理本轮数据
+# 另一终端
+pnpm qa:browser    # ego-browser：面板、配对、宿主就绪、复制、重命名、预览与撤销
 ```
 
-`pnpm qa:*` 需要先运行 `pnpm qa:host` 并在 `.qa/connection.json` 写入宿主地址。
+`qa:browser` 需要 PATH 中的 `ego-browser.exe`。先运行 `ego-browser skill` 阅读当前版本指南。宿主和浏览器只使用本轮 `.qa/smoke/` 数据；不配置真实模型、不向模型发送请求。结束后关闭测试宿主，移除本轮认证地址、日志和截图。
+
+按问题选择最小验证范围。测试通过仅表示对应场景通过；浏览器窄屏模拟不等于手机真机验收。接口和覆盖范围见 `docs/verification.md`。
 
 ## 致谢
 

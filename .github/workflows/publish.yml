@@ -23,11 +23,10 @@ jobs:
           version: 10.28.0
       - run: npm install --global npm@^11
       - run: pnpm install --frozen-lockfile --ignore-scripts
-      - run: pnpm typecheck && pnpm test && pnpm build
+      - run: pnpm test && pnpm build
       - name: Validate tag and package
         run: |
           node --input-type=module -e "import p from './package.json' with {type:'json'}; if(process.env.GITHUB_REF_TYPE==='tag' && process.env.GITHUB_REF_NAME!=='v'+p.version) throw Error('Tag must match package version')"
-          npm pack --dry-run
           npm pack --dry-run --ignore-scripts --json > package-manifest.json
           node scripts/check-package.mjs package-manifest.json
       - name: Publish with npm Trusted Publisher

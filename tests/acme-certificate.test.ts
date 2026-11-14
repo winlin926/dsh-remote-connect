@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { X509Certificate } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { rename } from 'node:fs/promises'
@@ -46,6 +46,18 @@ describe('deployed certificate inspection', () => {
 })
 
 describe('certificate manager', () => {
+  it('shares one issuance between concurrent forced renewals', async () => {
+    const paths = workspace()
+    let issued = 0, release!: () => void
+    const waiting = new Promise<void>(resolve => { release = resolve })
+    const manager = createCertificateManager({ ...paths, domain: () => 'dsh.example.com', issue: async () => { issued++; await waiting; return { certificate: ISSUED, key: 'PRIVATE KEY' } } })
+    const requests = [manager.ensure(true), manager.ensure(true), manager.ensure(true)]
+    try {
+      expect(requests[0]).toBe(requests[1])
+      expect(requests[0]).toBe(requests[2])
+      await vi.waitFor(() => expect(issued).toBe(1))
+    } finally { release(); await Promise.all(requests) }
+  })
   it('reports no domain until one is configured', async () => {
     const paths = workspace(), manager = createCertificateManager({ ...paths, domain: () => undefined })
     const status = await manager.status()

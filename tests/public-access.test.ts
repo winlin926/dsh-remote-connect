@@ -49,8 +49,25 @@ describe('connection password and public probe', () => {
     await access.saveDomain('https://dsh.example.com')
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'another-service' })))
     expect((await access.checkDomain()).reachable).toBe(false)
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'dsh-remote-connect' })))
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'dsh-remote-connect', instanceId: 'another-computer' })))
+    expect((await access.checkDomain()).reachable).toBe(false)
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ service: 'dsh-remote-connect', instanceId: access.instanceId })))
     expect((await access.checkDomain()).reachable).toBe(true)
+  })
+  it('uses one total timeout for retries and returns its own failed result after a domain change', async () => {
+    const root = await folder(), access = new PublicAccess({ storage: join(root, 'new'), legacyStorage: join(root, 'legacy'), certificateDir: join(root, 'cert'), proxy: async () => undefined })
+    await access.saveDomain('https://old.example.com')
+    const signals: AbortSignal[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init: RequestInit) => {
+      signals.push(init.signal as AbortSignal)
+      await access.saveDomain('https://new.example.com')
+      throw new Error('unreachable')
+    }))
+    const result = await access.checkDomain()
+    expect(result).toMatchObject({ reachable: false, error: 'unreachable' })
+    expect(signals).toHaveLength(2)
+    expect(signals[0]).toBe(signals[1])
+    expect(access.lastCheck).toBeUndefined()
   })
 })
 
@@ -79,7 +96,7 @@ describe('fixed-domain gateway admission', () => {
       await mkdir(access.challengeDir, { recursive: true }); await writeFile(join(access.challengeDir, 'valid-token'), 'proof')
       expect((await call('/.well-known/acme-challenge/valid-token')).body).toBe('proof')
       expect((await call('/.well-known/acme-challenge/..%2Fsecret')).status).toBe(403)
-      expect((await call('/rc/health')).body).toContain('dsh-remote-connect')
+      expect(JSON.parse((await call('/rc/health')).body)).toEqual({ ok: true, service: 'dsh-remote-connect', instanceId: access.instanceId })
       expect((await call('/rc/pair/verify', 'POST', origin, { pin: 'wrong' })).status).toBe(401)
       const verify = await call('/rc/pair/verify', 'POST', origin, { pin: '051109' })
       expect(verify.status).toBe(200)
@@ -94,6 +111,7 @@ describe('fixed-domain gateway admission', () => {
       pairing.approve(claim.id)
       const approved = await call('/rc/pair/claim', 'POST', { ...origin, cookie: entry }, { id: claim.id, key: claim.key })
       expect(approved.status).toBe(200)
+      expect((await call('/rc/pair/claim', 'POST', { ...origin, cookie: entry }, { id: claim.id, key: claim.key })).cookie).toBe(approved.cookie)
       const device = approved.cookie
       expect((await call('/api/echo', 'GET', { cookie: device })).status).toBe(200)
       gateway.revokeEntries()

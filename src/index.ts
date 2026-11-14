@@ -240,16 +240,6 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         case 'status': return status(local)
         // What the always-mounted sidebar entry polls: no QR code is rendered for it.
         case 'requests': return { enabled, requests: local ? pairing.requests() : [] }
-        case 'scheduleCapabilities': return { available: !!ready.get('schedule') }
-        case 'scheduleCreate': {
-          const service = ready.get('schedule') as { create(sessionId: string, request: unknown): Promise<unknown> } | undefined
-          if (!service) throw new Error('此宿主尚未启用自动化服务。请在插件管理中启用实验性自动化插件。')
-          if (typeof input.sessionId !== 'string' || !input.request || typeof input.request !== 'object') throw new Error('自动化请求格式不正确。')
-          // rc.3 exposes list/update/delete over Remote but no create RPC.
-          // Delegate directly to the existing Host service, retaining its validation,
-          // persistence and scheduling semantics; no second task database.
-          return service.create(input.sessionId, input.request)
-        }
         case 'start': if (!enabled) await start(); return status(local)
         case 'switch': {
           if (busy) throw new Error('连接操作正在进行，请稍后再试。')
@@ -326,8 +316,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           if (!access?.domain) throw new Error('请先保存固定公网域名。')
           if (!enabled || activeMode !== 'public') throw new Error('请先开启“任意网络”，再申请证书。')
           if (gateway?.port !== PUBLIC_PORT) throw new Error('公网监听端口与固定域名转发目标不一致，请先修复端口配置。')
-          const domain = access.domain
-          void access.renew(domain, true).catch(() => undefined)
+          void access.certificates.ensure(true).catch(() => undefined)
           return status(local)
         }
         default: throw new Error('未知的远程控制操作。')

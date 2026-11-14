@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 const random = () => randomBytes(32).toString('base64url')
@@ -14,7 +14,7 @@ export interface Device {
   /** The address the device paired through, shown in the panel; the browser scopes its cookie to that origin. */
   host?: string
 }
-interface Pending { id: string; name: string; host?: string; expiresAt: number; keyHash: string; state: 'pending' | 'approved' | 'rejected'; credential?: string }
+interface Pending { id: string; name: string; host?: string; expiresAt: number; keyHash: string; state: 'pending' | 'approved' | 'rejected'; credential?: string; collected?: boolean }
 
 /** A name a person can tell devices apart by: model (or system) and browser, from the User-Agent. */
 export function deviceName(userAgent: string, reported?: string): string {
@@ -33,7 +33,6 @@ export function deviceName(userAgent: string, reported?: string): string {
   return browser ? `${device} · ${browser}` : device
 }
 export interface PairingOptions { file: string; now?: () => number; onRevoke?: (id: string) => void; idleMs?: number; isOnline?: (id: string) => boolean }
-/** Devices kept on record. A temporary public address changes on every start, and each one needs a new pairing. */
 export const MAX_DEVICES = 32
 
 /** Only hashes of device secrets reach disk. Pending claims live in memory. */
@@ -59,15 +58,17 @@ export class PairingService {
   private save(): void {
     mkdirSync(dirname(this.options.file), { recursive: true })
     const temporary = `${this.options.file}.${randomUUID()}.tmp`
-    writeFileSync(temporary, JSON.stringify({ version: 1, devices: [...this.devices.values()] }), { mode: 0o600 })
-    renameSync(temporary, this.options.file)
+    try {
+      writeFileSync(temporary, JSON.stringify({ version: 1, devices: [...this.devices.values()] }), { mode: 0o600 })
+      renameSync(temporary, this.options.file)
+    } catch (error) { if (existsSync(temporary)) unlinkSync(temporary); throw error }
   }
   private expire(): void {
     const expired = [...this.devices.values()].filter(d => this.now() - d.lastSeenAt >= this.idleMs)
     if (expired.length) {
       for (const device of expired) this.devices.delete(device.id)
-      this.save()
-      for (const device of expired) this.options.onRevoke?.(device.id)
+      try { this.save() } catch (error) { for (const device of expired) this.devices.set(device.id, device); throw error }
+      for (const device of expired) this.disconnectDevice(device.id)
     }
     for (const [id, claim] of this.pending) if (this.now() >= claim.expiresAt) this.pending.delete(id)
   }
@@ -82,7 +83,7 @@ export class PairingService {
   request(token: string, userAgent: string, host?: string, model?: string): { id: string; key: string; expiresAt: number } {
     this.expire()
     if (!this.token || this.now() >= this.token.expiresAt || !matches(token, this.token.hash)) throw new Error('二维码已过期或已刷新，请重新扫码。')
-    if (this.pending.size >= 16) throw new Error('等待配对的设备过多，请稍后再试。')
+    if (this.outstanding() >= 16) throw new Error('等待配对的设备过多，请稍后再试。')
     const id = randomUUID(), key = random(), expiresAt = Math.min(this.now() + 5 * 60_000, this.token.expiresAt)
     this.pending.set(id, { id, name: deviceName(userAgent, model), host: host?.toLowerCase(), expiresAt, keyHash: hash(key), state: 'pending' })
     return { id, key, expiresAt }
@@ -92,23 +93,32 @@ export class PairingService {
     return [...this.pending.values()].filter(p => p.state === 'pending').map(({ id, name, expiresAt }) => ({ id, name, expiresAt }))
   }
   /** Claims a new ticket would strand: waiting for approval, or approved but not yet collected. */
-  outstanding(): number { this.expire(); return [...this.pending.values()].filter(p => p.state !== 'rejected').length }
+  outstanding(): number { this.expire(); return [...this.pending.values()].filter(p => p.state === 'pending' || p.state === 'approved' && !p.collected).length }
   approve(id: string): void {
     this.expire()
     const claim = this.pending.get(id)
     if (!claim || claim.state !== 'pending') throw new Error('配对请求已失效。')
-    if (this.devices.size >= MAX_DEVICES) {
-      // Make room by dropping the device unused for longest, never one that is connected now.
-      const idle = [...this.devices.values()].filter(d => !this.options.isOnline?.(d.id)).sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
-      if (!idle) throw new Error(`已有 ${MAX_DEVICES} 台设备在线，请先撤销不再使用的设备。`)
-      this.revoke(idle.id)
-    }
-    const deviceId = randomUUID(), secret = random()
-    const device: Device = { id: deviceId, name: claim.name, hash: hash(secret), createdAt: this.now(), lastSeenAt: this.now(), ...(claim.host ? { host: claim.host } : {}) }
-    this.devices.set(deviceId, device)
-    try { this.save() } catch (error) { this.devices.delete(deviceId); throw error }
+    const credential = this.registerDevice(claim.name, claim.host)
     claim.state = 'approved'
-    claim.credential = `${deviceId}.${secret}`
+    claim.credential = credential
+  }
+  private registerDevice(name: string, host?: string): string {
+    let replaced: Device | undefined
+    if (this.devices.size >= MAX_DEVICES) {
+      replaced = [...this.devices.values()].filter(d => !this.options.isOnline?.(d.id)).sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
+      if (!replaced) throw new Error(`已有 ${MAX_DEVICES} 台设备在线，请先撤销不再使用的设备。`)
+    }
+    const deviceId = randomUUID(), secret = random(), now = this.now()
+    const device: Device = { id: deviceId, name, hash: hash(secret), createdAt: now, lastSeenAt: now, ...(host ? { host: host.toLowerCase() } : {}) }
+    if (replaced) this.devices.delete(replaced.id)
+    this.devices.set(deviceId, device)
+    try { this.save() } catch (error) {
+      this.devices.delete(deviceId)
+      if (replaced) this.devices.set(replaced.id, replaced)
+      throw error
+    }
+    if (replaced) this.disconnectDevice(replaced.id)
+    return `${deviceId}.${secret}`
   }
   reject(id: string): void {
     const claim = this.pending.get(id)
@@ -119,22 +129,14 @@ export class PairingService {
     const claim = this.pending.get(id)
     if (!claim || !matches(key, claim.keyHash)) throw new Error('配对请求已失效。')
     const result = { state: claim.state, credential: claim.credential }
-    if (claim.state !== 'pending') this.pending.delete(id)
+    if (claim.state === 'approved') claim.collected = true
+    else if (claim.state === 'rejected') this.pending.delete(id)
     return result
   }
   /** Password-direct pairing: register the device right away — no QR token, no claim, no approval. */
   pairDirectly(userAgent: string, host?: string, model?: string): string {
     this.expire()
-    if (this.devices.size >= MAX_DEVICES) {
-      const idle = [...this.devices.values()].filter(d => !this.options.isOnline?.(d.id)).sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
-      if (!idle) throw new Error(`已有 ${MAX_DEVICES} 台设备在线，请先撤销不再使用的设备。`)
-      this.revoke(idle.id)
-    }
-    const deviceId = randomUUID(), secret = random()
-    const device: Device = { id: deviceId, name: deviceName(userAgent, model), hash: hash(secret), createdAt: this.now(), lastSeenAt: this.now(), ...(host ? { host: host.toLowerCase() } : {}) }
-    this.devices.set(deviceId, device)
-    try { this.save() } catch (error) { this.devices.delete(deviceId); throw error }
-    return `${deviceId}.${secret}`
+    return this.registerDevice(deviceName(userAgent, model), host)
   }
   authenticate(credential: string | undefined): Device | undefined {
     this.expire()
@@ -157,6 +159,9 @@ export class PairingService {
     if (!previous) return
     this.devices.delete(id)
     try { this.save() } catch (error) { this.devices.set(id, previous); throw error }
+    this.disconnectDevice(id)
+  }
+  private disconnectDevice(id: string): void {
     this.options.onRevoke?.(id)
     // Do not let an approved-but-unclaimed request restore a revoked device.
     for (const [key, claim] of this.pending) if (claim.credential?.startsWith(`${id}.`)) this.pending.delete(key)
@@ -173,5 +178,11 @@ export class PairingService {
   prune(gone: (device: Omit<Device, 'hash'>) => boolean): void {
     for (const device of [...this.devices.values()]) if (gone(device)) { try { this.revoke(device.id) } catch { /* kept until the next start */ } }
   }
-  revokeAll(): void { for (const id of [...this.devices.keys()]) this.revoke(id); this.invalidate() }
+  revokeAll(): void {
+    const previous = [...this.devices.values()]
+    this.devices.clear()
+    try { this.save() } catch (error) { for (const device of previous) this.devices.set(device.id, device); throw error }
+    for (const device of previous) this.disconnectDevice(device.id)
+    this.invalidate()
+  }
 }

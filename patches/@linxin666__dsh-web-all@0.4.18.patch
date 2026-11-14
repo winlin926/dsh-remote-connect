@@ -1,0 +1,12 @@
+diff --git a/lib/client.js b/lib/client.js
+index 94ffa76ff02a8e843c704cea75ffcf5cb14d4dc7..7451e6c035e8806b1863cf3b8213eb2450911149 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -168,7 +168,6 @@ html[data-platform="darwin"] body > :is(
+     height: 100dvh;
+     min-height: 100dvh;
+     max-height: 100dvh;
+-    grid-template-columns: minmax(0, 1fr) !important;
+     grid-template-rows: 100%;
+     padding-bottom: env(safe-area-inset-bottom);
+   }

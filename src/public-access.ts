@@ -1,4 +1,4 @@
-import { randomInt, timingSafeEqual } from 'node:crypto'
+import { randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { readPublicUrl, normalizePublicUrl, writePublicUrl } from './public-url-settings.js'
@@ -26,6 +26,7 @@ export interface PublicAccessOptions {
 }
 
 export class PublicAccess {
+  readonly instanceId = randomUUID()
   domain: string | null
   readonly challengeDir: string
   readonly certificates: CertificateManager
@@ -36,7 +37,6 @@ export class PublicAccess {
   private currentPin?: string
   private readonly failures = new Map<string, number[]>()
   private allFailures: number[] = []
-  private renewals = new Map<string, Promise<void>>()
   private active = false
   lastCheck?: PublicUrlCheck
 
@@ -138,37 +138,33 @@ export class PublicAccess {
     if (!this.domain) throw new Error('尚未配置公网域名。')
     const domain = this.domain
     const address = domain + '/rc/health'
+    const signal = AbortSignal.timeout(24_000)
     let lastError = '网络请求失败'
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 2 && !signal.aborted; attempt++) {
       try {
-        const response = await this.fetch(address, { redirect: 'manual', signal: AbortSignal.timeout(12_000) })
-        const identity = response.status === 200 ? await response.json().catch(() => null) : null
-        const reachable = response.status === 200 && identity?.service === 'dsh-remote-connect'
+        const response = await this.fetch(address, { redirect: 'manual', signal })
+        const identity = response.status === 200 ? await response.json().catch(() => { signal.throwIfAborted(); return null }) : null
+        const reachable = response.status === 200 && identity?.service === 'dsh-remote-connect' && identity.instanceId === this.instanceId
         const error = reachable ? null : response.status >= 500 ? `HTTP ${response.status}` : '域名没有指向当前远程控制网关'
         const check = { at: this.now(), reachable, status: response.status, error }
         if (domain === this.domain) this.lastCheck = check
         return check
       } catch (error) { lastError = error instanceof Error ? error.message : String(error) }
     }
-    if (domain === this.domain) this.lastCheck = { at: this.now(), reachable: false, status: null, error: lastError }
-    return this.lastCheck!
+    const check = { at: this.now(), reachable: false, status: null, error: lastError }
+    if (domain === this.domain) this.lastCheck = check
+    return check
   }
 
   private async fetch(input: string | URL, init?: RequestInit): Promise<Response> {
     const address = await this.options.proxy()
+    init?.signal?.throwIfAborted()
     if (!this.outbound || this.outbound.address !== address) {
       const previous = this.outbound
       this.outbound = { address, client: createOutboundProxy(address) }
       await previous?.client.close()
     }
     return this.outbound.client.fetch(input, init)
-  }
-
-  async renew(domain: string, force: boolean): Promise<void> {
-    const previous = this.renewals.get(domain)
-    const task = (previous ?? Promise.resolve()).then(() => this.certificates.ensure(force).then(() => undefined))
-    this.renewals.set(domain, task)
-    try { await task } finally { if (this.renewals.get(domain) === task) this.renewals.delete(domain) }
   }
 
   async resetOutbound(): Promise<void> {
