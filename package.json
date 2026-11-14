@@ -1,6 +1,6 @@
 {
   "name": "@winlin926/dsh-remote-connect",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "手机浏览器扫码连接电脑上的 DeepSeek Harness：同一 Wi-Fi 扫码配对，或经转发通道远程进入；继续对话、处理工具审批、预览工作区文件。",
   "type": "module",
   "license": "MIT",
