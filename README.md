@@ -13,12 +13,18 @@
 <p align="center"><strong>电脑上：开启连接、扫码配对、管理已授权设备</strong></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-session.png" alt="手机浏览器中的 DSH 新会话界面" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-session.png" alt="手机上的 DSH 新会话界面" width="300" />
   &nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-settings.png" alt="手机浏览器中的 DSH 通用设置界面" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-chat.jpg" alt="手机上的会话：对话、上下文注入与输入框" width="300" />
 </p>
 
-<p align="center"><strong>手机会话</strong> · <strong>通用设置</strong></p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-tools.jpg" alt="手机上的「开始」页：文件、代码审查、Git、终端与浏览器入口" width="300" />
+  &nbsp;&nbsp;
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-settings.png" alt="手机上的 DSH 通用设置界面" width="300" />
+</p>
+
+<p align="center"><strong>手机上：新会话</strong> · <strong>对话</strong> · <strong>工作区工具</strong> · <strong>通用设置</strong></p>
 
 插件自身的界面就是电脑端的这个面板：局域网 / 公网入口、二维码配对、已授权设备的查看与重命名撤销都在这里。配对完成后，手机浏览器加载的是电脑宿主本身的界面——选择工作区与模型、继续对话，或调整语言、主题和字号，界面由电脑上的 DSH 版本及已启用扩展共同决定。
 
