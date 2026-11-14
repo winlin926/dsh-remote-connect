@@ -7,6 +7,12 @@
 ## 界面预览
 
 <p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/desktop-connect.png" alt="电脑上的远程连接面板：开启连接、扫码配对与管理已授权设备" width="760" />
+</p>
+
+<p align="center"><strong>电脑上：开启连接、扫码配对、管理已授权设备</strong></p>
+
+<p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-session.png" alt="手机浏览器中的 DSH 新会话界面" width="300" />
   &nbsp;&nbsp;
   <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-settings.png" alt="手机浏览器中的 DSH 通用设置界面" width="300" />
@@ -14,16 +20,7 @@
 
 <p align="center"><strong>手机会话</strong> · <strong>通用设置</strong></p>
 
-在手机上选择工作区与模型、继续对话，或调整语言、主题和字号。界面由电脑上的 DSH 版本及已启用扩展共同决定。
-
-<details>
-<summary><strong>查看电脑端：连接与设备授权管理</strong></summary>
-
-开启局域网或公网入口，扫描二维码配对，并在电脑上批准新设备、管理已授权设备。
-
-![电脑端远程连接面板](https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/desktop-connect.png)
-
-</details>
+插件自身的界面就是电脑端的这个面板：局域网 / 公网入口、二维码配对、已授权设备的查看与重命名撤销都在这里。配对完成后，手机浏览器加载的是电脑宿主本身的界面——选择工作区与模型、继续对话，或调整语言、主题和字号，界面由电脑上的 DSH 版本及已启用扩展共同决定。
 
 ## 功能一览
 
