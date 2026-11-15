@@ -1,5 +1,7 @@
 import { createServer, request as httpRequest } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse, ClientRequest } from 'node:http'
+import { createServer as createSecureServer, Server as HttpsServer } from 'node:https'
+import { createSecureContext } from 'node:tls'
 import { createHash, randomBytes } from 'node:crypto'
 import { open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -14,6 +16,7 @@ import { ACME_CHALLENGE_PREFIX } from './acme-certificate.js'
 import type { PublicAccess } from './public-access.js'
 import { BOOT_PATH, injectBoot } from './boot.js'
 import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from './workspace-preview.js'
+import type { LanTlsMaterial } from './lan-tls.js'
 
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** Set by the gateway on every request it forwards; the Host's local-only handlers refuse it. */
@@ -36,6 +39,7 @@ export interface GatewayOptions {
   boot: () => string
   /** Addresses this computer can currently be reached at (LAN mode); read on every request, since they change with the network. */
   addresses?: () => string[]
+  lanTls?: LanTlsMaterial
   /** Fixed-domain public entry and its additional password gate. */
   public?: () => PublicAccess | undefined
   /** Password-direct pairing switch; read on every request so panel changes apply at once. */
@@ -65,7 +69,8 @@ export function closeCode(code: number): number {
 
 /** Authenticates every remote request before the privileged loopback leg. */
 export class Gateway {
-  private server?: Server
+  private server?: Server | HttpsServer
+  private lanTls?: LanTlsMaterial
   private readonly sockets = new Set<Duplex>()
   private readonly active = new Map<string, Set<() => void>>()
   // `ws` is loaded when the gateway is opened, not when the plugin is: most Host starts never open one.
@@ -76,7 +81,7 @@ export class Gateway {
   private readonly previews = new WorkspacePreviews()
   private readonly entries = new Map<string, number>()
   port = 0
-  constructor(private readonly options: GatewayOptions) {}
+  constructor(private readonly options: GatewayOptions) { this.lanTls = options.lanTls }
   /** Compression is on unless the user turns it off; both legs read it once per connection. */
   private get deflate(): boolean { return this.options.websocketCompression !== false }
   allowAuthority(authority: string): void { this.authorities.add(authority.toLowerCase()) }
@@ -84,23 +89,36 @@ export class Gateway {
   private validHost(req: IncomingMessage): boolean {
     const host = req.headers.host?.toLowerCase()
     if (!host) return false
+    if (this.lanTls) return host === new URL(this.lanTls.origin).host
     const publicHost = this.options.public?.()?.domain
     return this.authorities.has(host) || (publicHost !== null && publicHost !== undefined && host === new URL(publicHost).host.toLowerCase()) || (this.options.addresses?.().some(address => host === `${address}:${this.port}`) ?? false)
   }
   async listen(host: '127.0.0.1' | '0.0.0.0', port = 0): Promise<number> {
     if (this.server) throw new Error('远程网关已启动。')
+    if (this.lanTls && port !== Number(new URL(this.lanTls.origin).port || 443)) throw new Error('局域网 HTTPS 监听端口必须与配置地址一致。')
     this.ws ??= await import('ws')
     this.wss ??= new this.ws.WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, perMessageDeflate: this.deflate })
-    const server = this.server = createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: '请求处理失败，请在本机查看状态。' }); else res.destroy() }) })
+    const listener = (req: IncomingMessage, res: ServerResponse): void => { void this.handle(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: '请求处理失败，请在本机查看状态。' }); else res.destroy() }) }
+    const server = this.lanTls ? createSecureServer({ cert: this.lanTls.cert, key: this.lanTls.key }, listener) : createServer(listener)
+    this.server = server
     server.on('connection', socket => { this.sockets.add(socket); socket.on('error', () => {}); socket.once('close', () => this.sockets.delete(socket)) })
     server.on('upgrade', (req, socket, head) => { socket.on('error', () => {}); void this.upgrade(req, socket, head).catch(() => socket.destroy()) })
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve() }) })
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('无法读取网关端口。')
     this.port = address.port
-    this.allowAuthority(`127.0.0.1:${this.port}`); this.allowAuthority(`localhost:${this.port}`)
+    if (!this.lanTls) { this.allowAuthority(`127.0.0.1:${this.port}`); this.allowAuthority(`localhost:${this.port}`) }
     return this.port
   }
+  reloadLanCertificate(material: LanTlsMaterial): void {
+    if (!(this.server instanceof HttpsServer) || !this.lanTls) throw new Error('局域网 HTTPS 尚未启动。')
+    if (material.origin !== this.lanTls.origin) throw new Error('重新加载证书不能改变局域网 HTTPS 地址。')
+    createSecureContext({ cert: material.cert, key: material.key })
+    this.server.setSecureContext({ cert: material.cert, key: material.key })
+    this.lanTls = material
+  }
+  private sameOrigin(req: IncomingMessage): boolean { return sameOrigin(req, this.lanTls?.origin) }
   private publicRequest(req: IncomingMessage): boolean {
+    if (this.lanTls) return false
     const access = this.options.public?.()
     if (!access?.domain) return false
     if (req.headers.host?.toLowerCase() === new URL(access.domain).host.toLowerCase()) return true
@@ -174,7 +192,7 @@ export class Gateway {
     }
     if (url.pathname === '/rc/pair/verify') {
       const access = this.options.public?.()
-      if (!publicRequest || !access || req.method !== 'POST' || !sameOrigin(req)) { json(res, 403, { error: '仅公网入口需要连接密码。' }); return }
+      if (!publicRequest || !access || req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '仅公网入口需要连接密码。' }); return }
       if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
       try {
         const input = await body(req), result = access.verifyPin(String(input.pin ?? ''), this.clientAddress(req))
@@ -191,7 +209,7 @@ export class Gateway {
     }
     if (url.pathname === '/rc/pair/direct') {
       const access = this.options.public?.()
-      if (!publicRequest || !access || req.method !== 'POST' || !sameOrigin(req)) { json(res, 403, { error: '仅公网入口支持密码直连配对。' }); return }
+      if (!publicRequest || !access || req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '仅公网入口支持密码直连配对。' }); return }
       if (!this.options.directPairing?.()) { json(res, 403, { error: '密码直连配对未开启，请扫码配对。', code: 'direct_disabled' }); return }
       if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
       try {
@@ -201,21 +219,21 @@ export class Gateway {
           json(res, result.retryAfter ? 429 : 401, { error: result.retryAfter ? '尝试次数过多，请稍后再试。' : '连接密码不正确。', retryAfter: result.retryAfter }); return
         }
         const credential = this.options.pairing.pairDirectly(req.headers['user-agent'] ?? '', req.headers.host, typeof input.model === 'string' ? input.model : undefined)
-        res.setHeader('set-cookie', this.cookieHeader(req, credential, publicRequest))
+        res.setHeader('set-cookie', this.cookieHeader(req, credential, !!this.lanTls || publicRequest))
         json(res, 200, { ok: true })
       } catch (error) { json(res, 400, { error: error instanceof Error ? error.message : '配对失败。' }) }
       return
     }
     if (url.pathname === '/rc/pair/request' || url.pathname === '/rc/pair/claim') {
       if (publicRequest && !this.hasEntry(req)) { json(res, 403, { error: '请先输入连接密码。', code: 'password_required' }); return }
-      if (req.method !== 'POST' || !sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
+      if (req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
       if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
       try {
         const input = await body(req)
         if (url.pathname.endsWith('/request')) json(res, 200, this.options.pairing.request(String(input.token ?? ''), req.headers['user-agent'] ?? '', req.headers.host, typeof input.model === 'string' ? input.model : undefined))
         else {
           const result = this.options.pairing.claim(String(input.id ?? ''), String(input.key ?? ''))
-          if (result.credential) res.setHeader('set-cookie', this.cookieHeader(req, result.credential, publicRequest))
+          if (result.credential) res.setHeader('set-cookie', this.cookieHeader(req, result.credential, !!this.lanTls || publicRequest))
           json(res, 200, { state: result.state })
         }
       } catch (error) { json(res, 400, { error: error instanceof Error ? error.message : '配对失败。' }) }
@@ -224,7 +242,7 @@ export class Gateway {
     // A boot that only fails on the phone would otherwise be undebuggable: accept one small
     // diagnostic report per page load even from unpaired devices, and note who did report.
     if (url.pathname === '/rc/boot-report') {
-      if (req.method !== 'POST' || !sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
+      if (req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
       if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
       try {
         const reporter = this.device(req)
@@ -237,7 +255,7 @@ export class Gateway {
       const preview = this.previews.match(url.pathname)
       // Images and styles from an opaque origin may be marked cross-site without an Origin
       // header. The unguessable, read-only capability path is their authorization.
-      if (!['GET', 'HEAD'].includes(req.method ?? '') || (req.headers.origin && req.headers.origin !== 'null' && !sameOrigin(req))) { json(res, 403, { error: '拒绝跨站请求。' }); return }
+      if (!['GET', 'HEAD'].includes(req.method ?? '') || (req.headers.origin && req.headers.origin !== 'null' && !this.sameOrigin(req))) { json(res, 403, { error: '拒绝跨站请求。' }); return }
       if (!preview) { json(res, 404, { error: '预览已过期，请在对话中重新打开。' }); return }
       const untrack = this.track(preview.deviceId, () => { req.destroy(); res.destroy() }); res.once('close', untrack)
       await this.previews.serve(preview, req, res)
@@ -256,9 +274,9 @@ export class Gateway {
     }
     // Arriving from elsewhere may only open the app page itself; that reads nothing and changes nothing.
     const opening = req.method === 'GET' && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document' && (url.pathname === '/' || url.pathname === '/index.html')
-    if (!sameOrigin(req) && !opening) { json(res, 403, { error: '拒绝跨站请求。' }); return }
+    if (!this.sameOrigin(req) && !opening) { json(res, 403, { error: '拒绝跨站请求。' }); return }
     // Renew the browser expiry along with the durable 30-day idle authorization.
-    res.setHeader('set-cookie', this.cookieHeader(req, cookie(req)!, publicRequest))
+    res.setHeader('set-cookie', this.cookieHeader(req, cookie(req)!, !!this.lanTls || publicRequest))
     const untrack = this.track(device.id, () => { req.destroy(); res.destroy() }); res.once('close', untrack)
     if (decodeURIComponent(url.pathname) === MANAGE_PATH) {
       if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return }
@@ -371,7 +389,7 @@ export class Gateway {
   }
   private async upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const device = this.device(req)
-    if (!device || !this.validHost(req) || !sameOrigin(req) || !safePath(req.url ?? '/')) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return }
+    if (!device || !this.validHost(req) || !this.sameOrigin(req) || !safePath(req.url ?? '/')) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return }
     const url = new URL(req.url ?? '/', 'http://gateway.invalid')
     if (url.pathname === '/rc/sse') {
       const target = url.searchParams.get('path') ?? ''

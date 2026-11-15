@@ -23,7 +23,7 @@ export function gzipFor(req: IncomingMessage | undefined, type: string | undefin
   // An event stream must reach the browser as it is written.
   return !!type && !type.includes('event-stream') && /^(text\/|application\/(javascript|json|manifest\+json|xml)|image\/svg)/.test(type)
 }
-export function sameOrigin(req: IncomingMessage): boolean {
+export function sameOrigin(req: IncomingMessage, origin?: string): boolean {
   if (!req.headers.origin) return req.headers['sec-fetch-site'] !== 'cross-site'
-  try { return new URL(req.headers.origin).host === req.headers.host } catch { return false }
+  try { const source = new URL(req.headers.origin); return origin ? source.origin === origin : source.host === req.headers.host } catch { return false }
 }
