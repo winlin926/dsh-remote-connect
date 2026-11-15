@@ -213,14 +213,15 @@ function relatedAddressSummary(address: string | undefined): Pick<RtcCandidateSu
 }
 
 function summarizeIpv4Scope(parts: number[]): RtcAddressScope {
-  if (parts[0] === 0 || parts[0] >= 240) return 'reserved'
-  if (parts[0] === 127) return 'loopback'
-  if (parts[0] === 169 && parts[1] === 254) return 'link-local'
-  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return 'cgnat'
-  if (parts[0] >= 224) return 'reserved'
-  if (parts[0] === 10) return 'private'
-  if (parts[0] === 192 && parts[1] === 168) return 'private'
-  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return 'private'
+  const [first = 0, second = 0] = parts
+  if (first === 0 || first >= 240) return 'reserved'
+  if (first === 127) return 'loopback'
+  if (first === 169 && second === 254) return 'link-local'
+  if (first === 100 && second >= 64 && second <= 127) return 'cgnat'
+  if (first >= 224) return 'reserved'
+  if (first === 10) return 'private'
+  if (first === 192 && second === 168) return 'private'
+  if (first === 172 && second >= 16 && second <= 31) return 'private'
   return 'public'
 }
 
