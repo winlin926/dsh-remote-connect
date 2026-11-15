@@ -178,6 +178,31 @@ it('reports ready only after the official boot DOM is replaced by the applicatio
   expect(f.elements.some(element => element.id === 'dsh-rc-boot-errors')).toBe(false)
 })
 
+it('shows the version check before the official boot node arrives and hands it over', () => {
+  const f = bootPage()
+  const early = f.elements.find(element => element.id === 'dsh-rc-boot-check')!
+  expect(early.textContent).toBe('正在核对插件版本…')
+  expect(f.document.body.children).toContain(early)
+  const { boot } = f.mountBoot()
+  expect(early.parentElement).toBeNull()
+  expect(boot.textContent).toContain('正在核对插件版本')
+  // A root that already holds a node is not the application while the official boot node is still there.
+  f.root.append(f.createElement('main')); f.mutate()
+  expect(f.report()).toMatchObject({ result: 'pending', mounted: false })
+})
+
+it('says the connection is being restored when the Host goes away and clears it when it answers', () => {
+  const f = bootPage()
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  const banner = f.elements.find(element => element.id === 'dsh-rc-reconnecting')!
+  expect(banner.attributes.role).toBe('status')
+  expect(banner.textContent).toContain('与电脑的连接已断开，正在重连')
+  banner.children.find(child => child.tagName === 'BUTTON')!.onclick!()
+  expect(f.reloads()).toBe(1)
+  f.fire('dsh-rc-online', new Event('dsh-rc-online'))
+  expect(banner.parentElement).toBeNull()
+})
+
 it('offers reload only for the official final failure and never for an intermediate resource error', () => {
   const f = bootPage(), { boot, spinner, card } = f.mountBoot()
   f.fire('error', { target: { tagName: 'LINK', href: '/plugins/??one/client.js&rev=x' } })

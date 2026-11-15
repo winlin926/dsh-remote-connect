@@ -102,6 +102,16 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     clearTimeout(reportTimer)
     reportTimer = setTimeout(sendReport, delay)
   }
+  /** The Host's boot node is where status belongs, and it does not exist yet on a cold start. */
+  function versionCheck(show: boolean): void {
+    const existing = document.getElementById('dsh-rc-boot-check')
+    if (!show) { existing?.remove(); return }
+    if (existing) return
+    const line = document.createElement('div'); line.id = 'dsh-rc-boot-check'; line.setAttribute('role', 'status')
+    line.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483646;padding:8px 14px;border-radius:999px;background:#242938;color:#fff;font:12px/1.6 system-ui,sans-serif;pointer-events:none;text-align:center'
+    line.textContent = '正在核对插件版本…'
+    ;(document.body ?? document.documentElement).append(line)
+  }
   const updateBoot = (): void => {
     if (result === 'ready' || result === 'failed') return
     const root = document.getElementById('root')
@@ -109,11 +119,11 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     if (!boot) {
       // The renderer replaces its boot DOM after the first React layout effect.
       if (observedBoot && root?.childElementCount) {
-        phase = result = 'ready'; observer.disconnect(); scheduleReport(100)
-      }
+        versionCheck(false); phase = result = 'ready'; observer.disconnect(); scheduleReport(100)
+      } else if (!observedBoot) versionCheck(true)
       return
     }
-    observedBoot = true; result = 'pending'
+    observedBoot = true; result = 'pending'; versionCheck(false)
     const failed = !boot.querySelector('[data-dsh-boot-spinner]') && /Failed to load plugins|插件加载失败/.test(boot.textContent ?? '')
     if (failed) { phase = result = 'failed'; recordError('official-startup-failure') }
     else phase = loading ? 'loading' : completedResources ? 'initializing' : 'checking'
@@ -183,6 +193,22 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     // The overlay covers the page, so the keyboard and the screen reader start on its only action.
     retry.focus()
   }
+  /** A restarted or sleeping Host closes the socket; without this line the phone simply looks frozen. */
+  function connectionBanner(offline: boolean): void {
+    const existing = document.getElementById('dsh-rc-reconnecting')
+    if (!offline) { existing?.remove(); return }
+    if (existing) return
+    const bar = document.createElement('div'); bar.id = 'dsh-rc-reconnecting'; bar.setAttribute('role', 'status'); bar.setAttribute('aria-live', 'polite')
+    bar.style.cssText = 'position:fixed;left:50%;top:0;transform:translateX(-50%);z-index:2147483646;display:flex;gap:10px;align-items:center;padding:6px 14px;border-radius:0 0 12px 12px;background:#B45309;color:#fff;font:12px/1.6 system-ui,sans-serif'
+    const text = document.createElement('span'); text.textContent = '与电脑的连接已断开，正在重连…'
+    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '立即重试'
+    retry.style.cssText = 'padding:2px 10px;border:1px solid currentColor;border-radius:999px;background:transparent;color:inherit;font:inherit'
+    retry.onclick = () => location.reload()
+    bar.append(text, retry); (document.body ?? document.documentElement).append(bar)
+  }
+  window.addEventListener('dsh-rc-offline', () => connectionBanner(true))
+  window.addEventListener('dsh-rc-online', () => connectionBanner(false))
+
   /** The gateway's own refusal. A 403 from the Host (a path it will not read, say) is an ordinary error. */
   async function unpaired(response: Response): Promise<boolean> {
     if (response.status !== 403 || !response.headers.get('content-type')?.includes('application/json')) return false
