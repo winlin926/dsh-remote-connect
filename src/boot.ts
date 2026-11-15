@@ -64,11 +64,50 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
    *  screen with no way to see why, so the first failures surface right on the page. */
   const bootErrors: string[] = []
   const showBootErrors = (): void => {
-    if (document.getElementById('dsh-rc-boot-errors')) return
-    const box = document.createElement('div'); box.id = 'dsh-rc-boot-errors'; box.setAttribute('role', 'alert')
-    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;max-height:46%;overflow:auto;background:rgba(43,29,29,.96);color:#ffd9d9;font:11px/1.6 ui-monospace,Consolas,monospace;padding:10px 12px;white-space:pre-wrap;word-break:break-all;border-top:2px solid #B34337'
-    box.textContent = bootErrors.join('\n———\n')
-    ;(document.body ?? document.documentElement).append(box)
+    const box = document.getElementById('dsh-rc-boot-errors')
+    if (!box) {
+      const panel = document.createElement('div'); panel.id = 'dsh-rc-boot-errors'; panel.setAttribute('role', 'alert')
+      panel.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;max-height:46%;overflow:auto;background:rgba(43,29,29,.96);color:#ffd9d9;font:11px/1.6 ui-monospace,Consolas,monospace;padding:10px 12px;border-top:2px solid #B34337;display:flex;flex-direction:column;gap:10px'
+      const text = document.createElement('div'); text.id = 'dsh-rc-boot-errors-text'; text.style.cssText = 'white-space:pre-wrap;word-break:break-all'
+      // Every boot asset is immutable and cached, so a reload refetches only what failed.
+      const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重试'
+      retry.style.cssText = 'align-self:flex-start;padding:8px 20px;border:0;border-radius:999px;background:#B34337;color:#fff;font:inherit;cursor:pointer'
+      retry.onclick = () => { retry.disabled = true; retry.textContent = '重试中…'; location.reload() }
+      panel.append(text, retry)
+      ;(document.body ?? document.documentElement).append(panel)
+    }
+    const text = document.getElementById('dsh-rc-boot-errors-text')
+    if (text) text.textContent = bootErrors.join('\n———\n')
+  }
+  /** A combo URL carries fifty package ids: the head and the tail identify it, the middle only bloats the report. */
+  const shorten = (url: string): string => url.length > 200 ? url.slice(0, 120) + '…' + url.slice(-40) + '（共 ' + url.length + ' 字节）' : url
+  // One boot batch is several megabytes over Wi-Fi: a dropped connection is transient far more
+  // often than the bytes are gone, and the revision makes the URL immutable, so a second fetch
+  // of the same address is the whole repair.
+  const RETRY_DELAYS = [400, 1500, 4000]
+  const scriptAttempts = new Map<string, number>()
+  const gaveUp = new Set<string>()
+  const retryScript = (url: string): boolean => {
+    const attempts = scriptAttempts.get(url) ?? 0
+    if (attempts < RETRY_DELAYS.length) {
+      scriptAttempts.set(url, attempts + 1)
+      setTimeout(() => {
+        // async=false keeps the retried batch registered before anything that follows it.
+        const script = document.createElement('script'); script.src = url; script.async = false
+        document.head.append(script)
+      }, RETRY_DELAYS[attempts])
+      return true
+    }
+    if (gaveUp.has(url)) return true
+    gaveUp.add(url)
+    // A HEAD has no body: the status alone separates a dropped Wi-Fi leg from a refused URL.
+    void originalFetch(url, { method: 'HEAD', cache: 'no-store' })
+      .then(response => response.status, () => 0)
+      .then(status => {
+        if (bootErrors.length < 8) bootErrors.push('资源加载失败: <script> ' + shorten(url) + '（重试 ' + attempts + ' 次后仍失败，最后 HTTP ' + (status || '无响应') + '）')
+        showBootErrors(); scheduleReport(1500)
+      })
+    return true
   }
   // The browser reports a deferred ResizeObserver delivery through the error event.
   // Layout still settles on the next frame, so this is not a page failure.
@@ -76,12 +115,15 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     message === 'ResizeObserver loop completed with undelivered notifications.'
     || message === 'ResizeObserver loop limit exceeded'
   window.addEventListener('error', event => {
-    if (bootErrors.length >= 8) return
     const failure = event as ErrorEvent
     const target = event.target as (HTMLScriptElement & HTMLLinkElement & HTMLImageElement) | null
-    if (target && target.tagName && (target.tagName === 'SCRIPT' || target.tagName === 'LINK' || target.tagName === 'IMG') && (target.src || target.href)) {
-      const url = target.src || target.href || ''
-      bootErrors.push(`资源加载失败: <${target.tagName.toLowerCase()}> ${url}`)
+    // The retry owns its own reporting: a failed boot batch never spends the error budget.
+    if (target?.tagName === 'SCRIPT' && target.src && retryScript(target.src)) return
+    if (bootErrors.length >= 8) return
+    // A missed <link rel=preload> costs one extra request, not the page: the <script> that needs
+    // those bytes fetches them itself, so it must not raise the panel.
+    if (target?.tagName === 'IMG' && target.src) {
+      bootErrors.push(`资源加载失败: <img> ${shorten(target.src)}`)
     } else if (failure.message && !deferredObservation(failure.message)) {
       bootErrors.push(`JS 错误: ${failure.message}\n  at ${(failure.filename || '?').split('/').pop()}:${failure.lineno}`)
     } else return
