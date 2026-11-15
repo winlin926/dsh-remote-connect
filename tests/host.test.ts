@@ -6,7 +6,8 @@ import { MANAGE_PATH } from '../src/gateway.js'
 import { Gateway } from '../src/gateway.js'
 import { PUBLIC_PORT } from '../src/public-access.js'
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { request } from 'node:http'
+import { createServer, request } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,13 +43,13 @@ it('creates a private HTTP adapter for a carrier-only Host and handles trusted D
   }
 })
 
-async function withHost(run: (command: (action: string, fields?: Record<string, unknown>) => Promise<any>, ctx: Context) => Promise<void>) {
+async function withHost(run: (command: (action: string, fields?: Record<string, unknown>) => Promise<any>, ctx: Context) => Promise<void>, config: Plugin.Config = {}) {
   const folder = mkdtempSync(join(tmpdir(), 'dsh-rc-switch-')), previous = process.env.DSH_HOME
   process.env.DSH_HOME = folder
   const ctx = new Context(); let record: unknown
   const remove = ctx.provide('credentials', { modifyRecord: async (_key: unknown, update: (value: unknown) => Promise<unknown>) => { const next = await update(record); if (next !== undefined) record = next; return record } })
   try {
-    await ctx.plugin(Connection, {}); await ctx.plugin(Plugin, { certificateDir: join(folder, 'certificates') })
+    await ctx.plugin(Connection, {}); await ctx.plugin(Plugin, { certificateDir: join(folder, 'certificates'), ...config })
     const command = async (action: string, fields: Record<string, unknown> = {}) => {
       const response = await ctx.connection.createSharedFetchHandler('/api').fetch(new Request('http://desktop.internal' + MANAGE_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...fields }) }), OWNER)
       const data = await response.json(); return { ...data, status: response.status }
@@ -192,8 +193,64 @@ async function remoteClient(command: (action: string, fields?: Record<string, un
   await command('approve', { id: request.id })
   const claim = await post('/rc/pair/claim', { id: request.id, key: request.key })
   const cookie = claim.headers.get('set-cookie')!.split(';')[0]!
-  return { state, base, manage: async (action: string, fields: Record<string, unknown> = {}) => { const response = await post(MANAGE_PATH, { action, ...fields }, cookie); return { status: response.status, ...await response.json() } } }
+  return { state, base, post: (path: string, data: unknown) => post(path, data, cookie), manage: async (action: string, fields: Record<string, unknown> = {}) => { const response = await post(MANAGE_PATH, { action, ...fields }, cookie); return { status: response.status, ...await response.json() } } }
 }
+
+it('stores bounded boot diagnostics without credentials or client-controlled metadata', async () => withHost(async command => {
+  const remote = await remoteClient(command)
+  expect((await remote.post('/rc/boot-report', {
+    time: 'forged', device: { id: 'forged' }, href: 'https://example.test/?token=secret#pair=secret',
+    origin: remote.base, path: '/?token=secret#pair=secret', phase: 'ready', result: 'ready', durationMs: 123, mounted: true,
+    errors: ['failed https://example.test/code.js?token=secret#secret cookie=secret'],
+    resources: [{ origin: remote.base, path: '/plugins/code.js?token=secret', rev: 'abc123', result: 'loaded', durationMs: 12 }],
+  })).status).toBe(204)
+  const file = join(process.env.DSH_HOME!, 'dsh-remote-connect', 'default', 'boot-reports.jsonl')
+  const line = readFileSync(file, 'utf8')
+  expect(line).not.toContain('secret'); expect(line).not.toContain('forged')
+  expect(JSON.parse(line)).toMatchObject({ origin: remote.base, path: '/', phase: 'ready', mounted: true, resources: [{ path: '/plugins/code.js', rev: 'abc123' }] })
+}))
+
+it('rejects an invalid LAN certificate before replacing a live public entry', async () => withHost(async command => {
+  await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' })
+  const before = await command('start')
+  await command('preferences', { mode: 'lan' })
+  expect((await command('switch')).status).toBe(400)
+  const after = await command('status')
+  expect(after).toMatchObject({ enabled: true, activeMode: 'public', links: before.links, qr: before.qr, lanTls: { error: expect.any(String) } })
+}, { gatewayPort: 59396, lanTls: { hostname: 'lan.example.test', certFile: 'missing.pem', keyFile: 'missing.key' } }))
+
+it('publishes a fixed HTTPS entry, secures pairing and reloads certificates only locally', async () => {
+  const reserved = createServer()
+  await new Promise<void>(resolve => reserved.listen(0, '127.0.0.1', resolve))
+  const port = (reserved.address() as { port: number }).port
+  await new Promise<void>(resolve => reserved.close(() => resolve()))
+  const fixtures = join(import.meta.dirname, 'fixtures', 'lan-tls')
+  const folder = mkdtempSync(join(tmpdir(), 'dsh-rc-reload-'))
+  const certFile = join(folder, 'server.pem'), keyFile = join(folder, 'key.pem')
+  writeFileSync(certFile, readFileSync(join(fixtures, 'server.pem'))); writeFileSync(keyFile, readFileSync(join(fixtures, 'key-1.pem')))
+  try {
+    await withHost(async command => {
+      const state = await command('start'), origin = `https://lan.example.test:${port}`
+      expect(state).toMatchObject({ enabled: true, activeMode: 'lan', gatewayPort: port, links: [{ base: origin }], lanTls: { origin, expiresAt: expect.any(Number) } })
+      expect(JSON.stringify(state.lanTls)).not.toMatch(/certFile|keyFile|PRIVATE KEY/)
+      const call = (path: string, data?: unknown, cookie = '') => new Promise<{ status: number; body: any; cookie: string }>((resolve, reject) => {
+        const req = httpsRequest({ hostname: '127.0.0.1', servername: 'lan.example.test', port, path, method: data ? 'POST' : 'GET', ca: readFileSync(join(fixtures, 'server.pem')), headers: { host: new URL(origin).host, origin, cookie, 'content-type': 'application/json' } }, res => {
+          let value = ''; res.setEncoding('utf8'); res.on('data', chunk => value += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: value ? JSON.parse(value) : {}, cookie: res.headers['set-cookie']?.[0] ?? '' }))
+        }); req.on('error', reject); req.end(data ? JSON.stringify(data) : undefined)
+      })
+      const pending = await call('/rc/pair/request', { token: new URL(state.links[0].url).hash.slice(6) })
+      await command('approve', { id: pending.body.id })
+      const claim = await call('/rc/pair/claim', { id: pending.body.id, key: pending.body.key })
+      expect(claim.cookie).toContain('; Secure')
+      expect((await call(MANAGE_PATH, { action: 'reloadLanCertificate' }, claim.cookie.split(';')[0])).status).toBe(400)
+      expect((await command('reloadLanCertificate')).status).toBe(200)
+      writeFileSync(certFile, readFileSync(join(fixtures, 'wrong-host.pem')))
+      expect((await command('reloadLanCertificate')).status).toBe(400)
+      expect((await command('status')).lanTls.error).toEqual(expect.any(String))
+      expect((await call(MANAGE_PATH, { action: 'requests' }, claim.cookie.split(';')[0])).status).toBe(200)
+    }, { gatewayPort: port, lanTls: { hostname: 'lan.example.test', certFile, keyFile } })
+  } finally { rmSync(folder, { recursive: true, force: true }) }
+})
 
 it('acknowledges an authorized remote switch before terminating its old entry', async () => withHost(async command => {
   const remote = await remoteClient(command)

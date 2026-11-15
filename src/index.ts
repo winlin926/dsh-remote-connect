@@ -15,15 +15,21 @@ import { normalizePublicUrl } from './public-url-settings.js'
 import { body, isLoopback, json, sameOrigin } from './http.js'
 import { bootScript } from './boot.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
+import { readLanTls, type LanTlsConfig, type LanTlsMaterial } from './lan-tls.js'
 
 export const name = '@winlin926/dsh-remote-connect'
 export const inject = ['connection']
 export const Config = z.object({
   gatewayPort: z.natural().max(65535).default(0).i18n({ 'zh-CN': { $description: '局域网网关端口；0 表示自动选择空闲端口。' } }),
+  lanTls: z.object({
+    hostname: z.string().required(),
+    certFile: z.string().required(),
+    keyFile: z.string().required(),
+  }).default(undefined as never).i18n({ 'zh-CN': { $description: '局域网 HTTPS：可信域名、PEM 证书及私钥文件路径；需固定网关端口并配置局域网 DNS。证书由外部签发和续期。' } }),
   certificateDir: z.string().default('').i18n({ 'zh-CN': { $description: '证书部署目录；留空使用 SakuraFrp 的 FrpcWorkingDirectory。' } }),
   websocketCompression: z.boolean().default(true).i18n({ 'zh-CN': { $description: '压缩远程连接的 WebSocket 消息，减少长会话历史的传输量；连接两端不再压缩时更省电但更费流量。' } }),
 })
-export interface Config { gatewayPort?: number; certificateDir?: string; websocketCompression?: boolean }
+export interface Config { gatewayPort?: number; lanTls?: LanTlsConfig; certificateDir?: string; websocketCompression?: boolean }
 type Mode = 'public' | 'lan'
 /** Where outbound domain checks and certificate requests get their proxy. */
 type ProxyMode = 'system' | 'manual' | 'off'
@@ -68,8 +74,32 @@ export function hostCookie(connection: Context['connection'], port: number): str
 
 /** One JSON line per remote boot report; the oldest lines drop once the file passes 256 KB. */
 const BOOT_REPORT_LIMIT = 256 * 1024
+function bootReport(report: Record<string, unknown>): Record<string, unknown> {
+  const text = (value: unknown, limit: number) => typeof value === 'string' ? value.slice(0, limit) : undefined
+  const address = (origin: unknown, path: unknown, rev?: unknown) => {
+    try {
+      const url = new URL(String(path ?? '/'), String(origin))
+      if (!['http:', 'https:'].includes(url.protocol)) return {}
+      return { origin: url.origin, path: url.pathname.slice(0, 3000), ...(typeof rev === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(rev) ? { rev } : {}) }
+    } catch { return {} }
+  }
+  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined
+  const errors = Array.isArray(report.errors) ? report.errors.slice(0, 6).filter((value): value is string => typeof value === 'string').map(value => value
+    .replace(/https?:\/\/[^\s]+/g, raw => { try { const url = new URL(raw); return url.origin + url.pathname } catch { return '[URL]' } })
+    .replace(/\b(token|key|pin|password|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]').slice(0, 400)) : []
+  return {
+    ...address(report.origin, report.path), viewport: text(report.viewport, 60), ua: text(report.ua, 300),
+    phase: text(report.phase, 32), result: text(report.result, 32), durationMs: number(report.durationMs), completedResources: number(report.completedResources),
+    mounted: report.mounted === true, errors,
+    resources: Array.isArray(report.resources) ? report.resources.slice(0, 12).flatMap(value => {
+      if (!value || typeof value !== 'object') return []
+      const resource = value as Record<string, unknown>
+      return [{ ...address(resource.origin, resource.path, resource.rev), result: text(resource.result, 20), durationMs: number(resource.durationMs) }]
+    }) : [],
+  }
+}
 function appendBootReport(file: string, report: Record<string, unknown>, device: { id: string; name: string } | undefined): void {
-  const line = JSON.stringify({ time: new Date().toISOString(), device, ...report }) + '\n'
+  const line = JSON.stringify({ time: new Date().toISOString(), device, ...bootReport(report) }) + '\n'
   let previous = ''
   try { previous = readFileSync(file, 'utf8') } catch { /* the first report creates the file */ }
   const kept = previous.length > BOOT_REPORT_LIMIT ? previous.slice(previous.indexOf('\n', previous.length - BOOT_REPORT_LIMIT / 2) + 1) : previous
@@ -100,6 +130,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     writeFileSync(temporary, JSON.stringify(preferences), { mode: 0o600 }); renameSync(temporary, prefsFile)
   }
   let gateway: Gateway | undefined
+  let lanTls: LanTlsMaterial | undefined
+  let lanTlsError: string | undefined
   let access: PublicAccess | undefined
   let enabled = false, busy = false, disposed = false
   let activeMode: Mode | undefined
@@ -146,7 +178,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         return upstreamIndex(credential)
       }
     }
-    const baseURLs = () => !enabled || !gateway ? [] : activeMode === 'public' ? (access?.domain ? [access.domain] : []) : lanAddresses().map(ip => `http://${ip}:${gateway!.port}`)
+    const baseURLs = () => !enabled || !gateway ? [] : activeMode === 'public' ? (access?.domain ? [access.domain] : []) : lanTls ? [lanTls.origin] : lanAddresses().map(ip => `http://${ip}:${gateway!.port}`)
     // The system's proxy is looked up at most every 15 seconds; the panel asks for status far more often.
     let detected: { at: number; value: SystemProxy | null } | undefined
     const systemProxy = async (fresh = false) => {
@@ -177,13 +209,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         systemProxy: preferences.proxyMode === 'system' && preferences.mode === 'public' ? await systemProxy() : undefined,
         publicUrl: access?.domain, publicPort: PUBLIC_PORT, pairingPin: access?.password(local), pinFixed: access?.fixedPin, passwordPairing: preferences.passwordPairing === true,
         publicUrlCheck: local ? access?.lastCheck : undefined, certificate: local && access?.domain ? await access.certificateStatus() : undefined,
+        lanTls: config.lanTls ? { origin: lanTls?.origin, expiresAt: lanTls?.expiresAt, error: lanTlsError } : undefined,
         phase: enabled ? 'ready' : error ? 'error' : 'off', error, gatewayPort: gateway?.port ?? 0, local,
         expiresAt: qr?.expiresAt, links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
         devices: pairing.list().map(({ host, ...device }) => ({
           ...device, via: host === undefined ? undefined : access?.domain && host.toLowerCase() === new URL(access.domain).host.toLowerCase() ? 'public' : 'lan', online: active.has(device.id)
         })),
-        lanHint: '手机需与电脑处于同一局域网。若连接被防火墙阻断，请手动允许网关端口；插件不会修改防火墙。',
+        lanHint: config.lanTls ? '手机需在同一局域网，并将 HTTPS 域名解析到电脑的局域网地址。证书需由手机信任；插件不修改 DNS、防火墙或证书信任。' : '手机需与电脑处于同一局域网。若连接被防火墙阻断，请手动允许网关端口；插件不会修改防火墙。',
       }
     }
     // A QR is useless when the public entry is down. Probe it when public access starts and
@@ -209,15 +242,24 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       if (busy) throw new Error('连接操作正在进行，请稍后再试。')
       if (preferences.mode === 'public' && !access?.domain) throw new Error('请先填写固定公网域名，再开启“任意网络”。')
       busy = true; error = undefined
-      let ticket: number | undefined
+      let ticket = generation
+      let next: Gateway | undefined
+      let stopped = false
       try {
         const mode = preferences.mode
+        let tls: LanTlsMaterial | undefined
+        if (mode === 'lan' && config.lanTls) {
+          try { tls = await readLanTls(config.lanTls, config.gatewayPort ?? 0); lanTlsError = undefined }
+          catch (failure) { lanTlsError = failure instanceof Error ? failure.message : '局域网证书读取失败。'; throw failure }
+        }
+        if (disposed || ticket !== generation) return
         const stopping = stop(); ticket = generation
+        stopped = true
         await stopping; if (disposed || ticket !== generation) return
         credential = hostCookie(ready.connection, upstreamPort)
-        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
+        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), lanTls: tls, addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
         const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
-        let next = gateway = create()
+        next = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.
         const wanted = mode === 'public' ? PUBLIC_PORT : config.gatewayPort || preferences.port || 0
         try { await next.listen(host, wanted) }
@@ -226,13 +268,19 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           if (mode === 'public' && code === 'EADDRINUSE') throw new Error(`公网端口 ${wanted} 已被占用：可能另一个 DSH 配置正在使用公网模式，请先关闭它的远程连接。`)
           // Only a port that cannot be had is worth a second try on another one.
           if (mode === 'public' || config.gatewayPort || !wanted || !['EADDRINUSE', 'EACCES'].includes(code)) throw failure
-          next = gateway = create(); await next.listen(host, 0)   // taken by something else since
+          await next.close(); next = create(); await next.listen(host, 0)
         }
         if (mode === 'lan' && !config.gatewayPort && next.port !== preferences.port) { preferences = { ...preferences, port: next.port }; try { savePreferences() } catch { /* only a convenience */ } }
         if (disposed || ticket !== generation) { await next.close(); return }
+        gateway = next
+        if (tls) lanTls = tls
         enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = pairing.issue()
         if (mode === 'public') startMonitor(); else stopMonitor()
-      } catch (failure) { if (ticket === generation) { error = failure instanceof Error ? failure.message : '启动失败。'; await stop() }; throw failure }
+      } catch (failure) {
+        await next?.close()
+        if (ticket === generation && !disposed) { error = failure instanceof Error ? failure.message : '启动失败。'; if (stopped) await stop() }
+        throw failure
+      }
       finally { busy = false }
     }
     async function manage(input: Record<string, unknown>, local: boolean): Promise<unknown> {
@@ -241,6 +289,21 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         // What the always-mounted sidebar entry polls: no QR code is rendered for it.
         case 'requests': return { enabled, requests: local ? pairing.requests() : [] }
         case 'start': if (!enabled) await start(); return status(local)
+        case 'reloadLanCertificate': {
+          if (!local) throw new Error('局域网证书只能在本机面板重载。')
+          if (busy) throw new Error('连接操作正在进行，请稍后再试。')
+          if (!config.lanTls || !enabled || activeMode !== 'lan' || !gateway) throw new Error('请先开启局域网 HTTPS。')
+          busy = true
+          const current = gateway, ticket = generation
+          try {
+            const next = await readLanTls(config.lanTls, config.gatewayPort ?? 0)
+            if (disposed || ticket !== generation || gateway !== current) throw new Error('连接状态已变化，请重新开启后再重载证书。')
+            current.reloadLanCertificate(next)
+            lanTls = next; lanTlsError = undefined
+            return status(local)
+          } catch (failure) { lanTlsError = failure instanceof Error ? failure.message : '证书重载失败。'; throw failure }
+          finally { busy = false }
+        }
         case 'switch': {
           if (busy) throw new Error('连接操作正在进行，请稍后再试。')
           if (preferences.mode === activeMode && enabled) return status(local)

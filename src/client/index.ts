@@ -8,6 +8,7 @@ interface Status {
   publicUrl?: string | null; publicPort: number; pairingPin?: string; pinFixed?: boolean; passwordPairing?: boolean
   publicUrlCheck?: { at: number; reachable: boolean; status: number | null; error: string | null }
   certificate?: { domain?: string; expiresAt?: number; renewAt?: number; selfSigned: boolean; pending: boolean; restartRequired: boolean; error?: string }
+  lanTls?: { origin?: string; expiresAt?: number; error?: string }
   phase: string; error?: string; gatewayPort: number; local: boolean; expiresAt?: number; qr?: string
   links: Array<{ base: string; url?: string }>; requests: Array<{ id: string; name: string; expiresAt: number }>
   devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public' }>; lanHint: string
@@ -165,6 +166,7 @@ export function RemoteControlPanel(): React.ReactElement {
       const data = await command({ action, ...fields })
       if (data.links) setState(data)
       if (action === 'certificate') setNotice('证书申请或续期已开始，状态会自动更新。')
+      else if (action === 'reloadLanCertificate') setNotice('局域网 HTTPS 证书已重载，新连接将使用更新后的证书。')
       else if (action === 'switch') setNotice('已提交切换，当前访问即将断开。请使用新入口重新连接。')
       else if (action === 'stop') {
         setState(previous => previous ? { ...previous, enabled: false, activeMode: undefined, phase: 'off', links: [], requests: [], qr: undefined } : previous)
@@ -208,6 +210,9 @@ export function RemoteControlPanel(): React.ReactElement {
   const certificate = state?.certificate
   const certificateExpired = !!certificate?.expiresAt && certificate.expiresAt <= Date.now()
   const certificateLabel = state && !state.local ? '仅本机可管理' : !publicUrl ? '配置域名后可管理' : !certificate ? '正在读取证书状态' : certificate.pending ? '正在申请或续期' : certificateExpired ? '证书已过期' : certificate.selfSigned ? 'frpc 自签证书' : certificate.expiresAt ? `有效至 ${new Date(certificate.expiresAt).toLocaleDateString('zh-CN')}` : '尚未申请'
+  const lanCertificate = state?.lanTls
+  const lanCertificateExpired = !!lanCertificate?.expiresAt && lanCertificate.expiresAt <= Date.now()
+  const lanCertificateDue = !!lanCertificate?.expiresAt && lanCertificate.expiresAt - Date.now() <= 30 * 24 * 3600_000
   // A renewed one-time pairing ticket does not invalidate already paired devices.
   const renewing = React.useRef(false)
   React.useEffect(() => {
@@ -297,6 +302,8 @@ export function RemoteControlPanel(): React.ReactElement {
         h('p', null, state.enabled ? online ? `${online} 台设备在线；也可以继续配对其他手机。` : '已授权设备可直接使用，新手机请扫码。' : domainBlocked ? '域名通常只需配置一次，保存后回到这里开启。' : shown === 'public' ? `将通过 ${address(publicUrl)} 连接。` : '同一 Wi‑Fi 即可直连，授权设备可重复使用。'),
       ]),
       domainBlocked ? h(InlineNotice, { tone: 'warn', action: { label: '配置域名', onClick: () => openSettings(true) } }, '“任意网络”需要固定公网域名，请在“连接设置”里填写。') : null,
+      shown === 'lan' && lanCertificate ? h(InlineNotice, { tone: lanCertificate.error || lanCertificateDue ? 'warn' : 'info' },
+        lanCertificate.error || (lanCertificateDue ? '局域网证书即将到期，请在外部续期后，在本机连接设置中重载。' : '使用局域网 HTTPS。请将域名解析到电脑的局域网地址，并使用手机信任的证书。')) : null,
       state.error ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
       shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, '公网入口当前不可达：请确认电脑上的 SakuraFrp / frpc 服务正在运行、隧道已启动，且域名仍指向本机。')]) : null,
       block('div', 'dsrc-connection-actions', [state.enabled ? h('button', { type: 'button', className: 'dsrc-button dsrc-stop', disabled, onClick: stopConnection }, workingAction === 'stop' ? '正在关闭…' : '关闭远程连接')
@@ -325,6 +332,17 @@ export function RemoteControlPanel(): React.ReactElement {
 
   const settings = () => {
     if (!state) return null
+    const lanSettings = lanCertificate ? block('section', 'dsrc-setting-group', [
+      block('div', 'dsrc-setting-heading', [h('h3', null, '局域网 HTTPS'), h('span', { className: 'dsrc-setting-kicker' }, '固定域名与外部证书')]),
+      h(StatusNote, { label: '入口', value: lanCertificate.origin ?? '开启连接并验证证书后显示' }),
+      block('div', 'dsrc-setting-row', [
+        h(StatusNote, { label: '证书', value: lanCertificateExpired ? '证书已过期' : lanCertificate.expiresAt ? `有效至 ${new Date(lanCertificate.expiresAt).toLocaleDateString('zh-CN')}` : '尚未读取', tone: lanCertificateExpired ? 'danger' : lanCertificateDue ? 'warn' : lanCertificate.expiresAt ? 'ok' : 'neutral' }),
+        h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !state.enabled || state.activeMode !== 'lan', onClick: () => { void act('reloadLanCertificate') } }, workingAction === 'reloadLanCertificate' ? '正在重载…' : '重载证书'),
+      ]),
+      lanCertificate.error ? h('p', { className: 'dsrc-error', role: 'alert' }, lanCertificate.error) : null,
+      h('p', { className: 'dsrc-note' }, '证书由外部签发和续期；更新文件后在本机重载。域名、证书路径和固定端口在插件配置中设置。'),
+      h('p', { className: 'dsrc-note' }, state.lanHint),
+    ], { 'aria-label': '局域网 HTTPS' }) : null
     const pinField = state.local && publicUrl ? block('div', 'dsrc-pin', [
       block('div', 'dsrc-pin-head', [h('span', { className: 'dsrc-field-label' }, '连接密码'), h('span', { className: 'dsrc-pin-kind' }, state.pinFixed ? '固定' : '随机')]),
       pin === null ? block('div', 'dsrc-secret', [
@@ -395,7 +413,7 @@ export function RemoteControlPanel(): React.ReactElement {
       h('summary', null,
         block('span', 'dsrc-settings-title', [cardIcon('slate', h(GearIcon, null)), '连接设置']),
         h('span', { className: `dsrc-summary-value${settingsIssue ? ' dsrc-needs-attention' : ''}` }, settingsIssue || `${publicUrl ? '域名已配置' : '域名未配置'}`)),
-      block('div', 'dsrc-preferences-body', [publicSettings, network]))
+      block('div', 'dsrc-preferences-body', [lanSettings, publicSettings, network]))
   }
   const requests = () => state?.local && state.requests.length ? block('section', 'dsrc-surface dsrc-requests', [
     block('div', 'dsrc-card-head', [
