@@ -33,6 +33,7 @@ it('leaves the Host mobile layout alone and only refuses the browser translate o
   expect(script).not.toContain('interactive-widget')
   expect(script).not.toContain('dsh-rc-mobile')
   expect(script).toContain('__DSH_TRANSPORT__')
+  expect(script).not.toContain('ownsHost: true')
 })
 
 it('converts local file links to computer paths without losing Unix roots', () => {

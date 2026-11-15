@@ -9,7 +9,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
   // refuse, because the app's own copy is what the reader is looking at.
   document.documentElement.setAttribute('translate', 'no')
   const transport = globals.__DSH_TRANSPORT__ ?? {}
-  globals.__DSH_TRANSPORT__ = { ...transport, ownsHost: true }
+  globals.__DSH_TRANSPORT__ = transport
   const originalFetch = window.fetch.bind(window)
   globals.__DSH_FILE_UPLOAD__ = { fetch: originalFetch }
   function notice(message: string): void {
