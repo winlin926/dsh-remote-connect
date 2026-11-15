@@ -67,7 +67,9 @@ try {
   }
   writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-remote-qa', private: true, dependencies, ...(values.package ? { pnpm: { overrides } } : {}), dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', pkg.name] } } }))
   if (values.package) {
-    const installed = spawnSync(process.execPath, [process.env.npm_execpath, 'install', '--offline', '--ignore-scripts', '--ignore-workspace', '--no-frozen-lockfile', '--config.auto-install-peers=false'], { cwd: profile, env: process.env, windowsHide: true, encoding: 'utf8', timeout: 60000, maxBuffer: 2 * 1024 * 1024 })
+    const pnpm = process.env.npm_execpath, native = process.platform === 'win32' && /\.exe$/i.test(pnpm)
+    const args = ['install', '--offline', '--ignore-scripts', '--ignore-workspace', '--no-frozen-lockfile', '--config.auto-install-peers=false']
+    const installed = spawnSync(native ? pnpm : process.execPath, native ? args : [pnpm, ...args], { cwd: profile, env: process.env, windowsHide: true, encoding: 'utf8', timeout: 60000, maxBuffer: 2 * 1024 * 1024 })
     if (installed.error) throw installed.error
     if (installed.status !== 0) throw new Error('Isolated package install failed:\n' + (installed.stdout + installed.stderr).slice(-6000))
     const installedPath = realpathSync(link), local = relative(realpathSync(profile), installedPath)

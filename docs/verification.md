@@ -1,6 +1,6 @@
 # 验证范围
 
-开发依赖、锁文件和隔离验收宿主统一使用 DSH 0.2.2-rc.3。插件版本为 0.4.1。
+开发依赖、锁文件和隔离验收宿主统一使用 DSH 0.2.2-rc.3。插件版本为 0.5.1。
 
 ## 修改后的检查
 
@@ -20,6 +20,14 @@
 截图因窗口最小化或 CDP 超时不可用时，单独记录为 `captureWarnings`，当次流程不再重复尝试捕获；只列出实际保存的截图，并在每次开始前清除同名旧图。布局和交互断言独立执行，不把缺少截图记作已完成视觉复核。
 
 打包使用 `npm pack --dry-run --ignore-scripts --json`，检查生产入口存在且 QA、测试和历史资源没有进入包。已构建时不重复触发 prepack 构建。
+
+## 本轮结果（2026-11-15）
+
+- `pnpm test`：10 个文件、129 个测试通过；`pnpm typecheck`、`pnpm build` 通过。
+- 局域网 TLS 覆盖证书到期/SAN/私钥、可信 WSS/SSE、Secure Cookie、规范 Host/origin、热重载原子性及不降级；browser transport 覆盖官方启动成功/失败状态、加载错误与凭据净化。
+- `npm pack --ignore-scripts` 生成 `@winlin926/dsh-remote-connect@0.5.1` 候选 `.tgz`。包检查通过：24 个文件；`lib/index.js` 与 `lib/client.js` SHA-256 分别为 `e30b258ce39b23622e589ac401e98ee308e8a09c9f5aa9b9aff8e60000edf5fa`、`afd971cbf703850353aabe0bd9908e6a176b82c8613b97aa681c97b488a7a0ee`。未发布 npm。
+- 隔离 DSH profile 从 `.tgz` 离线安装，桌面与 320/390px 手机布局、扫码批准、应用交接、输入/复制、预览和撤销通过。首次页面就绪 3.670s、同页重访 1.349s、关页重开 1.473s；重访与重开均传输 0 字节，重开 3 个资源均命中磁盘缓存。该 profile 只有 3 个初始资源请求，不能代表日常 54 插件的完整资源总量；浏览器进程重启后的缓存持久性未验证。
+- 电脑没有 `dsh-lan.sanlin.xin` 证书，局域网 DNS 记录也未验通；未启用 LAN TLS，未更新日常 profile 或重启 DSH。手机 HTTPS、WSS 真机验收待证书与 DNS 条件具备后完成。
 
 ## 本轮结果（2026-11-14）
 
