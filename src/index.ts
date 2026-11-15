@@ -6,6 +6,7 @@ import { homedir, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { request as httpRequest } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { PairingService } from './pairing.js'
@@ -16,6 +17,13 @@ import { body, isLoopback, json, sameOrigin } from './http.js'
 import { bootScript } from './boot.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 import { readLanTls, type LanTlsConfig, type LanTlsMaterial } from './lan-tls.js'
+import { loadHostIdentity } from './host-identity.js'
+import { PUBLIC_NODE_PROTOCOL, type PublicNodeDiscovery } from './public-node.js'
+
+/** Advertised by discovery; read from the installed package so it always matches the running build. */
+const NODE_VERSION = (() => {
+  try { const value: unknown = createRequire(import.meta.url)('../package.json').version; return typeof value === 'string' && value ? value : '0.0.0' } catch { return '0.0.0' }
+})()
 
 export const name = '@winlin926/dsh-remote-connect'
 export const inject = ['connection']
@@ -111,6 +119,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const profile = ctx.get('profileContext') as { name?: string } | undefined
   const storage = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-remote-connect', String(profile?.name || process.env.DSH_PROFILE || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'))
   mkdirSync(storage, { recursive: true })
+  // One identity per profile: the gateway advertises it now, and any future local service reuses the
+  // same file, so the Host keeps one hostId across restarts and never shares a pairing/cache scope.
+  const hostIdentity = await loadHostIdentity(join(storage, 'host-identity.json'))
+  const discovery: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL, kind: 'gateway', name: 'DeepSeek Harness', version: NODE_VERSION, capabilities: ['pairing', 'official-ui'], hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }
   const prefsFile = join(storage, 'preferences.json')
   let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off' }
   let error: string | undefined
@@ -257,7 +269,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         stopped = true
         await stopping; if (disposed || ticket !== generation) return
         credential = hostCookie(ready.connection, upstreamPort)
-        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), lanTls: tls, addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
+        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), discovery, lanTls: tls, addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
         const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
         next = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.

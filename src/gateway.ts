@@ -17,6 +17,7 @@ import type { PublicAccess } from './public-access.js'
 import { BOOT_PATH, injectBoot } from './boot.js'
 import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from './workspace-preview.js'
 import type { LanTlsMaterial } from './lan-tls.js'
+import { PUBLIC_NODE_PATH, type PublicNodeDiscovery } from './public-node.js'
 
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** Set by the gateway on every request it forwards; the Host's local-only handlers refuse it. */
@@ -48,6 +49,8 @@ export interface GatewayOptions {
   websocketCompression?: boolean
   /** Receives one diagnostic report per remote boot, also from devices that fail to pair. */
   onBootReport?: (report: Record<string, unknown>, device: { id: string; name: string } | undefined) => void
+  /** Public identity document at {@link PUBLIC_NODE_PATH}; served before pairing, absent means "not advertised". */
+  discovery?: PublicNodeDiscovery
 }
 export function safePath(path: string): boolean {
   if (!path.startsWith('/') || path.startsWith('//') || /[\x00-\x1f\\]/.test(path)) return false
@@ -171,9 +174,24 @@ export class Gateway {
     if (!row || row.until < now) this.rates.set(key, row = { count: 0, until: now + 60_000 })
     return ++row.count <= (claim ? 1000 : 120)
   }
+  /**
+   * The discovery document is public by design: an unpaired device must be able to learn what this
+   * node is. It still sits behind safePath/validHost and answers only this exact path with GET/HEAD,
+   * so it cannot become a way around pairing for any other route.
+   */
+  private discovery(req: IncomingMessage, res: ServerResponse): void {
+    if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { error: '发现接口只支持 GET 或 HEAD。' }); return }
+    const document = this.options.discovery
+    if (!document) { json(res, 404, { error: 'not found' }); return }
+    const payload = JSON.stringify(document)
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'content-length': Buffer.byteLength(payload) })
+    // HEAD reports the bytes a GET would return without sending them.
+    res.end(req.method === 'HEAD' ? undefined : payload)
+  }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!safePath(req.url ?? '/') || !this.validHost(req)) { json(res, 403, { error: '不受信任的访问地址。' }); return }
     const url = new URL(req.url ?? '/', 'http://gateway.invalid')
+    if (url.pathname === PUBLIC_NODE_PATH) { this.discovery(req, res); return }
     const publicRequest = this.publicRequest(req)
     if (url.pathname.startsWith(ACME_CHALLENGE_PREFIX)) {
       if (!publicRequest) { json(res, 404, { error: 'not found' }); return }
