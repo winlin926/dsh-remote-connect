@@ -3,18 +3,28 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
+import { parseArgs } from 'node:util'
+
+const moduleUrl = new URL(import.meta.url)
+const { values } = parseArgs({ options: { 'run-directory': { type: 'string' } }, strict: false, allowPositionals: true })
+const runDirectory = moduleUrl.searchParams.get('run-directory') || values['run-directory'] || 'smoke'
+if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(runDirectory)) throw new Error('Run directory must be a simple name within .qa')
 
 if (typeof taskSpace !== 'function') {
-  const result = spawnSync('ego-browser.exe', ['nodejs', '-e', `await import('${import.meta.url.replaceAll("'", '%27')}')`], { stdio: 'inherit', windowsHide: true })
+  moduleUrl.searchParams.set('run-directory', runDirectory)
+  const entry = "await import('" + moduleUrl.href.replaceAll("'", '%27') + "')"
+  const result = spawnSync('ego-browser.exe', ['nodejs', '-e', entry], { stdio: 'inherit', windowsHide: true })
   if (result.error) throw result.error
   process.exitCode = result.status ?? 1
 } else {
-  const run = join(dirname(fileURLToPath(import.meta.url)), '..', '.qa', 'smoke')
+  const run = join(dirname(fileURLToPath(moduleUrl)), '..', '.qa', runDirectory)
   const connection = JSON.parse(readFileSync(join(run, 'connection.json'), 'utf8'))
+  if (!connection.artifact?.entries || !connection.hostVersion) throw new Error('QA connection is missing its artifact or Host manifest')
   for (const name of ['desktop-light', 'desktop-dark', 'phone-320-light', 'phone-320-dark', 'phone-390-light', 'phone-390-dark']) rmSync(join(run, name + '.png'), { force: true })
   const task = await taskSpace('DSH remote plugin smoke')
   for (const tab of await task.tabs()) if (tab.label && tab.label !== 'p1' && tab.openedBy === 'agent') await task.page(tab.label).close()
   const desktop = task.page('p1'), results = [], captureWarnings = [], captures = []
+  const cacheRuns = []
   const originalCookies = (await desktop.cdp('Network.getCookies', { urls: [connection.url] })).cookies
   const managedOrigins = new Set([new URL(connection.url).origin])
   const manage = async (action, fields = {}) => {
@@ -41,6 +51,56 @@ if (typeof taskSpace !== 'function') {
       await page.evaluate(name => [...document.querySelectorAll('dialog[open] button,[role="dialog"] button')].find(button => (button.getAttribute('aria-label') || button.textContent.trim()) === name && button.getBoundingClientRect().width)?.click(), action.name)
       await page.waitForFunction(text => ![...document.querySelectorAll('dialog[open],[role="dialog"]')].some(dialog => dialog.getBoundingClientRect().width && dialog.innerText === text), action.text, { timeout: 5000 })
     }
+  }
+  const pluginTraffic = async page => {
+    const events = await page.events()
+    const requestById = new Map(), responseById = new Map(), finishedById = new Map(), failed = new Set(), cached = new Set()
+    for (const event of events) {
+      if (event.method === 'Network.requestWillBeSent') requestById.set(event.params.requestId, event.params.request.url)
+      else if (event.method === 'Network.responseReceived') responseById.set(event.params.requestId, event.params)
+      else if (event.method === 'Network.loadingFinished') finishedById.set(event.params.requestId, event.params.encodedDataLength)
+      else if (event.method === 'Network.loadingFailed') failed.add(event.params.requestId)
+      else if (event.method === 'Network.requestServedFromCache') cached.add(event.params.requestId)
+    }
+    const resources = [...requestById].filter(([, url]) => new URL(url).pathname.startsWith('/plugins/')).map(([id, url]) => {
+      const response = responseById.get(id)?.response
+      return {
+      url, status: response?.status ?? null,
+      cacheControl: response?.headers['cache-control'] || '',
+      disk: response?.fromDiskCache === true,
+      cached: cached.has(id) || response?.fromPrefetchCache === true,
+      bytes: finishedById.get(id) ?? 0,
+      complete: finishedById.has(id), failed: failed.has(id),
+    }
+    })
+    const largest = resources.reduce((result, row) => row.bytes > (result?.bytes ?? 0) ? row : result, undefined)
+    return {
+      observedEvents: events.length, requests: resources.length, responses: resources.filter(row => row.status !== null).length,
+      completed: resources.filter(row => row.complete).length, failed: resources.filter(row => row.failed).length,
+      networkBytes: resources.reduce((total, row) => total + row.bytes, 0),
+      diskHits: resources.filter(row => row.disk).length, cacheHits: resources.filter(row => row.cached || row.disk).length,
+      incomplete: resources.filter(row => row.status !== null && !row.complete && !row.failed).length,
+      statuses: resources.filter(row => row.status !== 200).map(row => ({ url: row.url, status: row.status })),
+      largest: largest ? { revision: new URL(largest.url).searchParams.get('rev'), bytes: largest.bytes } : null,
+      resources: resources.map(({ url, bytes, status, disk, cached, complete, failed }) => ({ revision: new URL(url).searchParams.get('rev'), bytes, status, disk, cached, complete, failed })),
+      websocketUrls: events.filter(event => event.method === 'Network.webSocketCreated').map(event => event.params.url).filter(url => url.startsWith('wss:'))
+    }
+  }
+  const assertLargestBatchReused = (phase, visit, first) => {
+    assert.ok(first.largest?.revision && first.largest.bytes > 1024 * 1024, 'First visit did not fetch a large revisioned plugin batch')
+    const matching = visit.resources.filter(row => row.revision === first.largest.revision)
+    const transferred = matching.reduce((total, row) => total + row.bytes, 0)
+    assert.ok(transferred < first.largest.bytes / 2, `${phase} downloaded the largest plugin batch again (${transferred}/${first.largest.bytes} bytes)`)
+  }
+  const awaitApplication = async page => page.waitForFunction(() => {
+    const root = document.getElementById('root')
+    return !!root?.querySelector('[data-sidebar-drawer]')
+      && !root.innerText.includes('Loading plugins')
+      && !root.querySelector('[data-dsh-boot]')
+  }, undefined, { timeout: 30000 })
+  const applicationReadyMs = async (page, startedAt) => {
+    await awaitApplication(page)
+    return Date.now() - startedAt
   }
   const layout = async (page, name, width = 1280) => {
     const { windowId, bounds } = await task.cdp('Browser.getWindowForTarget', { targetId: page.targetId })
@@ -88,9 +148,21 @@ if (typeof taskSpace !== 'function') {
     await desktop.click('loc=role:button[name="开启远程连接"]', { label: '开启隔离局域网连接' })
     await desktop.waitForSelector('loc=role:button[name="关闭远程连接"]', { state: 'visible' })
     const started = await manage('status')
-    const base = `http://127.0.0.1:${started.gatewayPort}`
-    managedOrigins.add(base)
-    const link = base + '/pair' + new URL(started.links[0].url).hash
+    const gatewayOrigin = new URL(started.links[0].url).origin
+    managedOrigins.add(gatewayOrigin)
+    const link = started.links[0].url
+    const knownCookies = new Set(originalCookies.map(cookie => `${cookie.name}\0${cookie.domain}\0${cookie.path}`))
+    const additionalCookies = (await desktop.cdp('Network.getCookies', { urls: [...managedOrigins] })).cookies
+    for (const cookie of additionalCookies) {
+      const key = `${cookie.name}\0${cookie.domain}\0${cookie.path}`
+      if (!knownCookies.has(key)) originalCookies.push(cookie)
+    }
+    if (connection.tls) {
+      assert.ok(Number.isInteger(started.gatewayPort) && started.gatewayPort === connection.tls.gatewayPort, 'TLS gateway port changed')
+      assert.ok(started.links.every(item => new URL(item.url).hostname === connection.tls.hostname && new URL(item.url).protocol === 'https:'), 'TLS pairing links must use the trusted DNS name')
+      assert.equal(started.lanTls?.origin, gatewayOrigin, 'TLS status must advertise the active LAN HTTPS origin')
+      assert.ok(!started.lanTls?.error, 'TLS status reported an error')
+    }
     results.push('production management and LAN startup')
     await layout(desktop, 'desktop-light')
     await desktop.cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] })
@@ -98,15 +170,50 @@ if (typeof taskSpace !== 'function') {
     phone = await task.newPage()
     await phone.cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, mobile: true, deviceScaleFactor: 1 })
     await phone.cdp('Emulation.setTouchEmulationEnabled', { enabled: true })
+    await phone.cdp('Network.enable')
+    await phone.events()
     await phone.goto(link)
     await phone.waitForFunction(() => document.getElementById('state')?.textContent.includes('等待电脑确认'), undefined, { timeout: 10000 })
     await desktop.waitForSelector('.dsrc-prompt[open]', { state: 'visible', timeout: 10000 })
     await desktop.click('.dsrc-prompt[open] button.dsrc-primary', { label: '批准隔离手机配对' })
+    const firstReadyStartedAt = Date.now()
     await phone.waitForURL(url => new URL(url).pathname === '/', { timeout: 15000 })
+    const firstReadyMs = await applicationReadyMs(phone, firstReadyStartedAt)
     await dismissOnboarding(phone)
-    await phone.waitForFunction(() => !!document.querySelector('#root [data-sidebar-drawer]') && !document.getElementById('root').innerText.includes('Loading plugins'), undefined, { timeout: 20000 })
+    const firstVisit = await pluginTraffic(phone)
+    assert.ok(firstVisit.requests > 0 && firstVisit.networkBytes > 0, 'First visit did not fetch measurable plugin resources')
+    assert.ok(firstVisit.incomplete === 0 && firstVisit.failed === 0, 'First-visit plugin network events were incomplete or failed')
+    if (connection.tls) {
+      const security = await phone.evaluate(() => ({ protocol: location.protocol, secure: isSecureContext, host: location.host }))
+      assert.deepEqual(security, { protocol: 'https:', secure: true, host: `${connection.tls.hostname}:${connection.tls.gatewayPort}` }, 'LAN page must use the validated TLS origin')
+      assert.ok(firstVisit.websocketUrls.length > 0, 'No WSS connection was observed')
+      results.push('trusted LAN HTTPS, secure context, and WSS carrier')
+    } else {
+      const security = await phone.evaluate(() => ({ protocol: location.protocol, secure: isSecureContext }))
+      assert.equal(security.secure, security.protocol === 'https:')
+    }
+    cacheRuns.push({ phase: 'first-visit', readyMs: firstReadyMs, ...firstVisit })
     results.push('QR approval and current Host mobile application ready')
     console.log('PASS pairing and Host application ready')
+    const revisitStartedAt = Date.now()
+    await phone.reload()
+    const revisitReadyMs = await applicationReadyMs(phone, revisitStartedAt)
+    const sameTabVisit = await pluginTraffic(phone)
+    assertLargestBatchReused('Same-tab revisit', sameTabVisit, firstVisit)
+    cacheRuns.push({ phase: 'same-tab-revisit', readyMs: revisitReadyMs, ...sameTabVisit })
+    await phone.close()
+    phone = await task.newPage()
+    await phone.cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, mobile: true, deviceScaleFactor: 1 })
+    await phone.cdp('Emulation.setTouchEmulationEnabled', { enabled: true })
+    await phone.cdp('Network.enable')
+    const reopenStartedAt = Date.now()
+    await phone.goto(new URL('/', started.links[0].url).href)
+    const reopenReadyMs = await applicationReadyMs(phone, reopenStartedAt)
+    const reopenedVisit = await pluginTraffic(phone)
+    assertLargestBatchReused('Tab-close reopen', reopenedVisit, firstVisit)
+    cacheRuns.push({ phase: 'tab-close-reopen', readyMs: reopenReadyMs, ...reopenedVisit })
+    if (connection.tls) assert.ok(cacheRuns.at(-1).websocketUrls.length > 0, 'WSS carrier was not restored after tab re-entry')
+    console.log('CACHE', JSON.stringify({ runs: cacheRuns, browserProcessRestart: 'manual' }))
     await desktop.cdp('Page.bringToFront')
     await desktop.waitForSelector('button:text-is("重命名")', { state: 'visible' })
     await desktop.click('button:text-is("重命名")', { label: '重命名隔离测试设备' })
@@ -176,7 +283,7 @@ if (typeof taskSpace !== 'function') {
     assert.equal((await phone.fetch(new URL(capability).pathname)).status, 404)
     results.push('revocation blocks management and preview immediately')
     passed = true
-    console.log(JSON.stringify({ passed, results, captureWarnings, screenshots: captures }, null, 2))
+    console.log(JSON.stringify({ passed, results, cacheRuns, browserProcessRestart: 'manual', captureWarnings, screenshots: captures }, null, 2))
   } finally {
     await manage('stop').catch(() => {})
     const current = (await desktop.cdp('Network.getCookies', { urls: [...managedOrigins] })).cookies
