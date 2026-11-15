@@ -8,7 +8,8 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
   // gets its mobile layout from the Host itself. Only the browser's translate offer is ours to
   // refuse, because the app's own copy is what the reader is looking at.
   document.documentElement.setAttribute('translate', 'no')
-  globals.__DSH_TRANSPORT__ = { ...globals.__DSH_TRANSPORT__, ownsHost: true }
+  const transport = globals.__DSH_TRANSPORT__ ?? {}
+  globals.__DSH_TRANSPORT__ = { ...transport, ownsHost: true }
   const originalFetch = window.fetch.bind(window)
   globals.__DSH_FILE_UPLOAD__ = { fetch: originalFetch }
   function notice(message: string): void {
@@ -60,97 +61,40 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     event.preventDefault(); event.stopImmediatePropagation()
     void openLocalFile(anchor.href)
   }, true)
-  /** Phone-only diagnosis: a page that dies before the app mounts would be a blank white
-   *  screen with no way to see why, so the first failures surface right on the page. */
-  const bootErrors: string[] = []
-  const showBootErrors = (): void => {
-    const box = document.getElementById('dsh-rc-boot-errors')
-    if (!box) {
-      const panel = document.createElement('div'); panel.id = 'dsh-rc-boot-errors'; panel.setAttribute('role', 'alert')
-      panel.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;max-height:46%;overflow:auto;background:rgba(43,29,29,.96);color:#ffd9d9;font:11px/1.6 ui-monospace,Consolas,monospace;padding:10px 12px;border-top:2px solid #B34337;display:flex;flex-direction:column;gap:10px'
-      const text = document.createElement('div'); text.id = 'dsh-rc-boot-errors-text'; text.style.cssText = 'white-space:pre-wrap;word-break:break-all'
-      // Every boot asset is immutable and cached, so a reload refetches only what failed.
-      const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重试'
-      retry.style.cssText = 'align-self:flex-start;padding:8px 20px;border:0;border-radius:999px;background:#B34337;color:#fff;font:inherit;cursor:pointer'
-      retry.onclick = () => { retry.disabled = true; retry.textContent = '重试中…'; location.reload() }
-      panel.append(text, retry)
-      ;(document.body ?? document.documentElement).append(panel)
-    }
-    const text = document.getElementById('dsh-rc-boot-errors-text')
-    if (text) text.textContent = bootErrors.join('\n———\n')
+  const started = performance.now()
+  let phase: 'checking' | 'loading' | 'initializing' | 'ready' | 'failed' = 'checking'
+  let result: 'unknown' | 'pending' | 'ready' | 'failed' = 'unknown'
+  let observedBoot = false, loading = 0, completedResources = 0
+  const errors: string[] = []
+  const resources: Array<{ origin: string; path: string; rev?: string; result: 'loaded' | 'error'; durationMs: number }> = []
+  const resourceAddress = (value: string): { origin: string; path: string; rev?: string } => {
+    try {
+      const url = new URL(value, location.href), rev = url.searchParams.get('rev')
+      return { origin: url.origin.slice(0, 120), path: url.pathname.slice(0, 160), ...rev && /^[\w-]{1,64}$/.test(rev) ? { rev } : {} }
+    } catch { return { origin: '', path: '' } }
   }
-  /** A combo URL carries fifty package ids: the head and the tail identify it, the middle only bloats the report. */
-  const shorten = (url: string): string => url.length > 200 ? url.slice(0, 120) + '…' + url.slice(-40) + '（共 ' + url.length + ' 字节）' : url
-  // One boot batch is several megabytes over Wi-Fi: a dropped connection is transient far more
-  // often than the bytes are gone, and the revision makes the URL immutable, so a second fetch
-  // of the same address is the whole repair.
-  const RETRY_DELAYS = [400, 1500, 4000]
-  const scriptAttempts = new Map<string, number>()
-  const gaveUp = new Set<string>()
-  const retryScript = (url: string): boolean => {
-    const attempts = scriptAttempts.get(url) ?? 0
-    if (attempts < RETRY_DELAYS.length) {
-      scriptAttempts.set(url, attempts + 1)
-      setTimeout(() => {
-        // async=false keeps the retried batch registered before anything that follows it.
-        const script = document.createElement('script'); script.src = url; script.async = false
-        document.head.append(script)
-      }, RETRY_DELAYS[attempts])
-      return true
-    }
-    if (gaveUp.has(url)) return true
-    gaveUp.add(url)
-    // A HEAD has no body: the status alone separates a dropped Wi-Fi leg from a refused URL.
-    void originalFetch(url, { method: 'HEAD', cache: 'no-store' })
-      .then(response => response.status, () => 0)
-      .then(status => {
-        if (bootErrors.length < 8) bootErrors.push('资源加载失败: <script> ' + shorten(url) + '（重试 ' + attempts + ' 次后仍失败，最后 HTTP ' + (status || '无响应') + '）')
-        showBootErrors(); scheduleReport(1500)
-      })
-    return true
-  }
-  // The browser reports a deferred ResizeObserver delivery through the error event.
-  // Layout still settles on the next frame, so this is not a page failure.
-  const deferredObservation = (message: string): boolean =>
-    message === 'ResizeObserver loop completed with undelivered notifications.'
-    || message === 'ResizeObserver loop limit exceeded'
-  window.addEventListener('error', event => {
-    const failure = event as ErrorEvent
-    const target = event.target as (HTMLScriptElement & HTMLLinkElement & HTMLImageElement) | null
-    // The retry owns its own reporting: a failed boot batch never spends the error budget.
-    if (target?.tagName === 'SCRIPT' && target.src && retryScript(target.src)) return
-    if (bootErrors.length >= 8) return
-    // A missed <link rel=preload> costs one extra request, not the page: the <script> that needs
-    // those bytes fetches them itself, so it must not raise the panel.
-    if (target?.tagName === 'IMG' && target.src) {
-      bootErrors.push(`资源加载失败: <img> ${shorten(target.src)}`)
-    } else if (failure.message && !deferredObservation(failure.message)) {
-      bootErrors.push(`JS 错误: ${failure.message}\n  at ${(failure.filename || '?').split('/').pop()}:${failure.lineno}`)
-    } else return
-    showBootErrors()
-    scheduleReport(1500)
-  }, true)
-  window.addEventListener('unhandledrejection', event => {
-    if (bootErrors.length >= 8) return
-    bootErrors.push(`Promise 拒绝: ${String((event as PromiseRejectionEvent).reason).slice(0, 400)}`)
-    showBootErrors()
-    scheduleReport(1500)
-  })
-  /** Phone-only boot failures can't be debugged from a screenshot: one small report per page
-   *  load lands in the computer's storage, whatever pairing state the device ends up in. */
+  const recordError = (message: string): void => { if (errors.length < 6 && !errors.includes(message)) errors.push(message) }
   let reported = 0
   let reportTimer: ReturnType<typeof setTimeout> | undefined
   const sendReport = (): void => {
     if (reported >= 3) return
     reported += 1
-    const root = document.getElementById('root')
+    const report = {
+      ...resourceAddress(location.href), viewport: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
+      ua: navigator.userAgent.slice(0, 300), phase, result, mounted: result === 'ready',
+      durationMs: Math.max(0, Math.round(performance.now() - started)), completedResources,
+      resources: resources.slice(), errors: errors.slice(),
+    }
+    let payload = JSON.stringify(report)
+    // The gateway accepts 8 KiB; non-ASCII paths can use three bytes per character.
+    while (new TextEncoder().encode(payload).length > 7000 && (report.resources.length || report.errors.length)) {
+      if (report.resources.length) report.resources.shift(); else report.errors.pop()
+      payload = JSON.stringify(report)
+    }
     void originalFetch('/rc/boot-report', {
       method: 'POST', keepalive: true,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        href: location.href, viewport: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
-        ua: navigator.userAgent, mounted: !!root?.children.length, errors: bootErrors.slice(0, 8),
-      }),
+      body: payload,
     }).catch(() => { /* diagnostics must never disturb the page */ })
   }
   const scheduleReport = (delay: number): void => {
@@ -158,6 +102,71 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     clearTimeout(reportTimer)
     reportTimer = setTimeout(sendReport, delay)
   }
+  const updateBoot = (): void => {
+    if (result === 'ready' || result === 'failed') return
+    const root = document.getElementById('root')
+    const boot = root?.querySelector<HTMLElement>(':scope > [data-dsh-boot]')
+    if (!boot) {
+      // The renderer replaces its boot DOM after the first React layout effect.
+      if (observedBoot && root?.childElementCount) {
+        phase = result = 'ready'; observer.disconnect(); scheduleReport(100)
+      }
+      return
+    }
+    observedBoot = true; result = 'pending'
+    const failed = !boot.querySelector('[data-dsh-boot-spinner]') && /Failed to load plugins|插件加载失败/.test(boot.textContent ?? '')
+    if (failed) { phase = result = 'failed'; recordError('official-startup-failure') }
+    else phase = loading ? 'loading' : completedResources ? 'initializing' : 'checking'
+    let status = boot.querySelector<HTMLElement>('[data-dsh-rc-boot-status]')
+    if (!status) {
+      status = document.createElement('div'); status.dataset.dshRcBootStatus = ''
+      status.style.cssText = 'font:12px/1.6 system-ui,sans-serif;opacity:.8;text-align:center;max-width:34em;margin:12px auto 0'
+      const text = document.createElement('span'); text.dataset.dshRcBootText = ''; status.append(text)
+      ;(boot.firstElementChild ?? boot).append(status)
+    }
+    status.setAttribute('role', failed ? 'alert' : 'status')
+    const text = status.querySelector<HTMLElement>('[data-dsh-rc-boot-text]')!
+    const message = failed ? '启动失败，请查看上方错误。' : phase === 'loading' ? `正在加载资源 · 已完成 ${completedResources} 个请求` : phase === 'initializing' ? `正在初始化插件 · 已加载 ${completedResources} 个资源` : '正在核对插件版本…'
+    if (text.textContent !== message) text.textContent = message
+    if (failed) {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重新加载'
+      retry.style.cssText = 'display:block;margin:12px auto 0;padding:8px 16px;border:1px solid currentColor;border-radius:999px;background:transparent;color:inherit;font:inherit;cursor:pointer'
+      retry.onclick = () => { retry.disabled = true; location.reload() }
+      status.append(retry); observer.disconnect(); scheduleReport(100)
+    }
+  }
+  const observer = new MutationObserver(updateBoot)
+  observer.observe(document.documentElement, { childList: true, subtree: true })
+  const previousLoad = typeof transport.loadBundle === 'function' ? transport.loadBundle.bind(transport) as (url: string) => Promise<void> : undefined
+  globals.__DSH_TRANSPORT__.loadBundle = (url: string): Promise<void> => {
+    const began = performance.now(); loading++; updateBoot()
+    const request = new Promise<void>((resolve, reject) => {
+      if (previousLoad) { resolve(previousLoad(url)); return }
+      const script = document.createElement('script'); script.async = true; script.src = url
+      script.addEventListener('load', () => { script.remove(); resolve() }, { once: true })
+      script.addEventListener('error', () => { script.remove(); reject(new Error('client-modules: bundle script failed to load')) }, { once: true })
+      document.head.append(script)
+    })
+    const record = (outcome: 'loaded' | 'error'): void => {
+      if (outcome === 'loaded') completedResources++
+      resources.push({ ...resourceAddress(url), result: outcome, durationMs: Math.max(0, Math.round(performance.now() - began)) })
+      if (resources.length > 8) resources.shift()
+      loading--; updateBoot()
+    }
+    // The module loader owns retries and fallback; observing a request must not replay it.
+    return request.then(() => { record('loaded') }, failure => { record('error'); throw failure })
+  }
+  window.addEventListener('error', event => {
+    const failure = event as ErrorEvent
+    if (failure.message === 'ResizeObserver loop completed with undelivered notifications.' || failure.message === 'ResizeObserver loop limit exceeded') return
+    const target = event.target as HTMLScriptElement & HTMLLinkElement & HTMLImageElement | null
+    if (target?.tagName && ['SCRIPT', 'LINK', 'IMG'].includes(target.tagName)) {
+      const address = resourceAddress(target.src || target.href || '')
+      recordError(`resource-event:${target.tagName.toLowerCase()}:${address.path}${address.rev ? '@' + address.rev : ''}`)
+    } else if (failure.message) recordError(`javascript-error:${resourceAddress(failure.filename || '').path}:${failure.lineno || 0}`)
+  }, true)
+  window.addEventListener('unhandledrejection', () => { recordError('unhandled-rejection') })
+  updateBoot()
   scheduleReport(8000)
   function disconnected(message: string): void {
     if (document.getElementById('dsh-rc-disconnected')) return
@@ -273,9 +282,10 @@ export function bootScript(): string {
 export const BOOT_PATH = '/rc/boot.js'
 const BOOT_TAG = `<script src="${BOOT_PATH}"></script>`
 export function injectBoot(html: string): string {
-  // Android keeps the 980px fallback layout when a script runs before the viewport meta.
+  // Host injections precede the original viewport; the transport must precede them too.
+  if (!/<head(?:\s[^>]*)?>/i.test(html)) return html
   const viewport = /<meta\b[^>]*\bname=["']viewport["'][^>]*>/i.exec(html)
-  if (viewport) return html.slice(0, viewport.index + viewport[0].length) + BOOT_TAG + html.slice(viewport.index + viewport[0].length)
-  return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}<meta name="viewport" content="width=device-width, initial-scale=1">${BOOT_TAG}`)
+  const body = viewport ? html.slice(0, viewport.index) + html.slice(viewport.index + viewport[0].length) : html
+  return body.replace(/<head(?:\s[^>]*)?>/i, match => `${match}${viewport?.[0] ?? '<meta name="viewport" content="width=device-width, initial-scale=1">'}${BOOT_TAG}`)
 }
 
