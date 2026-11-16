@@ -1,7 +1,7 @@
 {
   "name": "@winlin926/dsh-remote-connect",
   "version": "0.6.0",
-  "description": "用手机浏览器继续电脑上的 DeepSeek Harness 会话：同一 Wi-Fi 扫码配对、处理工具审批、预览文件；支持隧道网关或自托管公网节点。",
+  "description": "DeepSeek Harness 远程控制：手机浏览器扫码接入电脑上的 DSH 会话，继续对话、审批工具、预览文件，局域网直连或自托管公网节点。",
   "type": "module",
   "license": "MIT",
   "author": "winlin926",
