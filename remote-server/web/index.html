@@ -105,12 +105,15 @@
       if (stored && typeof stored.deviceId === 'string' && B64URL.test(stored.identityKey)) return stored;
     } catch { /* ignore corrupt storage */ }
     const deviceId = ulid();
+    // The node contract pins identityKey to Base64URL(SPKI DER), the same encoding
+    // the Host publishes. Never fall back to random bytes: the claim would then be
+    // rejected as an invalid public key.
     let identityKey;
     try {
       const pair = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
-      identityKey = b64url(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)));
+      identityKey = b64url(new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey)));
     } catch {
-      identityKey = b64url(crypto.getRandomValues(new Uint8Array(32)));
+      throw new Error('此浏览器无法生成配对身份密钥（需要 WebCrypto X25519），请改用 DSH 客户端配对。');
     }
     const identity = { deviceId, identityKey };
     localStorage.setItem(IDENTITY_STORAGE, JSON.stringify(identity));

@@ -12,6 +12,7 @@ import {
   parseSetCookie,
   randomDeviceId,
   randomIdentityKey,
+  randomToken,
   registerHost,
   startNode,
   verificationCodeFor,
@@ -53,6 +54,7 @@ test('pairing needs the phone decision and the desktop decision before a cookie 
     const pairRequest = await hostClient.next('pair.request')
     assert.equal(pairRequest.payload.requestId, claim.json.requestId)
     assert.equal(pairRequest.payload.verificationCode, expectedCode)
+    assert.match(pairRequest.payload.verificationCode, /^\d{8}$/u)
     assert.equal(pairRequest.payload.clientDeviceId, client.deviceId)
     assert.equal(pairRequest.payload.clientIdentityKey, client.identityKey)
 
@@ -175,7 +177,7 @@ test('pairing tickets are single use and pairing tokens are enforced', async () 
     assert.equal(replayClaim.json.error.code, 'TICKET_USED')
 
     const wrongToken = await api(node.baseUrl, 'GET', `/v1/pairings/${claim.json.requestId}`, {
-      headers: { 'x-pairing-token': randomIdentityKey() },
+      headers: { 'x-pairing-token': randomToken() },
     })
     assert.equal(wrongToken.status, 401)
     assert.equal(wrongToken.json.error.code, 'PAIRING_TOKEN_INVALID')
@@ -419,5 +421,30 @@ test('a host-side device.revoked frame closes the client connection too', async 
     client?.close()
     paired.hostClient.close()
     await node.stop()
+  }
+})
+
+test('the shared codec accepts an eight-digit pairing comparison code and nothing else', async () => {
+  const protocol = await import('../dist/remote-server/src/protocol.js')
+  const payload = {
+    requestId: randomDeviceId(),
+    clientDeviceId: randomDeviceId(),
+    clientName: '手机',
+    clientIdentityKey: randomIdentityKey(),
+    verificationCode: '01234567',
+    expiresAt: Date.now() + 300_000,
+  }
+  const encoded = protocol.encodeControlFrame(protocol.createControlFrame('pair.request', payload))
+  assert.equal(typeof encoded, 'string')
+  const decoded: any = protocol.decodeControlFrame(encoded)
+  assert.equal(decoded.type, 'pair.request')
+  assert.equal(decoded.payload.verificationCode, '01234567')
+
+  for (const verificationCode of ['012345678', '0123456a', 'abcdefgh']) {
+    assert.throws(
+      () => protocol.encodeControlFrame(protocol.createControlFrame('pair.request', { ...payload, verificationCode })),
+      undefined,
+      `verificationCode ${verificationCode} must be rejected`,
+    )
   }
 })

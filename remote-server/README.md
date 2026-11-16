@@ -17,7 +17,7 @@
 
 - `kind` 固定 `"service"`；`protocol` 为数字 `1`。
 - `capabilities` 只能是 `pairing`、`cache`、`official-ui`、`relay`、`turn` 的子集，且必须含 `pairing`（默认 `pairing`、`cache`、`official-ui`、`relay`；配置了 `TURN_URLS`/`TURN_SECRET` 后自动追加 `turn`）。
-- `hostId` = base64url(sha256(主机公钥的 X25519 SPKI DER))，43 字符；`fingerprint` = 同一 sha256 前 16 字节的小写十六进制（32 字符）。Host 在 `POST /v1/hosts` 注册时提交 `identityKey`（43 字符 base64url 的 raw X25519 公钥），服务端用固定 SPKI 前缀 `302a300506032b656e032100` 重建 DER 后再哈希。
+- `hostId` = base64url(sha256(主机公钥的 SPKI DER))，43 字符；`fingerprint` = 同一 sha256 前 16 字节的小写十六进制（32 字符）。Host 在 `POST /v1/hosts` 注册时提交 `identityKey` = base64url(SPKI DER)（Ed25519 公钥 44 字节 → 59 字符），服务端不做任何前缀拼接，直接 `createPublicKey({format:'der',type:'spki'})` 校验后哈希——**与 `src/host-identity.ts` 完全一致，Host 与手机都用 SPKI DER**，同一字符串也进入配对展示码的 transcript。
 - `name`、`version` 可由 `NODE_NAME`、`NODE_VERSION` 覆盖。
 - 节点尚未注册任何 Host 时，`hostId` 为 43 个 `A`、`fingerprint` 为 32 个 `0` 的占位值（保持契约要求的长度与字符集，明确表示"暂无 Host 身份"）。
 
@@ -38,7 +38,7 @@ Host ───HTTPS/WSS──▶                                              �
 - `src/pairing.ts`：二维码配对状态机（票据、双端确认、发 cookie、落关系）。
 - `src/assets.ts`：Host 推送的官方 DSH 静态资源（按 `hostId` + `rev` 隔离，immutable + ETag）。
 - `src/turn.ts`：coturn REST HMAC 临时凭据。
-- `src/identity.ts`：token 生成/哈希、`hostId`/`fingerprint` 推导、constant-time 比较。
+- `src/identity.ts`：token 生成/哈希、`identityKey` 的 SPKI DER 校验、`hostId`/`fingerprint` 推导、constant-time 比较。
 
 ### SQLite 表结构（`schema_migrations` 版本化迁移，`CREATE TABLE IF NOT EXISTS` 幂等）
 
@@ -64,9 +64,9 @@ Host ───HTTPS/WSS──▶                                              �
 | GET | `/.well-known/dsh-remote` | 无 | 节点契约（见上），`no-store` |
 | GET | `/healthz` | 无 | `{ok:true,version}` |
 | GET | `/v1/config` | 无 | `{protocol,kind,name,version,capabilities}`，不含密钥 |
-| POST | `/v1/hosts` | `X-Host-Registration-Token`（配置后必需） | `{deviceId,name,identityKey,clientVersion}` → `201 {credential,host:{hostId,deviceId,name,fingerprint}}`（凭证只返回一次，仅存哈希）。同一 `deviceId` 重复注册返回 `409 HOST_ALREADY_REGISTERED`，公钥已被其他 Host 使用返回 `409 IDENTITY_IN_USE`（失败关闭） |
+| POST | `/v1/hosts` | `X-Host-Registration-Token`（配置后必需） | `{deviceId,name,identityKey,clientVersion}`（`identityKey` = base64url(SPKI DER)，如 Ed25519 44 字节/59 字符）→ `201 {credential,host:{hostId,deviceId,name,fingerprint}}`（凭证只返回一次，仅存哈希）。同一 `deviceId` 重复注册返回 `409 HOST_ALREADY_REGISTERED`，公钥已被其他 Host 使用返回 `409 IDENTITY_IN_USE`，不是合法 SPKI 公钥返回 `400 INVALID_IDENTITY_KEY`（失败关闭） |
 | POST | `/v1/pairings` | Host Bearer | `{ticket?,expiresAt?}`（省略则服务端生成 32 字节票据、TTL≤5min）→ `201 {ticket,expiresAt,host:{name,hostId,fingerprint}}`，票据哈希入库、单次使用 |
-| POST | `/v1/pairings/claim` | 无（票据即凭据） | `{ticket,client:{deviceId,name,platform,identityKey}}` → `201 {requestId,pairingToken,host:{...},verificationCode,expiresAt}`；票据被消费；Host 必须在线，`pair.request` 帧推给 Host |
+| POST | `/v1/pairings/claim` | 无（票据即凭据） | `{ticket,client:{deviceId,name,platform,identityKey}}`（`identityKey` 同样是 base64url(SPKI DER)）→ `201 {requestId,pairingToken,host:{...},verificationCode,expiresAt}`；票据被消费；Host 必须在线，`pair.request` 帧推给 Host |
 | POST | `/v1/pairings/:requestId/confirm` | `X-Pairing-Token` | 手机确认；Host 已确认则完成配对并 `Set-Cookie`（`Secure; HttpOnly; SameSite=Strict`）→ `{requestId,state,complete,host,expiresAt}` |
 | GET | `/v1/pairings/:requestId` | `X-Pairing-Token` | 轮询状态；完成且未发过 cookie 时补发 `Set-Cookie` |
 | POST | `/v1/pairings/:requestId/reject` | `X-Pairing-Token` | 手机拒绝（`410 PAIRING_REJECTED` 处理后续操作） |
@@ -81,7 +81,7 @@ Host ───HTTPS/WSS──▶                                              �
 
 - 升级前校验 `Origin`；5s 内必须完成 `hello`（`helloPayloadSchema`：`role/deviceId/accessToken/protocols/capabilities`）。Host 用注册返回的 Host 凭证，Client 优先用 `hello.accessToken`（设备会话 token），否则用升级请求携带的 cookie。
 - 服务端回 `hello.ack`：`protocol:1`、`serverVersion`、`connectionSessionId`、`heartbeatIntervalMs:25000`、`maxControlFrameBytes:65536`、`maxRelayFrameBytes:1048576`。
-- 配对帧：`pair.request`（含 8 位展示码）、`pair.approve`/`pair.reject`（Host→Server）、`pair.complete`（Server→Host）。
+- 配对帧：`pair.request`（含 8 位数字展示码，走共享 `encodeControlFrame` 校验）、`pair.approve`/`pair.reject`（Host→Server）、`pair.complete`（Server→Host）。
 - 连接帧：`connect.request`（Client）→ 校验 `relationships` 未撤销 → `connect.incoming`（Host）+ `connect.accepted`（Client）。
 - 透明转发：`secure.handshake`、`relay`、`signal.offer/answer/ice`、`transport.selected`、`connect.rejected`、`connection.lease.*` 只按 `connectionId`/`targetDeviceId` 转发给对端；`relay.counter` 方向内必须严格递增。服务端不解析、不落盘、不打日志密文。
 - 限制：单帧大小上限（控制帧 64KiB、relay 帧 1MiB）、每连接帧速率限流、`bufferedAmount` 背压（超限断开）、25s 心跳 / 75s 空闲超时、每设备单控制连接（旧连接 4003 替换）。
@@ -96,7 +96,7 @@ Host ───HTTPS/WSS──▶                                              �
 
 ### 已知问题与风险
 
-1. **上游 `pair.request` 正则缺陷**：仓库共享协议 `src/remote/vendor/protocol/index.ts` 里 `pair.request.verificationCode` 写成 `/^\\d{8}$/`（多转义一层，实际匹配"反斜杠 + 8 个 d"），而 `docs/remote-protocol.md` 与 `src/remote/pairing-code.ts` 都要求 8 位数字比较码。服务端按文档发送 8 位数字码；为不让整帧被本地校验丢弃，`pair.request` 这一帧由 `ControlHub.sendLocallyAuthored()` 直接序列化发送（仍受 64KiB 上限约束），其余帧全部走 `encodeControlFrame()` 严格校验。上游修正正则后此绕过可删除。
+1. 共享协议的两处编码约束已在本仓库内修正：`pair.request.verificationCode` 的正则改为 `/^\d{8}$/`（节点与 Host 都走同一套 `encodeControlFrame` 校验）；`identityKeySchema` 从"43 字符 raw key"放宽为 40–120 字符 Base64URL（容纳 59 字符的 SPKI DER，旧的 43 字符值仍合法），DER 结构由节点用 `createPublicKey` 校验。
 2. 本节点不实现 WebRTC：`hello.ack` 返回 `webrtcEnabled:false`，连接一律走 WSS/`relay`；`turn` 能力仅在配置 coturn 后声明。
 3. 真实 TLS 与 TURN 未在本机实测：TLS 由 Caddy 终止（compose 提供），TURN 凭据算法有单元测试但未连真实 coturn。
 4. 多实例不支持：在线状态与转发成员表在进程内存，SQLite 也是单写者；横向扩展需要 PostgreSQL 与共享在线协调。
@@ -114,7 +114,7 @@ npm test
 node dist/remote-server/src/main.js   # 可用 PORT/DATA_DIR 临时指定
 ```
 
-`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 7 个文件 49 个用例。
+`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 7 个文件 51 个用例。
 
 ## 目录
 

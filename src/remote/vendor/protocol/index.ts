@@ -973,7 +973,7 @@ const deviceNameSchema = boundedUtf8Schema(1, MAX_DEVICE_NAME_LENGTH)
   .refine(value => value.trim().length > 0, 'Device name must contain visible text.')
 const devicePlatformSchema = z.string().min(1).max(MAX_DEVICE_PLATFORM_LENGTH)
   .regex(/^[a-z0-9][a-z0-9._-]*$/u)
-const identityKeySchema = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u)
+const identityKeySchema = z.string().regex(/^[A-Za-z0-9_-]{40,120}$/u)
 const canonicalBase64UrlSchema = z.string().min(1).regex(/^[A-Za-z0-9_-]+$/u).refine(value => {
   const remainder = value.length % 4
   if (remainder === 1) return false
@@ -1270,7 +1270,7 @@ const controlFramePayloadSchemas: Record<ControlFrameType, z.ZodType> = {
   'signal.answer': signalPayloadSchema,
   'signal.ice': signalIcePayloadSchema,
   'transport.selected': transportSelectedPayloadSchema,
-  'pair.request': z.object({ requestId: z.string().min(1), clientDeviceId: z.string().min(1), clientName: z.string().min(1), clientIdentityKey: identityKeySchema, verificationCode: z.string().regex(/^\\d{8}$/), expiresAt: z.number().int().positive().safe() }),
+  'pair.request': z.object({ requestId: z.string().min(1), clientDeviceId: z.string().min(1), clientName: z.string().min(1), clientIdentityKey: identityKeySchema, verificationCode: z.string().regex(/^\d{8}$/), expiresAt: z.number().int().positive().safe() }),
   'pair.approve': z.object({ requestId: z.string().min(1) }),
   'pair.reject': z.object({ requestId: z.string().min(1) }),
   'pair.complete': z.object({ requestId: z.string().min(1), clientDeviceId: z.string().min(1), clientIdentityKey: identityKeySchema }),

@@ -104,13 +104,7 @@ export class ControlHub {
       isHostOnline: hostId => this.hosts.has(hostId),
       sendToHost: (hostId, frame) => {
         const connection = this.hosts.get(hostId)
-        if (!connection) return false
-        // `pair.request` carries the eight-digit comparison code documented by the
-        // remote protocol. The vendored schema over-escapes that field's regex
-        // (`/^\\d{8}$/`), so the documented code cannot pass local validation;
-        // this is the only frame the node authors itself, hence the narrow bypass.
-        if (frame.type === 'pair.request') return this.sendLocallyAuthored(connection, frame)
-        return this.send(connection, frame)
+        return connection ? this.send(connection, frame) : false
       },
       sendToDevice: (deviceId, frame) => {
         const connection = this.clients.get(deviceId)
@@ -486,22 +480,6 @@ export class ControlHub {
         maxRelayFrameBytes: MAX_RELAY_FRAME_BYTES,
       })
     } catch {
-      this.deps.logger.warn({ event: 'control.frame.rejected', type: frame.type })
-      return false
-    }
-    connection.ws.send(encoded)
-    return true
-  }
-
-  /**
-   * Send a frame the node authored itself, with the same size ceiling but without
-   * re-running the vendored payload validator. Used for `pair.request`, whose
-   * comparison-code regex is broken upstream (see the notifier for details).
-   */
-  private sendLocallyAuthored(connection: Connection, frame: ControlFrame): boolean {
-    if (connection.ws.readyState !== 1) return false
-    const encoded = JSON.stringify(frame)
-    if (Buffer.byteLength(encoded) > MAX_CONTROL_FRAME_BYTES) {
       this.deps.logger.warn({ event: 'control.frame.rejected', type: frame.type })
       return false
     }

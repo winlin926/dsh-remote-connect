@@ -11,7 +11,7 @@ import {
   hostHello,
   hostRegistration,
   randomDeviceId,
-  randomIdentityKey,
+  randomToken,
   registerHost,
   startNode,
 } from './helpers.ts'
@@ -339,10 +339,10 @@ test('frame floods trip the control frame rate limiter', async () => {
 test('a client cannot authenticate with a forged device session', async () => {
   const node = await startNode()
   try {
-    const forged = await connectControl(node, clientHello(node, randomDeviceId(), randomIdentityKey()), {
+    const forged = await connectControl(node, clientHello(node, randomDeviceId(), randomToken()), {
       skipHello: true,
     })
-    forged.ws.send(JSON.stringify(clientHello(node, randomDeviceId(), randomIdentityKey())))
+    forged.ws.send(JSON.stringify(clientHello(node, randomDeviceId(), randomToken())))
     const errorFrame = await forged.next('error')
     assert.equal(errorFrame.payload.code, 'AUTH_INVALID')
     await forged.waitClose()

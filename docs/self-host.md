@@ -122,5 +122,5 @@ docker compose up -d --build
   失败时回退中继。
 - 未配置 TURN 时 `/v1/turn-credentials` 返回 `501 TURN_NOT_CONFIGURED`，节点能力里也不含 `turn`。
 - 本仓库交付环境未实测真实 TLS 证书签发与真实 coturn 连通性（仅单测覆盖凭据算法）；上线前请按第 3 节验收。
-- 仓库共享协议 `pair.request.verificationCode` 正则存在上游过度转义缺陷，节点按协议文档发送 8 位数字码并绕过
-  该帧的本地校验（详见 `remote-server/README.md` 已知问题）。
+- 设备身份统一用 Base64URL(SPKI DER)（与 `src/host-identity.ts` 一致）：Host 与手机提交的都是 SPKI DER 公钥，
+  节点只做 DER 合法性校验与 sha256 推导，不持有、不上传任何私钥。

@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, createHash, createHmac } from 'node:crypto'
+import { randomBytes, randomUUID, createHash, createHmac, generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -93,7 +93,17 @@ export async function api(
   }
 }
 
+/**
+ * A real Base64URL(SPKI DER) identity key. Hosts publish the Ed25519 SPKI DER
+ * from `src/host-identity.ts`; OAuth-style raw 32-byte keys are never accepted.
+ */
 export function randomIdentityKey(): string {
+  const pair = generateKeyPairSync('ed25519')
+  return pair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64url')
+}
+
+/** Opaque 32-byte Base64URL bearer token (not a public key). */
+export function randomToken(): string {
   return randomBytes(32).toString('base64url')
 }
 
@@ -103,10 +113,7 @@ export function randomDeviceId(): string {
 
 /** Expected node-contract host identity, computed independently of the server. */
 export function hostIdentityFromKey(identityKey: string): { hostId: string; fingerprint: string } {
-  const der = Buffer.concat([
-    Buffer.from('302a300506032b656e032100', 'hex'),
-    Buffer.from(identityKey, 'base64url'),
-  ])
+  const der = Buffer.from(identityKey, 'base64url')
   const digest = createHash('sha256').update(der).digest()
   return { hostId: digest.toString('base64url'), fingerprint: digest.subarray(0, 16).toString('hex') }
 }

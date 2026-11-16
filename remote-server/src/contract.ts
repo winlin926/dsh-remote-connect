@@ -34,10 +34,14 @@ export function parseNodeDescriptor(value: unknown): NodeDescriptor {
 }
 
 export const DEVICE_ID_PATTERN = /^(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu
-export const IDENTITY_KEY_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u
+/** Base64URL alphabet and length only; the DER structure is validated by identity.ts. */
+export const IDENTITY_KEY_PATTERN = /^[A-Za-z0-9_-]{40,120}$/u
 
 const deviceIdSchema = z.string().regex(DEVICE_ID_PATTERN, 'Device ID must be a ULID or UUID.')
-const identityKeySchema = z.string().regex(IDENTITY_KEY_PATTERN, 'Identity key must be a raw 32-byte Base64URL value.')
+const identityKeySchema = z.string().regex(
+  IDENTITY_KEY_PATTERN,
+  'Identity key must be a Base64URL-encoded SPKI DER public key.',
+)
 const utf8Length = (value: string): number => new TextEncoder().encode(value).byteLength
 const deviceNameSchema = z.string().refine(value => {
   const length = utf8Length(value)
@@ -49,7 +53,11 @@ const clientVersionSchema = z.string().refine(value => {
   return length >= 1 && length <= 64
 }, 'Client version must be 1-64 UTF-8 bytes.')
 
-/** Body of `POST /v1/hosts` — identityKey is the Host's raw X25519 public key. */
+/**
+ * Body of `POST /v1/hosts`. `identityKey` is Base64URL(SPKI DER) of the Host
+ * public key — the same encoding as `host-identity.publicKey` in the Host
+ * plugin (Ed25519 SPKI DER, 44 bytes / 59 characters).
+ */
 export const hostRegistrationSchema = z.object({
   deviceId: deviceIdSchema,
   name: deviceNameSchema,

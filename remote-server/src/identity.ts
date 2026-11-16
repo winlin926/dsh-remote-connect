@@ -1,11 +1,9 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, createPublicKey, timingSafeEqual } from 'node:crypto'
+import { ApiError } from './errors.js'
 import { PROTOCOL_VERSION } from './protocol.js'
 
 /** Canonical unpadded Base64URL alphabet. */
 const BASE64URL = /^[A-Za-z0-9_-]+$/u
-
-/** X25519 SubjectPublicKeyInfo prefix (RFC 8410) wrapped around a raw 32-byte key. */
-const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex')
 
 /** Advertised before the first Host registers: format-valid but clearly empty. */
 export const EMPTY_HOST_ID = 'A'.repeat(43)
@@ -62,22 +60,40 @@ export function constantTimeStringEqual(left: string, right: string): boolean {
 }
 
 export interface HostIdentity {
-  /** Base64URL(SHA-256(X25519 SPKI DER)), always 43 characters. */
+  /** Base64URL(SHA-256(SPKI DER)), always 43 characters. */
   hostId: string
   /** First 16 bytes of the same digest, lowercase hex, always 32 characters. */
   fingerprint: string
 }
 
 /**
- * Derive the node-visible identity of a Host from its raw X25519 public key.
- * The exact byte layout is part of the node contract; the same derivation is
- * used by the Host and browser. `identityKey` is expected to be a canonical
- * 43-character Base64URL string.
+ * Decode and validate an identity key: Base64URL(SPKI DER) of a public key.
+ * This is the same encoding the Host publishes as `host-identity.publicKey`
+ * (Ed25519 SPKI DER), so no key type is guessed and no prefix is prepended.
+ * Returns the DER bytes, or null when the value is not a valid SPKI key.
+ */
+export function decodeIdentityKey(identityKey: string): Buffer | null {
+  const der = decodeCanonicalBase64Url(identityKey)
+  if (der === null) return null
+  try {
+    createPublicKey({ key: der, format: 'der', type: 'spki' })
+  } catch {
+    return null
+  }
+  return der
+}
+
+/**
+ * Derive the node-visible identity of a Host from its SPKI DER public key,
+ * exactly as `src/host-identity.ts` does: one sha256 digest over the DER bytes.
+ * Both the Host and the phone publish `identityKey` in this encoding, and the
+ * same string is fed into the pairing-code transcript.
  */
 export function deriveHostIdentity(identityKey: string): HostIdentity {
-  const raw = decodeCanonicalBase64Url(identityKey, 32)
-  if (!raw) throw new TypeError('Host identity key must be a canonical 32-byte Base64URL value.')
-  const der = Buffer.concat([X25519_SPKI_PREFIX, raw])
+  const der = decodeIdentityKey(identityKey)
+  if (der === null) {
+    throw ApiError.badRequest('INVALID_IDENTITY_KEY', 'identityKey must be a Base64URL-encoded SPKI DER public key.')
+  }
   const digest = sha256(der)
   return {
     hostId: toBase64Url(digest),

@@ -5,7 +5,7 @@ import {
   api,
   hostRegistration,
   randomDeviceId,
-  randomIdentityKey,
+  randomToken,
   registerHost,
   startNode,
 } from './helpers.ts'
@@ -128,7 +128,7 @@ test('assets are namespaced per Host and never share cache entries', async () =>
     assert.equal(wrongRevision.status, 404)
     assert.equal(wrongRevision.json.error.code, 'ASSET_NOT_FOUND')
 
-    const unknownHost = await api(node.baseUrl, 'GET', `/assets/${randomIdentityKey()}/r1/app.js`)
+    const unknownHost = await api(node.baseUrl, 'GET', `/assets/${randomToken()}/r1/app.js`)
     assert.equal(unknownHost.status, 404)
     assert.equal(unknownHost.json.error.code, 'ASSET_NOT_FOUND')
   } finally {

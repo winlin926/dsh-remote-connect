@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { test } from 'node:test'
 import { nodeDescriptorSchema } from '../dist/remote-server/src/contract.js'
 import {
@@ -52,13 +53,36 @@ test('well-known host identity is derived from the registered Host public key', 
     assert.equal(result.status, 200)
     assert.equal(result.json.name, '自建节点-测试')
     assert.equal(result.json.version, '9.9.9')
-    assert.equal(result.json.hostId, expected.hostId, 'hostId = base64url(sha256(X25519 SPKI DER)), 43 chars')
+    assert.equal(result.json.hostId, expected.hostId, 'hostId = base64url(sha256(SPKI DER)), 43 chars')
     assert.equal(result.json.fingerprint, expected.fingerprint, 'fingerprint = first 16 bytes of the same sha256, lowercase hex')
     assert.equal(expected.hostId.length, 43)
     assert.equal(expected.fingerprint.length, 32)
   } finally {
     await node.stop()
   }
+})
+
+test('host identity matches src/host-identity.ts for an Ed25519 SPKI key', async () => {
+  const identity = await import('../dist/remote-server/src/identity.js')
+  const pair = generateKeyPairSync('ed25519')
+  const der = pair.publicKey.export({ format: 'der', type: 'spki' })
+  const identityKey = der.toString('base64url')
+  assert.equal(identityKey.length, 59, 'Ed25519 SPKI DER is 44 bytes and encodes to 59 Base64URL characters')
+
+  // Mirrors src/host-identity.ts#identityOfPublicKey without importing plugin code.
+  const digest = createHash('sha256').update(der).digest()
+  const expected = {
+    hostId: digest.toString('base64url'),
+    fingerprint: digest.subarray(0, 16).toString('hex'),
+  }
+
+  assert.deepEqual(identity.deriveHostIdentity(identityKey), expected)
+  assert.deepEqual(Buffer.from(identity.decodeIdentityKey(identityKey)), der, 'decodeIdentityKey returns the SPKI DER bytes')
+  assert.equal(identity.decodeIdentityKey('A'.repeat(59)), null, 'valid Base64URL that is not SPKI DER must be rejected')
+  assert.throws(
+    () => identity.deriveHostIdentity('A'.repeat(59)),
+    (error: any) => error.status === 400 && error.code === 'INVALID_IDENTITY_KEY',
+  )
 })
 
 test('healthz and /v1/config stay minimal', async () => {

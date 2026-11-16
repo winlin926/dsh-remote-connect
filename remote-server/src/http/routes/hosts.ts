@@ -4,7 +4,6 @@ import { ApiError, rateLimited } from '../../errors.js'
 import {
   constantTimeStringEqual,
   createToken,
-  decodeCanonicalBase64Url,
   deriveHostIdentity,
   hashToken,
 } from '../../identity.js'
@@ -42,9 +41,7 @@ export function registerHostRoutes(router: Router, services: AppServices): void 
       throw ApiError.badRequest('INVALID_REQUEST', parsed.error.issues[0]?.message ?? 'Invalid Host registration body.')
     }
     const { deviceId, name, identityKey, clientVersion } = parsed.data
-    if (decodeCanonicalBase64Url(identityKey, 32) === null) {
-      throw ApiError.badRequest('INVALID_IDENTITY_KEY', 'identityKey must be a raw 32-byte X25519 public key.')
-    }
+    // Throws 400 INVALID_IDENTITY_KEY when the DER is not a valid SPKI public key.
     const identity = deriveHostIdentity(identityKey)
     const existing = repos.findHostByDeviceId(deviceId)
     if (existing) throw ApiError.conflict('HOST_ALREADY_REGISTERED', 'This device id is already registered.')

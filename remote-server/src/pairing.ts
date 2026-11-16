@@ -3,6 +3,7 @@ import { ApiError } from './errors.js'
 import {
   createToken,
   decodeCanonicalBase64Url,
+  decodeIdentityKey,
   hashToken,
   newRequestId,
   pairingVerificationCode,
@@ -109,6 +110,9 @@ export class PairingService {
     client: { deviceId: string; name: string; platform: string; identityKey: string }
   }): ClaimResult {
     const now = this.clock()
+    if (decodeIdentityKey(input.client.identityKey) === null) {
+      throw ApiError.badRequest('INVALID_IDENTITY_KEY', 'client.identityKey must be a Base64URL-encoded SPKI DER public key.')
+    }
     const ticketHash = hashToken(input.ticket)
     const ticket = this.repos.findTicket(ticketHash)
     if (!ticket) throw ApiError.notFound('TICKET_INVALID', 'The pairing ticket is not valid.')

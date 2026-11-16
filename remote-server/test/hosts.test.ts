@@ -84,7 +84,8 @@ test('host registration rejects hostile bodies with 4xx responses', async () => 
     const cases: Array<{ name: string; body?: unknown; rawBody?: string; contentType?: string; headers?: Record<string, string>; status: number; code?: string }> = [
       { name: 'missing identityKey', body: { deviceId: randomDeviceId(), name: 'h', clientVersion: '1' }, status: 400, code: 'INVALID_REQUEST' },
       { name: 'bad identityKey', body: hostRegistration({ identityKey: 'not-a-key' }), status: 400 },
-      { name: 'short identityKey', body: hostRegistration({ identityKey: randomIdentityKey().slice(0, 42) }), status: 400 },
+      { name: 'short identityKey', body: hostRegistration({ identityKey: randomIdentityKey().slice(0, 39) }), status: 400 },
+      { name: 'identityKey is not SPKI DER', body: hostRegistration({ identityKey: 'A'.repeat(59) }), status: 400, code: 'INVALID_IDENTITY_KEY' },
       { name: 'empty name', body: hostRegistration({ name: '' }), status: 400 },
       { name: 'overlong name', body: hostRegistration({ name: 'x'.repeat(200) }), status: 400 },
       { name: 'unknown field', body: { ...hostRegistration(), isAdmin: true }, status: 400 },
