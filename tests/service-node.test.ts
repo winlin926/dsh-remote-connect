@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { statSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -267,14 +267,16 @@ describe('service node tunnel', () => {
     expect(hello.frame).toMatchObject({ t: 'hello', hostId: fixture.identity.hostId, version: '9.9.9', capabilities: ['http', 'ws', 'assets'] })
 
     const file = join(storage, SERVICE_NODES_FILE)
-    const saved = JSON.parse(await readFile(file, 'utf8')) as { version: number; nodes: Record<string, { credential: string; hostId: string; registeredAt: number; lastConnectedAt: number | null }> }
+    type SavedNodes = { version: number; nodes: Record<string, { credential: string; hostId: string; registeredAt: number; lastConnectedAt: number | null }> }
+    // The bookkeeping save runs right after the tunnel opens. Read the file after a quiet window:
+    // a reader racing the atomic rename makes Windows reject it with EPERM, and that one failure is
+    // swallowed, so there is no later write to wait for.
+    await new Promise(resolve => setTimeout(resolve, 500))
+    const saved = JSON.parse(await readFile(file, 'utf8')) as SavedNodes
     expect(saved.version).toBe(1)
     expect(saved.nodes[fake.origin]?.credential).toBe('credential-1')
     expect(saved.nodes[fake.origin]?.hostId).toBe(fixture.identity.hostId)
-    // lastConnectedAt is bookkeeping written after the tunnel opened; wait for the atomic save.
-    await waitFor(() => {
-      try { const current = JSON.parse(readFileSync(file, 'utf8')) as typeof saved; return current.nodes[fake.origin]?.lastConnectedAt ?? undefined } catch { return undefined }
-    }, '连接时间已保存')
+    expect(typeof saved.nodes[fake.origin]?.lastConnectedAt).toBe('number')
     // Node on Windows cannot express POSIX modes; the mode is only meaningful elsewhere.
     if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(fixture.node.status().lastError).toBeUndefined()
