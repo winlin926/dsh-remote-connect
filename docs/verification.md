@@ -29,7 +29,8 @@
 - 删除自托管节点时先撤销节点侧注册：`DELETE /v1/hosts/:hostId`（Host Bearer、只能删自己、事务级联设备关系与会话、204）与 `ServiceNode.unregister()`；撤销失败不阻断本地删除，用中文提示在节点上执行 `npm run admin:reset -- <hostId>`。
 - `npm pack --ignore-scripts` 生成 `@winlin926/dsh-remote-connect@0.6.1` 候选 `.tgz`：49 个文件、127747 字节；`lib/index.js` 与 `lib/client.js` SHA-256 分别为 `c9eed3616a6310ca9c3f876af7e986b888eb672a611718330b5f30b209d9915b`（189302 字节）、`779d092dd8225b1792284f10f109decb34518843557b2684d26f6beb97cd0d9c`（88769 字节）；`.tgz` SHA-256 `4e6ed6c9806866ccfd219988858dcfa73a03f1f739d692ff286d4783126edac1`、SHA-512 `SceUceCgHh61RLNvaCsFNLwjqg5F2FY4VY08O5jkKa/r8DAXngoaiubsiADSypwZMqUoV+Y0ajLD4VnLDbLBYA==`。未发布 npm。
 - 隔离宿主 `qa:browser` 15 项通过：桌面与 320/390px 深浅色、扫码批准、宿主应用就绪、复制回退、组合输入、旧轮询响应、HTML/文本预览、撤销，以及公网节点面板（空列表文案、拒绝非 HTTPS、不可达节点不落盘）。三段缓存：首次访问 2978 ms / 3 请求 / 1,747,132 字节，同页重访 1473 ms / 0 字节 / 3 内存命中，关页重开 1859 ms / 0 字节 / 3 磁盘命中。该 profile 只有 3 个初始资源，不能代表日常 54 插件总量。
-- 日常 profile 已装 0.6.1（`file:` 固定 tgz），但宿主进程未重启前仍运行 0.6.0 的模块；`/.well-known/dsh-remote` 的 `version` 只有在重启后才会变为 `0.6.1`。
+- 日常 profile 已装 0.6.1（`file:` 固定 tgz）并重启宿主：重启后 `/.well-known/dsh-remote` 返回 `version: "0.6.1"`，`hostId` `g7iflg32huZJkCXpOeWlLfYIOgAkPLcCyVIU-e2Un_Q` 与指纹 `83b89f960df686e6499025e939e5a52d` 与重启前一致，5 台设备授权保留，未配对访问仍 403。
+- 日常 54 插件三段缓存（桌面 Chromium，真实磁盘缓存）：冷启动 7373 ms / 90 请求 / 14,656,593 字节；同页重访 4236 ms / 47 请求 / 699,746 字节（4.8%，插件捆包全部命中、0 字节）；关页重开 4797 ms / 86 请求 / 3,243,349 字节（22.1%，7.8 MB 与 1.4 MB 捆包仍从磁盘缓存复用）；三次 `boot-reports` 均 `phase=ready result=ready errors=0 completed=3`。残余为 `dsh-genui` 两个 vendor 资源无缓存头（909,910 + 177,738 字节/次）与宿主动态接口 JSON；完整报告见 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.1\lan-cache-report.md`。
 - `package-manifest.json` 式的旧包清单未再生成；`scripts/check-package.mjs` 直接校验 `.tgz`，确认入口文件与本次构建逐字节相同、包内无 `.qa`、测试与开发文件。
 - 边界：自托管节点的端到端链路只在本机进程内假节点与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；Docker 镜像未在本机 `build`/`up`；Coturn 临时凭据与真实 TLS 未实测；隔离宿主的浏览器验收已用真实 Chromium 渲染，但截图因 CDP 超时未保存，视觉复核只有布局断言。
 
