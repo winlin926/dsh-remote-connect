@@ -328,6 +328,76 @@ if (typeof taskSpace !== 'function') {
     await desktop.cdp('Page.bringToFront')
     await layout(desktop, 'desktop-nodes')
     results.push('public node section rejects non-https and unreachable nodes without saving')
+    // v2 契约：向 status 响应注入一组 v2、一组 v1 节点，验证节点指纹扩展、信任文案与协议标签。
+    // 本段依赖 A 的面板 v2 实现；元素缺失时给出可定位的失败信息。
+    await desktop.evaluate(() => {
+      const transport = (window.__DSH_TRANSPORT__ ??= {})
+      const original = transport.fetch ?? window.fetch.bind(window)
+      const now = Date.now()
+      const v2Node = {
+        id: 'qa-public-node-v2', url: 'https://node-a.example.com', kind: 'service', name: '合成节点甲', version: '0.6.2',
+        protocol: 2, capabilities: ['pairing', 'cache', 'official-ui'],
+        node: {
+          id: 'H_lyxbdXZlbAV90iARzG7fkrZnsuyxzJkzSvszJvqjw',
+          fingerprint: '1ff972c5b7576656c057dd22011cc6ed',
+          publicKey: 'MCowBQYDK2VwAyEAhB5bvZ68TbxSswTirxsF5fKC56S3yN_xSFV5gQzlYzM',
+        },
+        hostId: null, fingerprint: null, addedAt: now - 60_000, lastCheckAt: now, lastCheckOk: true,
+        lastCheckError: null, pending: false, identityChange: null,
+      }
+      const v1Node = {
+        id: 'qa-public-node-v1', url: 'https://node-b.example.com', kind: 'service', name: '合成节点乙', version: '0.6.1',
+        protocol: 1, capabilities: ['pairing'], node: null,
+        hostId: 'A'.repeat(43), fingerprint: '0'.repeat(32), addedAt: now - 120_000, lastCheckAt: now,
+        lastCheckOk: true, lastCheckError: null, pending: false,
+      }
+      window.__qaPublicNodes = { injected: false, restore: () => { transport.fetch = original } }
+      transport.fetch = async (input, init = {}) => {
+        const response = await original(input, init)
+        let payload
+        try { payload = JSON.parse(init.body || '{}') } catch { return response }
+        if (payload.action !== 'status') return response
+        const data = await response.clone().json()
+        const panel = data?.publicNodes ?? data?.data?.publicNodes
+        // 状态结构没有 publicNodes 时不改响应：让后续断言报告契约缺位，而不是伪造成功。
+        if (!panel || !Array.isArray(panel.list)) return response
+        panel.list = [...panel.list.filter(node => !String(node.id).startsWith('qa-public-node-')), v2Node, v1Node]
+        panel.current = null
+        panel.pendingReview = false
+        window.__qaPublicNodes.injected = true
+        return new Response(JSON.stringify(data), { status: response.status, statusText: response.statusText, headers: { 'content-type': 'application/json' } })
+      }
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await desktop.waitForFunction(() => window.__qaPublicNodes?.injected, undefined, { timeout: 10000 }).catch(async () => {
+      const panel = await desktop.evaluate(() => document.querySelector('.dsrc-dialog[open]')?.innerText?.slice(0, 600) ?? '')
+      throw new Error('v2 断言需要 A 的面板 v2 实现：status 响应缺少 publicNodes.list，无法注入合成节点。当前面板：' + JSON.stringify(panel))
+    })
+    await desktop.waitForFunction(() => document.querySelectorAll('.dsrc-nodes .dsrc-node').length >= 2, undefined, { timeout: 10000 }).catch(async () => {
+      const section = await desktop.evaluate(() => document.querySelector('.dsrc-nodes')?.innerText?.slice(0, 600) ?? '')
+      throw new Error('v2 断言需要 A 的面板 v2 实现：注入合成节点后公网节点行数仍不足 2。当前节点段：' + JSON.stringify(section))
+    })
+    {
+      const nodesV2 = await desktop.evaluate(() => ({
+        rows: [...document.querySelectorAll('.dsrc-nodes .dsrc-node')].map(node => node.innerText),
+        panel: document.querySelector('.dsrc-dialog[open]')?.innerText ?? '',
+        section: document.querySelector('.dsrc-nodes')?.innerText ?? '',
+      }))
+      const v2Row = nodesV2.rows.find(row => row.includes('合成节点甲'))
+      const v1Row = nodesV2.rows.find(row => row.includes('合成节点乙'))
+      assert.ok(v2Row, 'v2 节点行缺失；需 A 合并并实现 v2 面板后运行本段：' + JSON.stringify(nodesV2.section))
+      assert.ok(v1Row, 'v1 节点行缺失；需 A 合并并实现 v2 面板后运行本段：' + JSON.stringify(nodesV2.section))
+      assert.ok(v2Row.includes('1FF9-72C5-B757-6656-C057-DD22-011C-C6ED'), `v2 节点指纹未按 8 组 4 位大写展示：${JSON.stringify(v2Row)}`)
+      assert.ok(/v2/.test(v2Row), `v2 节点缺少协议标签 v2：${JSON.stringify(v2Row)}`)
+      assert.ok(v1Row.includes('旧版 v1（单主机）'), `v1 节点缺少「旧版 v1（单主机）」标签：${JSON.stringify(v1Row)}`)
+      const panelText = nodesV2.panel.replace(/\s+/g, ' ')
+      for (const sentence of ['通过 HTTPS 连接该节点。', '节点或隧道运营者可能看到转发给本机的请求与内容', '本插件不提供端到端加密。', '请只添加你信任的节点。']) {
+        assert.ok(panelText.includes(sentence), `面板缺少契约 §12 的信任文案片段「${sentence}」：` + JSON.stringify(panelText.slice(0, 600)))
+      }
+      await desktop.evaluate(() => { window.__qaPublicNodes.restore(); document.dispatchEvent(new Event('visibilitychange')) })
+      await desktop.waitForFunction(() => document.querySelectorAll('.dsrc-nodes .dsrc-node').length === 0, undefined, { timeout: 10000 }).catch(() => {})
+      results.push('public node panel shows v2 fingerprint groups, trust copy and v1/v2 protocol labels')
+    }
     passed = true
     console.log(JSON.stringify({ passed, results, cacheRuns, browserProcessRestart: 'manual', captureWarnings, screenshots: captures }, null, 2))
   } finally {
