@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { generateKeyPairSync } from 'node:crypto'
+import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -77,10 +77,13 @@ class TunnelPeer {
 
 interface Registration { authorization: string | undefined; body: Record<string, unknown> }
 interface RegistrationAnswer { status: number; json?: unknown }
+interface Pairing { authorization: string | undefined; body: Record<string, unknown> }
 
 interface FakeNodeOptions {
   /** Answer for `POST /v1/hosts`; the default echoes the requested deviceId back as the host id. */
   register?: (body: Record<string, unknown>, attempt: number) => RegistrationAnswer
+  /** Answer for `POST /v1/pairings`; the default issues a fresh ticket for this Host. */
+  pairing?: (body: Record<string, unknown>, attempt: number) => RegistrationAnswer
   /** Answer for `GET /v1/tunnel`; false refuses the credential with HTTP 401. */
   authorize?: (req: IncomingMessage) => boolean
   tunnel?: (peer: TunnelPeer, index: number) => void
@@ -88,6 +91,7 @@ interface FakeNodeOptions {
 
 async function startFakeNode(options: FakeNodeOptions = {}) {
   const registrations: Registration[] = []
+  const pairings: Pairing[] = []
   const tunnels: TunnelPeer[] = []
   let refusals = 0
   const sockets = new Set<WebSocket>()
@@ -100,6 +104,19 @@ async function startFakeNode(options: FakeNodeOptions = {}) {
         try { const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown> } catch { /* asserted by the test */ }
         registrations.push({ authorization: req.headers.authorization, body })
         const answer = options.register?.(body, registrations.length) ?? { status: 201, json: { credential: `credential-${registrations.length}`, host: { hostId: String(body.deviceId ?? '') } } }
+        res.writeHead(answer.status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(answer.json ?? {}))
+      })
+      return
+    }
+    if (req.method === 'POST' && req.url === '/v1/pairings') {
+      const chunks: Buffer[] = []
+      req.on('data', chunk => chunks.push(toBuffer(chunk)))
+      req.on('end', () => {
+        let body: Record<string, unknown> = {}
+        try { const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown> } catch { /* asserted by the test */ }
+        pairings.push({ authorization: req.headers.authorization, body })
+        const answer = options.pairing?.(body, pairings.length) ?? { status: 201, json: { ticket: randomBytes(32).toString('base64url'), expiresAt: Date.now() + 300_000 } }
         res.writeHead(answer.status, { 'content-type': 'application/json' })
         res.end(JSON.stringify(answer.json ?? {}))
       })
@@ -137,6 +154,7 @@ async function startFakeNode(options: FakeNodeOptions = {}) {
   return {
     origin: `http://127.0.0.1:${address.port}`,
     registrations,
+    pairings,
     tunnels,
     refusals: () => refusals,
     waitTunnel: (count = 1, timeoutMs = 4000) => waitFor(() => tunnels[count - 1], `第 ${count} 条隧道`, timeoutMs),
@@ -496,5 +514,55 @@ describe('service node tunnel', () => {
     expect(text).not.toContain('credential-1')
     expect(text).not.toContain('host-cookie-secret')
     expect(text).not.toContain('device-cookie-secret')
+  })
+
+  it('asks the node for a pairing ticket and builds the page URL from it', async () => {
+    const storage = await folder()
+    const ticket = randomBytes(32).toString('base64url')
+    const expiresAt = 1_900_000_000_000
+    const fake = await startFakeNode({ pairing: () => ({ status: 201, json: { ticket, expiresAt } }) })
+    const upstream = await startUpstream()
+    const fixture = serviceNode(fake.origin, storage, upstream.port)
+    await fixture.start()
+    await waitFor(() => fixture.node.status().connected, '隧道已连接')
+
+    const issued = await fixture.node.issueTicket()
+    expect(issued.expiresAt).toBe(expiresAt)
+    const url = new URL(issued.url)
+    expect(url.origin).toBe(fake.origin)
+    const hash = new URLSearchParams(url.hash.slice(1))
+    // The node's pairing page reads `v`, `ticket` and this Host's identity key from the hash.
+    expect(hash.get('v')).toBe('1')
+    expect(hash.get('ticket')).toBe(ticket)
+    expect(hash.get('key')).toBe(fixture.identity.identityKey)
+    expect(fake.pairings).toHaveLength(1)
+    expect(fake.pairings[0]?.authorization).toBe('Bearer credential-1')
+    expect(fake.pairings[0]?.body).toEqual({})
+    expect(fixture.node.status().lastError).toBeUndefined()
+  })
+
+  it('reports a node that refuses to issue a pairing ticket and keeps the tunnel up', async () => {
+    const storage = await folder()
+    const fake = await startFakeNode({ pairing: () => ({ status: 500 }) })
+    const upstream = await startUpstream()
+    const fixture = serviceNode(fake.origin, storage, upstream.port)
+    await fixture.start()
+    await waitFor(() => fixture.node.status().connected, '隧道已连接')
+
+    await expect(fixture.node.issueTicket()).rejects.toThrow('节点没有签发配对票据（HTTP 500）。')
+    expect(fixture.node.status().lastError).toBe('节点没有签发配对票据（HTTP 500）。')
+    expect(fixture.node.status().connected).toBe(true)
+  })
+
+  it('refuses a pairing ticket that does not match the node protocol', async () => {
+    const storage = await folder()
+    const fake = await startFakeNode({ pairing: () => ({ status: 201, json: { ticket: 'too-short', expiresAt: Date.now() + 60_000 } }) })
+    const upstream = await startUpstream()
+    const fixture = serviceNode(fake.origin, storage, upstream.port)
+    await fixture.start()
+    await waitFor(() => fixture.node.status().connected, '隧道已连接')
+
+    await expect(fixture.node.issueTicket()).rejects.toThrow('节点返回的配对票据格式不正确。')
+    expect(fixture.node.status().lastError).toBe('节点返回的配对票据格式不正确。')
   })
 })

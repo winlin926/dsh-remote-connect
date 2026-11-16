@@ -69,6 +69,8 @@ export interface ServiceNodeOptions {
   storage: string
   /** Structured diagnostics; never receives credentials, cookies, paths or bodies. */
   log?: ServiceNodeLogger
+  /** Called after every successful tunnel handshake (initial connect and reconnects). */
+  onConnected?: () => void
   now?: () => number
   reconnect?: ServiceNodeReconnect
 }
@@ -221,6 +223,7 @@ export class ServiceNode {
   private readonly storage: string
   private readonly file: string
   private readonly log: ServiceNodeLogger
+  private readonly onConnected: (() => void) | undefined
   private readonly now: () => number
   private readonly reconnectBase: number
   private readonly reconnectMax: number
@@ -255,6 +258,7 @@ export class ServiceNode {
     this.storage = options.storage
     this.file = join(options.storage, SERVICE_NODES_FILE)
     this.log = options.log ?? (() => {})
+    this.onConnected = options.onConnected
     this.now = options.now ?? Date.now
     this.reconnectBase = options.reconnect?.baseDelayMs ?? DEFAULT_RECONNECT_BASE_MS
     this.reconnectMax = options.reconnect?.maxDelayMs ?? DEFAULT_RECONNECT_MAX_MS
@@ -310,6 +314,47 @@ export class ServiceNode {
   rejectPairing(requestId: string): void {
     if (!this.takePairing(requestId)) return
     this.send({ t: 'pair.reject', requestId })
+  }
+
+  /**
+   * Ask the node for a single-use pairing ticket and build the page URL the panel shows as a QR.
+   * The node's pairing page reads `v`, `ticket` and this Host's identity key from the URL hash, so the
+   * phone can verify the fingerprint it is about to pair with.
+   */
+  async issueTicket(): Promise<{ url: string; expiresAt: number }> {
+    try {
+      const credential = await this.ensureCredential()
+      let response: Response
+      try {
+        response = await fetch(`${this.origin}/v1/pairings`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+          body: '{}',
+          signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
+        })
+      } catch (failure) {
+        const code = (failure as NodeJS.ErrnoException).code
+        throw new ServiceNodeError(code ? `无法连接服务节点的配对接口（${code}）。` : '无法连接服务节点的配对接口。')
+      }
+      if (response.status === 401 || response.status === 403) void this.forgetCredential(credential)
+      if (response.status !== 201) {
+        response.body?.cancel().catch(() => undefined)
+        throw new ServiceNodeError(`节点没有签发配对票据（HTTP ${response.status}）。`)
+      }
+      let body: unknown
+      try { body = await response.json() } catch { throw new ServiceNodeError('节点返回的配对票据不是有效的 JSON。') }
+      const row = body && typeof body === 'object' ? body as Record<string, unknown> : undefined
+      const ticket = row && typeof row.ticket === 'string' && /^[A-Za-z0-9_-]{43}$/u.test(row.ticket) ? row.ticket : undefined
+      const expiresAt = row && typeof row.expiresAt === 'number' && Number.isSafeInteger(row.expiresAt) && row.expiresAt > 0 ? row.expiresAt : undefined
+      if (!ticket || expiresAt === undefined) throw new ServiceNodeError('节点返回的配对票据格式不正确。')
+      const hash = new URLSearchParams({ v: '1', ticket, key: this.identityKey })
+      this.lastError = undefined
+      return { url: `${this.origin}/#${hash.toString()}`, expiresAt }
+    } catch (failure) {
+      this.lastError = failure instanceof Error && failure.message ? failure.message : '签发配对票据失败。'
+      this.log('service-node-error', { origin: this.origin, hostId: this.hostId, message: this.lastError })
+      throw failure instanceof ServiceNodeError ? failure : new ServiceNodeError(this.lastError)
+    }
   }
 
   /** Forget one origin's credential (atomic rewrite); a missing entry is a no-op. */
@@ -376,6 +421,7 @@ export class ServiceNode {
         this.send({ t: 'hello', hostId: this.hostId, version: this.clientVersion, capabilities: ['http', 'ws', 'assets'] })
         this.log('service-node-connect', { origin: this.origin, hostId: this.hostId })
         void this.touchConnectedAt()
+        try { this.onConnected?.() } catch (failure) { this.log('service-node-error', { origin: this.origin, hostId: this.hostId, message: failure instanceof Error ? failure.message : '服务节点连接回调失败。' }) }
         settle()
       })
       socket.on('message', (data: RawData, isBinary: boolean) => this.receive(socket, data, isBinary))

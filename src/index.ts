@@ -202,7 +202,16 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         return upstreamIndex(credential)
       }
     }
-    const baseURLs = () => !enabled || !gateway ? [] : activeMode === 'public' ? (access?.domain ? [access.domain] : []) : lanTls ? [lanTls.origin] : lanAddresses().map(ip => `http://${ip}:${gateway!.port}`)
+    const baseURLs = () => {
+      if (!enabled || !gateway) return []
+      if (activeMode === 'public') {
+        const record = currentNode()
+        // A service node is its own public origin; a gateway node still rides on the saved domain.
+        if (record?.kind === 'service') return [record.url]
+        return access?.domain ? [access.domain] : []
+      }
+      return lanTls ? [lanTls.origin] : lanAddresses().map(ip => `http://${ip}:${gateway!.port}`)
+    }
     // The system's proxy is looked up at most every 15 seconds; the panel asks for status far more often.
     let detected: { at: number; value: SystemProxy | null } | undefined
     const systemProxy = async (fresh = false) => {
@@ -237,6 +246,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // outbound tunnel this computer starts, so one instance follows the current record and every
     // lifecycle change (start, stop, switch, remove) reconciles through this function.
     let serviceNode: ServiceNode | undefined
+    // A service node's QR is a one-time ticket the node signs for this Host; it expires on its own.
+    let serviceQr: { url: string; expiresAt: number } | undefined
+    let serviceQrInflight: Promise<void> | undefined
     const currentNode = (): PublicNodeRecord | undefined => {
       const current = publicNodes?.current
       return current ? publicNodes?.list().find(record => record.id === current) : undefined
@@ -248,29 +260,61 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     const logServiceNode = (event: string, fields: Record<string, unknown>): void => {
       try { ready.logger?.warn?.(`[${event}] ${JSON.stringify(fields)}`) } catch { /* logging must never break the tunnel */ }
     }
+    // The pairing page on the node reads `v`, `ticket` and this Host's identity key from the URL hash,
+    // so the phone can pin the fingerprint it is about to pair with.
+    const ensureServiceQr = async (): Promise<void> => {
+      // A ticket stays valid until its expiry; connect and switch paths only ask for a new one when the
+      // panel has nothing usable to show.
+      if (serviceQr && serviceQr.expiresAt > Date.now()) return
+      await issueServiceQr()
+    }
+    const issueServiceQr = (): Promise<void> => {
+      if (serviceQrInflight) return serviceQrInflight
+      const node = serviceNode
+      if (!node) return Promise.resolve()
+      serviceQrInflight = (async () => {
+        try {
+          const ticket = await node.issueTicket()
+          // The node may have been stopped or swapped while the ticket request was in flight.
+          if (serviceNode === node) serviceQr = ticket
+        } catch { /* ServiceNode.lastError carries the Chinese reason the panel shows */ }
+        finally { serviceQrInflight = undefined }
+      })()
+      return serviceQrInflight
+    }
     const reconcileServiceNode = async (): Promise<void> => {
       const record = currentNode()
       const wanted = enabled && activeMode === 'public' && preferences.mode === 'public' && record?.kind === 'service' ? record.url : undefined
       if (serviceNode && serviceNode.status().origin !== wanted) {
         const previous = serviceNode
         serviceNode = undefined
+        serviceQr = undefined
         await previous.stop()
       }
-      if (!wanted || serviceNode || disposed) return
+      if (!wanted) { serviceQr = undefined; return }
+      if (serviceNode || disposed) return
       const node = new ServiceNode({
         origin: wanted, hostId: hostIdentity.hostId, identityKey: hostIdentity.publicKey, clientVersion: NODE_VERSION,
         upstreamPort, upstreamCookie: () => credential, storage, log: logServiceNode,
+        onConnected: () => { void ensureServiceQr() },
       })
       serviceNode = node
       // start() reports failures through status().lastError and keeps retrying; it never rejects.
       await node.start()
+      // start() resolves after the first attempt; later connects ask for a ticket through the callback.
+      if (node.status().connected) await ensureServiceQr()
     }
     const status = async (local: boolean) => {
-      const links = baseURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
-      const active = new Set(gateway?.onlineIds() ?? [])
-      const devices = pairing.list()
       const record = currentNode()
       const tunnel = serviceNode?.status()
+      // An expired ticket is not a usable link: the panel shows its updating state until the next
+      // connect or refresh issues one.
+      const serviceTicket = record?.kind === 'service' && serviceQr && serviceQr.expiresAt > Date.now() ? serviceQr : undefined
+      const links = record?.kind === 'service'
+        ? baseURLs().map(base => ({ base, url: serviceTicket?.url }))
+        : baseURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
+      const active = new Set(gateway?.onlineIds() ?? [])
+      const devices = pairing.list()
       const publicNodeList = publicNodes?.list() ?? []
       const service = record?.kind === 'service'
         ? { origin: record.url, connected: tunnel?.connected ?? false, ...(tunnel?.lastError ? { lastError: tunnel.lastError } : {}), pendingPairings: tunnel?.pendingPairings ?? [] }
@@ -295,7 +339,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         publicNodes: { current: publicNodes?.current ?? null, list: publicNodeList, pendingReview: publicNodeList.some(item => item.pending) },
         serviceNode: service,
         phase, error, gatewayPort: gateway?.port ?? 0, local,
-        expiresAt: qr?.expiresAt, links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
+        expiresAt: record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
+        links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
         devices: devices.map(({ host, via: pairedVia, ...device }) => ({
           ...device, via: pairedVia ?? (host && access?.domain && host.toLowerCase() === new URL(access.domain).host.toLowerCase() ? 'public' : 'lan'), online: active.has(device.id)
@@ -377,12 +422,16 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         if (disposed || ticket !== generation) { await next.close(); return }
         gateway = next
         if (tls) lanTls = tls
-        enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = pairing.issue()
+        enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = serviceNodeMode ? undefined : pairing.issue(); serviceQr = undefined
         if (mode === 'public') startMonitor(); else stopMonitor()
         // The tunnel is an extra outbound connection on top of the gateway; its failure is reported in
         // status().serviceNode.lastError and retried by the instance, never as a plugin error.
-        try { await reconcileServiceNode() }
-        catch (failure) { logServiceNode('service-node-error', { origin: currentNode()?.url ?? '', message: failure instanceof Error ? failure.message : '自托管节点启动失败。' }) }
+        try {
+          await reconcileServiceNode()
+          // The first handshake already asked for a ticket; awaiting it here lets `start` settle with
+          // the QR the panel is about to render instead of one status call behind.
+          if (serviceNodeMode) await ensureServiceQr()
+        } catch (failure) { logServiceNode('service-node-error', { origin: currentNode()?.url ?? '', message: failure instanceof Error ? failure.message : '自托管节点启动失败。' }) }
       } catch (failure) {
         await next?.close()
         if (ticket === generation && !disposed) { error = failure instanceof Error ? failure.message : '启动失败。'; if (stopped) await stop() }
@@ -424,6 +473,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         case 'stop': if (local) await stop(); else { ++generation; setTimeout(() => { void stop() }, 75) }; return { stopped: true }
         case 'refresh': {
           if (!enabled) throw new Error('请先开启远程连接。')
+          if (currentNode()?.kind === 'service') {
+            if (!serviceNode) throw new Error('当前没有连接自托管公网节点。')
+            // A failed issuance keeps the connecting state and its reason in serviceNode.lastError.
+            await issueServiceQr()
+            return status(local)
+          }
           if (pairing.outstanding()) throw new Error('还有配对请求在等待确认，请先处理后再刷新二维码。')
           qr = pairing.issue(); return status(local)
         }
@@ -543,8 +598,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           if (record.kind === 'gateway') await access?.saveDomain(record.url)
           store.setCurrent(id)
           if (enabled && preferences.mode === 'public') {
-            if (record.kind === 'service') await reconcileServiceNode()
-            else { await stop(); await start() }
+            if (record.kind === 'service') {
+              await reconcileServiceNode()
+              if (serviceNode) await ensureServiceQr()
+            } else { await stop(); await start() }
           } else await reconcileServiceNode()
           return status(local)
         }

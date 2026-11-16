@@ -3,9 +3,13 @@ import { Context } from '@deepseek-ai/cordis'
 import * as Connection from '@deepseek-ai/dsh-client-connection'
 import * as Plugin from '../src/index.js'
 import { Gateway, MANAGE_PATH } from '../src/gateway.js'
+import { TUNNEL_PATH } from '../src/remote/tunnel-protocol.js'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer as createHttpsServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { WebSocket, WebSocketServer } from 'ws'
 
 const OWNER = { principal: { kind: 'owner' } } as Connection.PeerScope
 
@@ -54,6 +58,86 @@ function discovery(options: DiscoveryOptions = {}): Response {
 /** detectPublicNode uses the process-wide fetch; the suite stubs it instead of starting an HTTPS node. */
 function stubDiscovery(handler: (url: string) => Response): void {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async input => handler(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url))
+}
+
+interface FakeServiceNode {
+  origin: string
+  pairings: Array<{ authorization: string | undefined; body: Record<string, unknown> }>
+  tickets: string[]
+  close: () => Promise<void>
+}
+
+/** A real HTTPS node: the Host registers there, opens the tunnel and asks it for pairing tickets. */
+async function startFakeServiceNode(options: { pairing?: (attempt: number) => { status: number; json?: unknown } } = {}): Promise<FakeServiceNode> {
+  const key = readFileSync(new URL('./fixtures/lan-tls/key-1.pem', import.meta.url))
+  const cert = readFileSync(new URL('./fixtures/lan-tls/server.pem', import.meta.url))
+  const pairings: FakeServiceNode['pairings'] = []
+  const tickets: string[] = []
+  let registrations = 0
+  const server = createHttpsServer({ key, cert }, (req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    req.on('end', () => {
+      let body: Record<string, unknown> = {}
+      try { const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown> } catch { /* an empty body is valid */ }
+      if (req.method === 'POST' && req.url === '/v1/hosts') {
+        registrations += 1
+        res.writeHead(201, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ credential: `node-credential-${registrations}`, host: { hostId: String(body.deviceId ?? '') } }))
+        return
+      }
+      if (req.method === 'POST' && req.url === '/v1/pairings') {
+        pairings.push({ authorization: req.headers.authorization, body })
+        const ticket = randomBytes(32).toString('base64url')
+        tickets.push(ticket)
+        const answer = options.pairing?.(pairings.length) ?? { status: 201, json: { ticket, expiresAt: Date.now() + 300_000 } }
+        res.writeHead(answer.status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(answer.json ?? {}))
+        return
+      }
+      res.writeHead(404); res.end()
+    })
+  })
+  const wss = new WebSocketServer({ noServer: true })
+  const sockets = new Set<WebSocket>()
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => {})
+    if (req.url !== TUNNEL_PATH) { socket.destroy(); return }
+    wss.handleUpgrade(req, socket, head, ws => { sockets.add(ws); ws.on('error', () => {}); ws.on('close', () => sockets.delete(ws)) })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('假节点没有监听端口。')
+  return {
+    origin: `https://127.0.0.1:${address.port}`,
+    pairings,
+    tickets,
+    close: async () => {
+      for (const ws of sockets) { try { ws.terminate() } catch { /* already gone */ } }
+      wss.close(); server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    },
+  }
+}
+
+/**
+ * This suite runs a self-signed loopback node; the TLS check is relaxed for that test only. A real
+ * service node is reached over its own valid HTTPS certificate.
+ */
+function allowSelfSignedTls(): () => void {
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+  return () => { if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous }
+}
+
+/** Discovery probes stay stubbed; every other request reaches the loopback node. */
+function stubDiscoveryAndNetwork(): void {
+  const realFetch = globalThis.fetch
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url.endsWith('/.well-known/dsh-remote')) return discovery()
+    return realFetch(input, init)
+  })
 }
 
 it('migrates the old public URL into a pending candidate, never into the current node', () => withHost(async ({ command }) => {
@@ -170,3 +254,83 @@ it('keeps the panel usable when the node list file is damaged', () => withHost(a
   expect(await command('approveServicePairing', { id: 'pair-1' })).toMatchObject({ status: 400, error: '当前没有连接自托管公网节点。' })
   expect(await command('rejectServicePairing', {})).toMatchObject({ status: 400, error: '当前没有连接自托管公网节点。' })
 }, storage => writeFileSync(join(storage, 'public-nodes.json'), '{not json')))
+
+it('shows a service-node pairing QR from the ticket the node signs', async () => {
+  const restoreTls = allowSelfSignedTls()
+  const fake = await startFakeServiceNode()
+  try {
+    await withHost(async ({ command, storage }) => {
+      stubDiscoveryAndNetwork()
+      const added = await command('addPublicNode', { url: fake.origin })
+      expect(added).toMatchObject({ status: 200, ok: true })
+      await command('setCurrentPublicNode', { id: added.node.id })
+      await command('preferences', { mode: 'public' })
+      const listen = vi.spyOn(Gateway.prototype, 'listen').mockImplementation(async function (this: Gateway): Promise<number> { this.port = 45871; return 45871 })
+      try {
+        await command('start')
+        await vi.waitFor(async () => expect((await command('status')).serviceNode?.connected).toBe(true), { timeout: 8000 })
+        const state = await command('status')
+        expect(state.phase).toBe('ready')
+        expect(state.links).toHaveLength(1)
+        expect(state.links[0].base).toBe(fake.origin)
+        const url = new URL(state.links[0].url)
+        expect(url.origin).toBe(fake.origin)
+        const hash = new URLSearchParams(url.hash.slice(1))
+        // The node's pairing page reads `v`, `ticket` and this Host's identity key from the hash.
+        expect(hash.get('v')).toBe('1')
+        expect(hash.get('ticket')).toBe(fake.tickets[0])
+        const identity = JSON.parse(readFileSync(join(storage, 'host-identity.json'), 'utf8')) as { publicKey: string }
+        expect(hash.get('key')).toBe(identity.publicKey)
+        expect(state.expiresAt).toEqual(expect.any(Number))
+        expect(state.qr).toMatch(/^data:image\/png;base64,/)
+        expect(fake.pairings).toHaveLength(1)
+        expect(fake.pairings[0]?.authorization).toBe('Bearer node-credential-1')
+        expect(fake.pairings[0]?.body).toEqual({})
+        // Refresh is the panel's way to get a fresh ticket without touching the tunnel.
+        const refreshed = await command('refresh')
+        expect(refreshed.status).toBe(200)
+        expect(fake.pairings).toHaveLength(2)
+        expect(new URLSearchParams(new URL(refreshed.links[0].url).hash.slice(1)).get('ticket')).toBe(fake.tickets[1])
+        await command('stop')
+      } finally {
+        await command('stop').catch(() => undefined)
+        listen.mockRestore()
+      }
+    })
+  } finally {
+    restoreTls()
+    await fake.close()
+  }
+})
+
+it('keeps the tunnel ready when the node refuses to sign a pairing QR', async () => {
+  const restoreTls = allowSelfSignedTls()
+  const fake = await startFakeServiceNode({ pairing: () => ({ status: 500 }) })
+  try {
+    await withHost(async ({ command }) => {
+      stubDiscoveryAndNetwork()
+      const added = await command('addPublicNode', { url: fake.origin })
+      await command('setCurrentPublicNode', { id: added.node.id })
+      await command('preferences', { mode: 'public' })
+      const listen = vi.spyOn(Gateway.prototype, 'listen').mockImplementation(async function (this: Gateway): Promise<number> { this.port = 45871; return 45871 })
+      try {
+        await command('start')
+        await vi.waitFor(async () => expect((await command('status')).serviceNode?.lastError).toBe('节点没有签发配对票据（HTTP 500）。'), { timeout: 8000 })
+        const state = await command('status')
+        // The tunnel itself is healthy: a refused ticket must not become a plugin error or an empty QR.
+        expect(state.phase).toBe('ready')
+        expect(state.serviceNode.connected).toBe(true)
+        expect(state.qr).toBeUndefined()
+        expect(state.links[0]?.url).toBeUndefined()
+        expect(state.expiresAt).toBeUndefined()
+        await command('stop')
+      } finally {
+        await command('stop').catch(() => undefined)
+        listen.mockRestore()
+      }
+    })
+  } finally {
+    restoreTls()
+    await fake.close()
+  }
+})
