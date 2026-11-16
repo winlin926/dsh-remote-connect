@@ -1,6 +1,6 @@
 # 验证范围
 
-开发依赖、锁文件和隔离验收宿主统一使用 DSH 0.2.2-rc.3。插件版本为 0.6.1。
+开发依赖、锁文件和隔离验收宿主统一使用 DSH 0.2.2-rc.3。插件版本为 0.6.2。
 
 ## 修改后的检查
 
@@ -25,15 +25,22 @@
 
 - 公网入口统一为「节点」：发现文档 `/.well-known/dsh-remote`、`kind` 为 `gateway` 或 `service`、节点增删检测切换、公网密码删除、旧公网设备标记重配对、同主机局域网回退、缓存键按节点 origin + 主机身份 + revision 隔离。
 - 自托管服务新增 `remote-server/`（Node 24 + `node:sqlite` + `ws`，Caddy 终止 HTTPS，单节点）与主机侧 `src/service-node.ts`：Host 主动连出 `/v1/tunnel`，手机经节点的普通 HTTP、SSE 与 WebSocket 请求转给本机 DSH；两侧共用 `src/remote/tunnel-protocol.ts`，不另造控制帧格式。
-- 检查：`pnpm typecheck`、`pnpm build`、`pnpm exec vitest run` 通过，17 个文件 228 个测试；`remote-server` 的 `tsc -p tsconfig.json --noEmit` 与 `npm test` 通过，71 个测试。
+- 检查：`pnpm typecheck`、`pnpm build`、`pnpm exec vitest run` 通过，17 个文件 262 个测试；`remote-server` 的 `tsc -p tsconfig.json --noEmit` 与 `npm test` 通过，76 个测试。
 - 删除自托管节点时先撤销节点侧注册：`DELETE /v1/hosts/:hostId`（Host Bearer、只能删自己、事务级联设备关系与会话、204）与 `ServiceNode.unregister()`；撤销失败不阻断本地删除，用中文提示在节点上执行 `npm run admin:reset -- <hostId>`。
-- `npm pack --ignore-scripts` 生成 `@winlin926/dsh-remote-connect@0.6.1` 候选 `.tgz`：49 个文件、127747 字节；`lib/index.js` 与 `lib/client.js` SHA-256 分别为 `c9eed3616a6310ca9c3f876af7e986b888eb672a611718330b5f30b209d9915b`（189302 字节）、`779d092dd8225b1792284f10f109decb34518843557b2684d26f6beb97cd0d9c`（88769 字节）；`.tgz` SHA-256 `4e6ed6c9806866ccfd219988858dcfa73a03f1f739d692ff286d4783126edac1`、SHA-512 `SceUceCgHh61RLNvaCsFNLwjqg5F2FY4VY08O5jkKa/r8DAXngoaiubsiADSypwZMqUoV+Y0ajLD4VnLDbLBYA==`。未发布 npm。
-- 隔离宿主 `qa:browser` 15 项通过：桌面与 320/390px 深浅色、扫码批准、宿主应用就绪、复制回退、组合输入、旧轮询响应、HTML/文本预览、撤销，以及公网节点面板（空列表文案、拒绝非 HTTPS、不可达节点不落盘）。三段缓存：首次访问 2978 ms / 3 请求 / 1,747,132 字节，同页重访 1473 ms / 0 字节 / 3 内存命中，关页重开 1859 ms / 0 字节 / 3 磁盘命中。该 profile 只有 3 个初始资源，不能代表日常 54 插件总量。
+- 公网节点协议升到 v2：发现文档新增节点身份 `node{id,fingerprint,publicKey}`，与主机身份分离；隧道网关沿用本机 Host 身份并保留扁平 `hostId`/`fingerprint` 别名，自托管服务首次启动在数据目录生成 `node-identity.json`（只存公钥、0600、原子写），多台 Host 共用一个节点时节点指纹不变。客户端用 `createPublicKey` 解析 SPKI DER 并本地重算 id 与指纹，不符即 `bad-identity`。
+- v1 兼容：v1 隧道网关继续按原规则接受；`protocol: 1` 的服务节点标记为「旧版 v1（单主机）」；v2 服务节点会拒绝 ≤0.6.1 的客户端，已写入 `docs/public-node.md` 的兼容边界。
+- 本地记录 `public-nodes.json` 升 v2 并保留 current、pending 与检测字段；节点身份变化时写 `identityChange` 并阻断连接（`links=[]`、二维码为空、`phase=error`、中文提示），面板「重新确认」后恢复，不删除设备授权、服务凭据与缓存，也不要求已授权手机重新配对；v2 节点降级成 v1 时不自动采纳。
+- 公网配对不再显示或比较短码：手机页展示节点名称、类型与目标主机指纹（二维码 `key` 经 `crypto.subtle` 本地计算，8 组 4 位大写），电脑页展示设备名与本机主机指纹，两端确认加指纹一致才授权。`HOST_REGISTRATION_TOKEN` 全链路删除，`POST /v1/hosts` 默认开放并保留限流，注册本身不授予跨主机访问。
+- 能力收口：0.6.2 两类节点只宣告 `pairing`、`cache`、`official-ui`；配置里出现 `relay` 或 `turn` 直接报错，TURN 相关入口不对外宣传。
+- `scripts/verify-node-v2.mjs` 9 项全部通过：v2 文档结构、身份自洽、无扁平字段、`/healthz`、`/v1/config` 无凭据泄漏、无令牌注册 201、重启后 `node.id` 不变。
+- `npm pack --ignore-scripts` 生成 `@winlin926/dsh-remote-connect@0.6.2` 候选 `.tgz`：49 个文件、134517 字节；`lib/index.js` 与 `lib/client.js` SHA-256 分别为 `d3f63803cd434c69e7182ef75640e597807014d9a9a669f63387f93974dac3b0`（205385 字节）、`adfc01d8ec8c700441418899ae4beb617206c469077fb132ca2e2132002e758a`（92381 字节）；`.tgz` SHA-256 `f56df12b4bdfe541eff44711a297e51986a43f50dbf4b46e27ef704a344393bf`、SHA-512 `+2SjM7vN/pQ9CHacrsK63wt4c2iDkQg8vCXzPiPfPrAQ2aQuKJocsDZk4wfWj93cNRkfeYUuY6UEsr4NIfDFJg==`。未发布 npm。
+- 隔离宿主 `qa:browser` 16 项通过：在原有桌面与 320/390px 深浅色、扫码批准、宿主应用就绪、复制回退、组合输入、旧轮询、HTML/文本预览、撤销、公网节点面板拒绝非 HTTPS 与不可达节点之外，新增 v2 面板断言（8 组指纹、协议标签 `v2` 与 `旧版 v1（单主机）`、4 段信任文案）。7 张截图落盘 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.2\screenshots\`，本轮没有 `captureWarnings`。三段缓存：首次访问 2917 ms / 3 请求 / 1,748,055 字节，同页重访 833 ms / 0 字节 / 3 内存命中，关页重开 795 ms / 0 字节 / 3 磁盘命中。该 profile 只有 3 个初始资源，不能代表日常 54 插件总量。
+- 首个隔离宿主（`nodes3`）出现管理端点 404：进程内用真实 Cordis 上下文加载构建产物可正常注册，后继 `nodes4`/`nodes5` 宿主也正常，判定为一次性运行异常；`nodes5` 全量复测通过。
 - 日常 profile 已装 0.6.1（`file:` 固定 tgz）并重启宿主：重启后 `/.well-known/dsh-remote` 返回 `version: "0.6.1"`，`hostId` `g7iflg32huZJkCXpOeWlLfYIOgAkPLcCyVIU-e2Un_Q` 与指纹 `83b89f960df686e6499025e939e5a52d` 与重启前一致，5 台设备授权保留，未配对访问仍 403。
 - 日常 54 插件三段缓存（桌面 Chromium，真实磁盘缓存）：冷启动 7373 ms / 90 请求 / 14,656,593 字节；同页重访 4236 ms / 47 请求 / 699,746 字节（4.8%，插件捆包全部命中、0 字节）；关页重开 4797 ms / 86 请求 / 3,243,349 字节（22.1%，7.8 MB 与 1.4 MB 捆包仍从磁盘缓存复用）；三次 `boot-reports` 均 `phase=ready result=ready errors=0 completed=3`。残余为 `dsh-genui` 两个 vendor 资源无缓存头（909,910 + 177,738 字节/次）与宿主动态接口 JSON；完整报告见 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.1\lan-cache-report.md`。
 - `package-manifest.json` 式的旧包清单未再生成；`scripts/check-package.mjs` 直接校验 `.tgz`，确认入口文件与本次构建逐字节相同、包内无 `.qa`、测试与开发文件。
-- 边界：自托管节点的端到端链路只在本机进程内假节点与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；Docker 镜像未在本机 `build`/`up`；Coturn 临时凭据与真实 TLS 未实测；隔离宿主的浏览器验收已用真实 Chromium 渲染，但截图因 CDP 超时未保存，视觉复核只有布局断言。
-- v2 本轮：公网节点契约并入 `docs/public-node.md`（`protocol: 2`，删除冻结备忘录）并同步 `docs/self-host.md`、`remote-server/README.md`、根 `README.md`、`.env.example`；本机无 Docker，Compose/Dockerfile/Caddyfile 只做静态核对；`scripts/verify-node-v2.mjs` 已在本工作树（未合并 B 的 v1 服务端）运行并按预期失败，浏览器 v2 断言需在 A 合并后执行。
+- 边界：自托管节点的端到端链路只在本机进程内假节点、`scripts/verify-node-v2.mjs` 起的真实进程与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；本机没有 Docker，`docker compose config`、镜像构建与 `up` 未执行，Compose/Dockerfile/Caddyfile 只做静态核对；Coturn 临时凭据与真实 TLS 未实测；日常 profile 仍装 0.6.1，本轮只生成 0.6.2 候选包，未替换、未重启。
+- 手机与真实节点结论保持「桌面已验证，手机与真实节点待验证」：v2 手机配对页只在源码断言与浏览器 DOM 断言层面验证，没有真机扫码；没有真实 v2 服务节点，节点身份变化阻断只由单元测试与合成状态覆盖。
 
 - `pnpm test`：10 个文件、129 个测试通过；`pnpm typecheck`、`pnpm build` 通过。
 - 局域网 TLS 覆盖证书到期/SAN/私钥、可信 WSS/SSE、Secure Cookie、规范 Host/origin、热重载原子性及不降级；browser transport 覆盖官方启动成功/失败状态、加载错误与凭据净化。
