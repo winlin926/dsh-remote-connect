@@ -140,7 +140,7 @@ function readName(env: NodeJS.ProcessEnv): string {
 }
 
 function readVersion(env: NodeJS.ProcessEnv): string {
-  const raw = readString(env, 'NODE_VERSION') ?? '0.6.2'
+  const raw = readString(env, 'NODE_VERSION') ?? '0.6.3'
   if (!/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/u.test(raw)) {
     throw new ConfigError('NODE_VERSION must match ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$.')
   }

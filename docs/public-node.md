@@ -379,4 +379,4 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 - `protocol` 升级 = 破坏性变更；客户端遇到非 `1`/`2` 直接失败，不做降级猜测。v1 客户端（≤0.6.1）无法添加 v2 服务节点；v2 网关保留扁平字段，旧客户端仍可添加网关节点。
 - 响应中**多出的字段被忽略**，服务端可先行添加新字段（但新能力必须等待 protocol 升级）。
 - 未知 `capabilities` 项导致客户端拒绝，因此能力白名单只能随 protocol 升版扩展。
-- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.2 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.2`。
+- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.3 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.3`。
