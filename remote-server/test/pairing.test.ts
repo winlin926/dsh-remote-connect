@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { ApiError } from '../dist/remote-server/src/errors.js'
 import {
@@ -447,4 +448,20 @@ test('the shared codec accepts an eight-digit pairing comparison code and nothin
       `verificationCode ${verificationCode} must be rejected`,
     )
   }
+})
+
+test('the pairing page never renders the eight-digit comparison code', async () => {
+  const html = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
+  // The transport field is v1 compatibility only; the phone page must not show it.
+  assert.doesNotMatch(html, /verificationCode/u)
+  assert.doesNotMatch(html, /id="code"/u)
+  assert.doesNotMatch(html, /8 位验证码/u)
+  assert.doesNotMatch(html, /\b\d{8}\b/u, 'no eight-digit numeric run may appear in the page')
+
+  // The trust anchor is computed locally from the QR key parameter.
+  assert.match(html, /确认是本机/u)
+  assert.match(html, /目标主机指纹/u)
+  assert.match(html, /hostIdentityKey/u)
+  assert.match(html, /crypto\.subtle\.digest\('SHA-256'/u)
+  assert.match(html, /fromB64url/u)
 })

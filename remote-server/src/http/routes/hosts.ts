@@ -1,8 +1,6 @@
-import type { IncomingMessage } from 'node:http'
 import { hostRegistrationSchema } from '../../contract.js'
 import { ApiError, rateLimited } from '../../errors.js'
 import {
-  constantTimeStringEqual,
   createToken,
   deriveHostIdentity,
   hashToken,
@@ -11,17 +9,11 @@ import type { AppServices } from '../../services.js'
 import type { RouteContext, Router } from '../router.js'
 import { baseHeaders, readJsonBody, sendJson } from '../util.js'
 
-const REGISTRATION_TOKEN_HEADER = 'x-host-registration-token'
-
-function readRegistrationToken(req: IncomingMessage): string | null {
-  const raw = req.headers[REGISTRATION_TOKEN_HEADER]
-  if (raw === undefined) return null
-  return Array.isArray(raw) ? raw[0] ?? null : raw
-}
-
 /**
- * Host lifecycle: one-time registration returns an opaque credential (only its
- * hash is stored) and device relationships are scoped to the caller's cookie.
+ * Host lifecycle: registration returns an opaque credential (only its hash is
+ * stored) and device relationships are scoped to the caller's cookie. There is
+ * no registration token: `POST /v1/hosts` is open, rate limited, and grants no
+ * access beyond the newly created Host's own credential.
  */
 export function registerHostRoutes(router: Router, services: AppServices): void {
   const { config, repos, sessions, auth, limiter, hub, logger } = services
@@ -29,12 +21,6 @@ export function registerHostRoutes(router: Router, services: AppServices): void 
   router.add('POST', '/v1/hosts', async ctx => {
     const decision = limiter.take('host-registration', ctx.ip, config.limits.hostRegistration)
     if (!decision.allowed) throw rateLimited(decision.retryAfterMs)
-    if (config.hostRegistrationToken !== null) {
-      const provided = readRegistrationToken(ctx.req)
-      if (provided === null || !constantTimeStringEqual(provided, config.hostRegistrationToken)) {
-        throw ApiError.unauthorized('REGISTRATION_FORBIDDEN', 'A valid host registration token is required.')
-      }
-    }
     const body = await readJsonBody(ctx.req)
     const parsed = hostRegistrationSchema.safeParse(body)
     if (!parsed.success) {

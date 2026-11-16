@@ -144,12 +144,8 @@ export interface RegisteredHost {
 export async function registerHost(
   node: TestNode,
   registration: Record<string, unknown> = hostRegistration(),
-  registrationToken?: string,
 ): Promise<RegisteredHost> {
-  const result = await api(node.baseUrl, 'POST', '/v1/hosts', {
-    body: registration,
-    headers: registrationToken ? { 'x-host-registration-token': registrationToken } : {},
-  })
+  const result = await api(node.baseUrl, 'POST', '/v1/hosts', { body: registration })
   if (result.status !== 201) throw new Error(`host registration failed: ${result.status} ${result.text}`)
   return {
     registration: registration as Record<string, any>,
@@ -378,9 +374,9 @@ export interface PairedDevice {
  */
 export async function completePairing(
   node: TestNode,
-  options: { registrationToken?: string; clientOverrides?: Record<string, unknown> } = {},
+  options: { clientOverrides?: Record<string, unknown> } = {},
 ): Promise<PairedDevice> {
-  const host = await registerHost(node, hostRegistration(), options.registrationToken)
+  const host = await registerHost(node, hostRegistration())
   const hostClient = await connectHost(node, host)
 
   const ticketResult = await api(node.baseUrl, 'POST', '/v1/pairings', { token: host.credential })

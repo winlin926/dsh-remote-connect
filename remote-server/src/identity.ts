@@ -5,10 +5,6 @@ import { PROTOCOL_VERSION } from './protocol.js'
 /** Canonical unpadded Base64URL alphabet. */
 const BASE64URL = /^[A-Za-z0-9_-]+$/u
 
-/** Advertised before the first Host registers: format-valid but clearly empty. */
-export const EMPTY_HOST_ID = 'A'.repeat(43)
-export const EMPTY_FINGERPRINT = '0'.repeat(32)
-
 export function sha256(input: string | Uint8Array): Buffer {
   return createHash('sha256').update(input).digest()
 }

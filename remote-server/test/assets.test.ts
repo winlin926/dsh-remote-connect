@@ -179,8 +179,10 @@ test('asset publishing and serving reject damaged input without 500s', async () 
     assert.equal(badHid.status, 400)
     assert.equal(badHid.json.error.code, 'INVALID_HOST_ID')
 
+    // Headroom over the 64-token burst keeps this deterministic even when the
+    // whole suite runs in parallel and the event loop stretches the requests.
     const uploads = await Promise.all(
-      Array.from({ length: 70 }, (_, index) => upload(node, host.credential, `rev${index}`, '/app.js', 'x')),
+      Array.from({ length: 160 }, (_, index) => upload(node, host.credential, `rev${index}`, '/app.js', 'x')),
     )
     assert.ok(uploads.some(result => result.status === 429), 'asset uploads must be rate limited')
     const limited = uploads.find(result => result.status === 429)

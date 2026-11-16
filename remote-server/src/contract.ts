@@ -9,22 +9,48 @@ export const NODE_KINDS = ['gateway', 'service'] as const
 
 const capabilitySchema = z.enum(CAPABILITY_VALUES)
 
+/** A Host id is the 43-character Base64URL S256 fingerprint of the Host SPKI key. */
+export const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/u
+/** First 16 bytes of that digest, lowercase hex. */
+export const FINGERPRINT_PATTERN = /^[0-9a-f]{32}$/u
+/** Base64URL alphabet and length only; the DER structure is validated by identity.ts. */
+export const IDENTITY_KEY_PATTERN = /^[A-Za-z0-9_-]{40,120}$/u
+
+const identityKeySchema = z.string().regex(
+  IDENTITY_KEY_PATTERN,
+  'Identity key must be a Base64URL-encoded SPKI DER public key.',
+)
+
 /**
- * The unified node descriptor returned by `/.well-known/dsh-remote`.
+ * The identity every v2 node publishes: a stable Ed25519 public key plus the
+ * digest-derived id and fingerprint. One node has exactly one identity, no
+ * matter how many Hosts register on it.
+ */
+export const nodePublicIdentitySchema = z.object({
+  id: z.string().regex(HOST_ID_PATTERN),
+  fingerprint: z.string().regex(FINGERPRINT_PATTERN),
+  publicKey: identityKeySchema,
+}).strict()
+
+export type NodePublicIdentity = z.infer<typeof nodePublicIdentitySchema>
+
+/**
+ * The unified v2 node descriptor returned by `/.well-known/dsh-remote`.
  * `kind` is fixed to `service` for this deployment, but the schema accepts both
- * kinds so tests can prove that a wrong `kind`/`protocol` is rejected.
+ * kinds so tests can prove that a wrong `kind`/`protocol` is rejected. Service
+ * descriptors carry no flat `hostId`/`fingerprint`: those belong to a Host, and
+ * one service node may host many of them.
  */
 export const nodeDescriptorSchema = z.object({
-  protocol: z.literal(1),
+  protocol: z.literal(2),
   kind: z.enum(NODE_KINDS),
   name: z.string().min(1).max(64),
-  version: z.string().min(1).max(64),
+  version: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/u),
   capabilities: z.array(capabilitySchema).min(1).max(CAPABILITY_VALUES.length).refine(
     values => new Set(values).size === values.length,
     'Capabilities must be unique.',
   ).refine(values => values.includes('pairing'), 'The "pairing" capability is required.'),
-  hostId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-  fingerprint: z.string().regex(/^[0-9a-f]{32}$/u),
+  node: nodePublicIdentitySchema,
 }).strict()
 
 export type NodeDescriptor = z.infer<typeof nodeDescriptorSchema>
@@ -33,11 +59,20 @@ export function parseNodeDescriptor(value: unknown): NodeDescriptor {
   return nodeDescriptorSchema.parse(value)
 }
 
+/**
+ * Persisted `node-identity.json`. The private key never leaves memory: this
+ * file only holds the public half, so losing it changes the node fingerprint.
+ */
+export const nodeIdentitySchema = z.object({
+  version: z.literal(1),
+  algorithm: z.literal('ed25519'),
+  publicKey: identityKeySchema,
+  createdAt: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u),
+}).strict()
+
+export type NodeIdentityRecord = z.infer<typeof nodeIdentitySchema>
+
 export const DEVICE_ID_PATTERN = /^(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu
-/** A Host id is the 43-character Base64URL S256 fingerprint of the Host SPKI key. */
-export const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/u
-/** Base64URL alphabet and length only; the DER structure is validated by identity.ts. */
-export const IDENTITY_KEY_PATTERN = /^[A-Za-z0-9_-]{40,120}$/u
 
 const deviceIdSchema = z.string().regex(DEVICE_ID_PATTERN, 'Device ID must be a ULID or UUID.')
 /**
@@ -47,10 +82,6 @@ const deviceIdSchema = z.string().regex(DEVICE_ID_PATTERN, 'Device ID must be a 
 const hostDeviceIdSchema = z.string().refine(
   value => DEVICE_ID_PATTERN.test(value) || HOST_ID_PATTERN.test(value),
   'Device ID must be a ULID, a UUID, or the 43-character Base64URL Host id.',
-)
-const identityKeySchema = z.string().regex(
-  IDENTITY_KEY_PATTERN,
-  'Identity key must be a Base64URL-encoded SPKI DER public key.',
 )
 const utf8Length = (value: string): number => new TextEncoder().encode(value).byteLength
 const deviceNameSchema = z.string().refine(value => {

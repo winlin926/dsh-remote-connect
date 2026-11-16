@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
+import WebSocket from 'ws'
+import {
+  TUNNEL_PROTOCOL_VERSION,
+  encodeTunnelFrame,
+  type TunnelHelloFrame,
+} from '../dist/src/remote/tunnel-protocol.js'
 import {
   api,
   completePairing,
@@ -130,22 +136,96 @@ test('writes from a foreign origin are rejected', async () => {
   }
 })
 
-test('an optional registration token gates host registration', async () => {
-  const node = await startNode({ HOST_REGISTRATION_TOKEN: 'test-registration-token' })
+test('host registration needs no registration token and ignores a stray token header', async () => {
+  const node = await startNode()
   try {
-    const missing = await api(node.baseUrl, 'POST', '/v1/hosts', { body: hostRegistration() })
-    assert.equal(missing.status, 401)
-    assert.equal(missing.json.error.code, 'REGISTRATION_FORBIDDEN')
+    const plain = await api(node.baseUrl, 'POST', '/v1/hosts', { body: hostRegistration() })
+    assert.equal(plain.status, 201, 'open, rate-limited registration must work without any token')
+    assert.match(plain.json.credential, /^[A-Za-z0-9_-]{64}$/u)
 
-    const wrong = await api(node.baseUrl, 'POST', '/v1/hosts', {
+    const stray = await api(node.baseUrl, 'POST', '/v1/hosts', {
       body: hostRegistration(),
-      headers: { 'x-host-registration-token': 'wrong-token-value' },
+      headers: { 'x-host-registration-token': 'no-longer-a-gate' },
     })
-    assert.equal(wrong.status, 401)
-
-    const accepted = await registerHost(node, hostRegistration(), 'test-registration-token')
-    assert.match(accepted.credential, /^[A-Za-z0-9_-]{64}$/u)
+    assert.equal(stray.status, 201, 'the removed registration token must not gate or break registration')
   } finally {
+    await node.stop()
+  }
+})
+
+test('two registered Hosts are isolated from each other', async () => {
+  const node = await startNode()
+  const sockets: WebSocket[] = []
+  try {
+    const a = await completePairing(node)
+    const b = await completePairing(node)
+    assert.notEqual(a.hostId, b.hostId)
+
+    // Device view: each cookie only lists its own Host relationship.
+    const aHosts = await api(node.baseUrl, 'GET', '/v1/hosts', { cookie: a.cookie })
+    const bHosts = await api(node.baseUrl, 'GET', '/v1/hosts', { cookie: b.cookie })
+    assert.deepEqual(aHosts.json.hosts.map((host: any) => host.hostId), [a.hostId])
+    assert.deepEqual(bHosts.json.hosts.map((host: any) => host.hostId), [b.hostId])
+
+    // Device A cannot revoke a relationship it does not own.
+    const crossRevoke = await api(node.baseUrl, 'DELETE', `/v1/hosts/${b.hostId}/devices/${a.client.deviceId}`, {
+      cookie: a.cookie,
+    })
+    assert.equal(crossRevoke.status, 404)
+    assert.equal(crossRevoke.json.error.code, 'RELATIONSHIP_NOT_FOUND')
+    assert.ok(
+      node.app.db
+        .prepare('SELECT 1 FROM relationships WHERE host_id = ? AND client_device_id = ?')
+        .get(b.hostId, b.client.deviceId),
+    )
+
+    // Host A cannot unregister Host B.
+    const crossUnregister = await api(node.baseUrl, 'DELETE', `/v1/hosts/${b.hostId}`, { token: a.host.credential })
+    assert.equal(crossUnregister.status, 403)
+    assert.equal(crossUnregister.json.error.code, 'FORBIDDEN')
+    assert.ok(node.app.db.prepare('SELECT 1 FROM hosts WHERE host_id = ?').get(b.hostId), 'Host B must survive')
+
+    // Asset namespaces: same path/revision, different bytes, no cross-host bleed.
+    const putA = await api(node.baseUrl, 'PUT', `/v1/assets?rev=r1&path=${encodeURIComponent('/app.js')}`, {
+      token: a.host.credential,
+      rawBody: 'host-a-asset',
+      contentType: 'text/javascript',
+    })
+    const putB = await api(node.baseUrl, 'PUT', `/v1/assets?rev=r1&path=${encodeURIComponent('/app.js')}`, {
+      token: b.host.credential,
+      rawBody: 'host-b-asset',
+      contentType: 'text/javascript',
+    })
+    assert.equal(putA.status, 201)
+    assert.equal(putB.status, 201)
+    assert.notEqual(putA.json.etag, putB.json.etag)
+    assert.equal((await api(node.baseUrl, 'GET', `/assets/${a.hostId}/r1/app.js`)).text, 'host-a-asset')
+    assert.equal((await api(node.baseUrl, 'GET', `/assets/${b.hostId}/r1/app.js`)).text, 'host-b-asset')
+    const crossAsset = await api(node.baseUrl, 'GET', `/assets/${b.hostId}/r1/no-such-asset.js`)
+    assert.equal(crossAsset.status, 404)
+
+    // Tunnel: Host A may not open a tunnel that claims Host B's id.
+    const ws = new WebSocket(`${node.baseUrl.replace(/^http/u, 'ws')}/v1/tunnel`, {
+      headers: { authorization: `Bearer ${a.host.credential}` },
+    })
+    sockets.push(ws)
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve())
+      ws.once('error', (error: Error) => reject(error))
+    })
+    const closed = new Promise<number>(resolve => ws.once('close', code => resolve(code as number)))
+    ws.send(
+      encodeTunnelFrame({
+        t: 'hello',
+        hostId: b.hostId,
+        version: TUNNEL_PROTOCOL_VERSION,
+        capabilities: ['http', 'ws', 'assets'],
+      } as TunnelHelloFrame),
+    )
+    assert.equal(await closed, 4001, 'a tunnel hello with a foreign hostId must be rejected')
+    assert.equal(node.app.services.tunnel.isHostOnline(b.hostId), false)
+  } finally {
+    for (const socket of sockets) socket.close()
     await node.stop()
   }
 })

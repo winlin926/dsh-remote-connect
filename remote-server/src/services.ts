@@ -3,6 +3,7 @@ import type { AuthService } from './auth.js'
 import type { Config } from './config.js'
 import type { Database } from './db.js'
 import type { Logger } from './logger.js'
+import type { NodeIdentity } from './node-identity.js'
 import type { PairingService } from './pairing.js'
 import type { RateLimiter } from './rate-limit.js'
 import type { Repositories } from './repositories.js'
@@ -17,6 +18,8 @@ export interface AppServices {
   config: Config
   logger: Logger
   db: Database
+  /** Stable node identity, loaded or created once in `app.ts`. */
+  nodeIdentity: NodeIdentity
   repos: Repositories
   sessions: SessionService
   auth: AuthService

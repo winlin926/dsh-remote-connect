@@ -1,28 +1,29 @@
 import { parseNodeDescriptor } from '../../contract.js'
-import { EMPTY_FINGERPRINT, EMPTY_HOST_ID } from '../../identity.js'
 import type { AppServices } from '../../services.js'
 import type { Router } from '../router.js'
 import { sendJson } from '../util.js'
 
 /**
- * Public discovery surface. `hostId`/`fingerprint` describe the node's primary
- * Host identity (the first Host registered on this deployment); before any Host
- * registers they are format-valid placeholders so the contract shape never
- * changes.
+ * Public discovery surface. The `node` block comes from the persisted node
+ * identity, so it is available before the first Host ever registers and never
+ * changes when Hosts register, unregister or are deleted.
  */
 export function registerDiscoveryRoutes(router: Router, services: AppServices): void {
-  const { config, repos } = services
+  const { config, nodeIdentity } = services
+  const node = {
+    id: nodeIdentity.nodeId,
+    fingerprint: nodeIdentity.fingerprint,
+    publicKey: nodeIdentity.publicKey,
+  }
 
   router.add('GET', '/.well-known/dsh-remote', ctx => {
-    const host = repos.findFirstHost()
     const descriptor = parseNodeDescriptor({
-      protocol: 1,
+      protocol: 2,
       kind: 'service',
       name: config.nodeName,
       version: config.nodeVersion,
       capabilities: config.capabilities,
-      hostId: host?.host_id ?? EMPTY_HOST_ID,
-      fingerprint: host?.fingerprint ?? EMPTY_FINGERPRINT,
+      node,
     })
     sendJson(ctx.res, 200, descriptor, { head: ctx.head, cacheControl: 'no-store' })
   })
@@ -36,11 +37,12 @@ export function registerDiscoveryRoutes(router: Router, services: AppServices): 
       ctx.res,
       200,
       {
-        protocol: 1,
+        protocol: 2,
         kind: 'service',
         name: config.nodeName,
         version: config.nodeVersion,
         capabilities: config.capabilities,
+        node,
       },
       { head: ctx.head, cacheControl: 'no-store' },
     )

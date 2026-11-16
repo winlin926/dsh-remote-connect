@@ -1,245 +1,365 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>DSH Remote 配对</title>
-<style>
-  :root { color-scheme: light dark; --fg: #16181d; --muted: #62666f; --bg: #f6f7f9; --card: #ffffff; --line: #e3e5e9; --accent: #2f6feb; --ok: #1a7f37; --bad: #c62828; }
-  @media (prefers-color-scheme: dark) { :root { --fg: #e8eaee; --muted: #9aa0ab; --bg: #14161a; --card: #1c1f25; --line: #2b2f37; --accent: #6d9bff; --ok: #4ac26b; --bad: #ff7b72; } }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
-  main { max-width: 30rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
-  .brand { display: flex; align-items: baseline; gap: .5rem; margin-bottom: 1.5rem; }
-  .brand h1 { font-size: 1.05rem; margin: 0; letter-spacing: .01em; }
-  .brand span { color: var(--muted); font-size: .8rem; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 1.5rem; }
-  h2 { font-size: 1.15rem; margin: 0 0 .4rem; }
-  p { color: var(--muted); line-height: 1.65; margin: .4rem 0; font-size: .92rem; }
-  .host { margin: 1.1rem 0; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: 10px; font-size: .9rem; }
-  .host dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .35rem .9rem; }
-  .host dt { color: var(--muted); }
-  .host dd { margin: 0; font-family: ui-monospace, "Cascadia Mono", monospace; word-break: break-all; }
-  .code { margin: 1.2rem 0 .3rem; text-align: center; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 2rem; letter-spacing: .35rem; font-variant-numeric: tabular-nums; }
-  .code small { display: block; letter-spacing: 0; font-size: .78rem; color: var(--muted); font-family: system-ui, sans-serif; margin-top: .5rem; }
-  .row { display: flex; gap: .6rem; margin-top: 1.4rem; }
-  button { flex: 1; font: inherit; padding: .7rem 1rem; border-radius: 9px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button:disabled { opacity: .5; cursor: default; }
-  .status { margin-top: 1rem; font-size: .9rem; min-height: 1.3em; }
-  .status.ok { color: var(--ok); }
-  .status.bad { color: var(--bad); }
-  .dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); margin-right: .4rem; }
-  .dot.ok { background: var(--ok); }
-  .hidden { display: none; }
-  footer { margin-top: 1.5rem; text-align: center; color: var(--muted); font-size: .78rem; line-height: 1.6; }
-</style>
-</head>
-<body>
-<main>
-  <div class="brand">
-    <h1>DSH Remote</h1>
-    <span id="node-line"><span class="dot"></span><span id="node-name">公网节点</span></span>
-  </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <title>DSH Remote 配对</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0e14;
+        --panel: #141a24;
+        --line: #26303d;
+        --text: #e6edf3;
+        --muted: #8b98a9;
+        --accent: #4c9aff;
+        --ok: #3fb950;
+        --bad: #f85149;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(circle at 50% -10%, #1b2433, var(--bg) 60%);
+        color: var(--text);
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 2.5rem 1rem 2rem;
+      }
+      header { width: 100%; max-width: 26rem; margin-bottom: 1.5rem; }
+      .brand { display: flex; align-items: center; gap: .55rem; font-weight: 600; letter-spacing: .02em; }
+      .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 3px rgba(139,152,169,.15); }
+      .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px rgba(63,185,80,.18); }
+      .dot.bad { background: var(--bad); }
+      .node-line { margin-top: .45rem; color: var(--muted); font-size: .82rem; word-break: break-all; }
+      main { width: 100%; max-width: 26rem; }
+      .card {
+        background: linear-gradient(180deg, rgba(255,255,255,.03), transparent), var(--panel);
+        border: 1px solid var(--line);
+        border-radius: .9rem;
+        padding: 1.4rem;
+      }
+      .card h2 { margin: 0 0 .8rem; font-size: 1.05rem; }
+      .card p { margin: .5rem 0; color: var(--muted); }
+      dl { margin: 1rem 0; display: grid; grid-template-columns: auto 1fr; gap: .45rem .8rem; font-size: .86rem; }
+      dt { color: var(--muted); white-space: nowrap; }
+      dd { margin: 0; word-break: break-all; }
+      dd.mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; letter-spacing: .06rem; }
+      .row { display: flex; gap: .7rem; margin-top: 1.2rem; }
+      button {
+        flex: 1;
+        border: 1px solid var(--line);
+        border-radius: .55rem;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        padding: .62rem .8rem;
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
+      button:disabled { opacity: .5; cursor: progress; }
+      .status { margin-top: 1rem; min-height: 1.4rem; color: var(--muted); font-size: .84rem; }
+      .status.ok { color: var(--ok); }
+      .status.bad { color: var(--bad); }
+      footer { margin-top: 1.6rem; max-width: 26rem; color: var(--muted); font-size: .76rem; line-height: 1.7; text-align: center; }
+      .host { border: 1px solid var(--line); border-radius: .7rem; padding: .9rem 1rem 0; background: rgba(0,0,0,.18); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand"><span class="dot" id="dot"></span><span>DSH Remote</span></div>
+      <div class="node-line" id="node-name">公网节点</div>
+    </header>
 
-  <section class="card" id="idle" hidden>
-    <h2>等待配对二维码</h2>
-    <p>请在电脑端 DSH Host 中打开「远程配对」，用手机扫描二维码，或直接打开二维码中的链接。</p>
-    <p>本节点只负责中继：配对票据一次性有效，聊天与审批内容全程端到端加密，节点无法解读。</p>
-  </section>
+    <main>
+      <section class="card" id="idle" hidden>
+        <h2>等待配对二维码</h2>
+        <p>请用电脑端 DSH Remote 生成配对二维码，再用手机相机扫描。</p>
+        <p>二维码只在电脑端生成，有效期内一次性使用。</p>
+        <p id="idle-hint">本节点只负责中继：配对票据一次性有效，聊天与审批内容全程端到端加密，节点无法解读。</p>
+      </section>
 
-  <section class="card" id="confirm" hidden>
-    <h2>确认配对</h2>
-    <p>请核对二维码中显示的 8 位验证码与电脑屏幕上的验证码是否一致。</p>
-    <div class="host">
-      <dl>
-        <dt>节点</dt><dd id="host-name"></dd>
-        <dt>指纹</dt><dd id="host-fp"></dd>
-        <dt>有效期</dt><dd id="expires"></dd>
-      </dl>
-    </div>
-    <div class="code"><span id="code">--------</span><small>验证码仅在两端本地计算，不是密码</small></div>
-    <div class="row">
-      <button id="reject">拒绝</button>
-      <button id="approve" class="primary">确认配对</button>
-    </div>
-    <div class="status" id="status"></div>
-  </section>
+      <section class="card" id="confirm" hidden>
+        <h2>确认配对</h2>
+        <p>请核对下面的信息与电脑端显示的一致。目标主机指纹由本页根据二维码中的公钥现场计算，不依赖节点。</p>
+        <div class="host">
+          <dl>
+            <dt>节点</dt><dd id="confirm-name"></dd>
+            <dt>类型</dt><dd id="confirm-type"></dd>
+            <dt>目标主机指纹</dt><dd class="mono" id="host-fp"></dd>
+            <dt>有效期</dt><dd id="expires"></dd>
+          </dl>
+        </div>
+        <!-- 配对短码不再展示：授权只依赖双端确认与指纹核对。 -->
+        <div class="row">
+          <button id="reject">拒绝</button>
+          <button id="approve" class="primary">确认是本机</button>
+        </div>
+        <div class="status" id="status"></div>
+      </section>
 
-  <section class="card" id="done" hidden>
-    <h2>配对完成</h2>
-    <p>浏览器已获得设备会话，接下来请在电脑端完成最后的授权。</p>
-    <div class="status ok" id="done-status"></div>
-  </section>
+      <section class="card" id="done" hidden>
+        <h2>配对完成</h2>
+        <p>这台设备已加入该主机，可以关闭页面。</p>
+        <div class="status ok" id="done-status"></div>
+      </section>
+    </main>
 
-  <footer>本服务只是中继：不解密业务数据，不记录聊天或审批内容；私钥只保存在 Host 与手机本地。</footer>
-</main>
-<script>
-(() => {
-  'use strict';
-  const $ = id => document.getElementById(id);
-  const status = (el, text, kind) => { el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : ''); };
-  const B64URL = /^[A-Za-z0-9_-]{43}$/;
-  const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-  const IDENTITY_STORAGE = 'dsh-pairing-identity';
+    <footer>
+      本服务只是中继：不解密业务数据，不记录聊天或审批内容；私钥只保存在 Host 与手机本地。
+    </footer>
 
-  function b64url(bytes) {
-    let binary = '';
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  }
+    <script>
+      'use strict'
 
-  function ulid() {
-    let time = Date.now();
-    let out = '';
-    for (let i = 0; i < 10; i += 1) { out = CROCKFORD[time % 32] + out; time = Math.floor(time / 32); }
-    const random = crypto.getRandomValues(new Uint8Array(16));
-    for (const byte of random) out += CROCKFORD[byte & 31];
-    return out;
-  }
+      const $ = id => document.getElementById(id)
+      const B64URL = /^[A-Za-z0-9_-]{43}$/
+      const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+      const IDENTITY_STORAGE = 'dsh-pairing-identity'
 
-  async function loadIdentity() {
-    try {
-      const stored = JSON.parse(localStorage.getItem(IDENTITY_STORAGE) || 'null');
-      if (stored && typeof stored.deviceId === 'string' && B64URL.test(stored.identityKey)) return stored;
-    } catch { /* ignore corrupt storage */ }
-    const deviceId = ulid();
-    // The node contract pins identityKey to Base64URL(SPKI DER), the same encoding
-    // the Host publishes. Never fall back to random bytes: the claim would then be
-    // rejected as an invalid public key.
-    let identityKey;
-    try {
-      const pair = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
-      identityKey = b64url(new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey)));
-    } catch {
-      throw new Error('此浏览器无法生成配对身份密钥（需要 WebCrypto X25519），请改用 DSH 客户端配对。');
-    }
-    const identity = { deviceId, identityKey };
-    localStorage.setItem(IDENTITY_STORAGE, JSON.stringify(identity));
-    return identity;
-  }
+      function setStatus(el, text, kind) {
+        el.textContent = text
+        el.className = 'status' + (kind ? ' ' + kind : '')
+      }
 
-  function parseTicket() {
-    const params = new URLSearchParams(location.hash.replace(/^#/, ''));
-    const ticket = params.get('ticket') || '';
-    const key = params.get('key') || '';
-    const version = params.get('v') || '';
-    if (version !== '1' || !B64URL.test(ticket) || !B64URL.test(key)) return null;
-    history.replaceState(null, '', location.pathname + location.search);
-    return { ticket, hostIdentityKey: key };
-  }
+      function setDot(kind) {
+        $('dot').className = 'dot' + (kind ? ' ' + kind : '')
+      }
 
-  async function json(path, options) {
-    const response = await fetch(path, options);
-    let body = null;
-    try { body = await response.json(); } catch { /* empty body */ }
-    if (!response.ok) {
-      const error = new Error((body && body.error && body.error.message) || 'HTTP ' + response.status);
-      error.code = body && body.error && body.error.code;
-      throw error;
-    }
-    return body;
-  }
+      function b64url(bytes) {
+        let binary = ''
+        for (const byte of bytes) binary += String.fromCharCode(byte)
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+      }
 
-  function formatTime(ms) {
-    try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
-  }
+      function fromB64url(value) {
+        const base64 = value.replace(/-/g, '+').replace(/_/g, '/')
+        const binary = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4))
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+        return bytes
+      }
 
-  async function start() {
-    try {
-      const config = await json('/v1/config');
-      $('node-name').textContent = config.name || '公网节点';
-      document.querySelector('#node-line .dot').classList.add('ok');
-    } catch { /* keep fallback label */ }
-
-    const context = parseTicket();
-    if (!context) { $('idle').hidden = false; return; }
-
-    $('confirm').hidden = false;
-    status($('status'), '正在向电脑端发起配对…');
-    let claim;
-    try {
-      const identity = await loadIdentity();
-      claim = await json('/v1/pairings/claim', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ticket: context.ticket,
-          client: { deviceId: identity.deviceId, name: '网页浏览器', platform: 'web', identityKey: identity.identityKey },
-        }),
-      });
-    } catch (error) {
-      $('confirm').hidden = true;
-      $('idle').hidden = false;
-      window.__pairingError = error;
-      document.querySelector('#idle p').textContent = '配对码不可用或已过期：' + (error.message || error.code);
-      return;
-    }
-
-    $('host-name').textContent = claim.host.name;
-    $('host-fp').textContent = claim.host.fingerprint;
-    $('expires').textContent = formatTime(claim.expiresAt);
-    $('code').textContent = claim.verificationCode;
-    status($('status'), '请核对验证码，然后确认。');
-
-    let busy = false;
-    const headers = { 'x-pairing-token': claim.pairingToken };
-    const poll = async () => {
-      for (let attempt = 0; attempt < 120 && !busy; attempt += 1) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        try {
-          const current = await json('/v1/pairings/' + encodeURIComponent(claim.requestId), { headers });
-          if (current.complete) { finish(); return; }
-          if (current.state === 'rejected') { status($('status'), '配对已被拒绝。', 'bad'); return; }
-          if (current.state === 'client_approved') status($('status'), '已确认，等待电脑端批准…');
-        } catch (error) {
-          if (error.code === 'PAIRING_NOT_FOUND' || error.code === 'PAIRING_EXPIRED') {
-            status($('status'), '配对请求已失效，请重新扫码。', 'bad');
-            return;
-          }
-          status($('status'), '等待电脑端批准…');
+      function ulid() {
+        const time = Date.now()
+        let out = ''
+        for (let i = 9; i >= 0; i -= 1) {
+          out = CROCKFORD[time % 32] + out
         }
+        const random = crypto.getRandomValues(new Uint8Array(16))
+        for (const byte of random) out += CROCKFORD[byte % 32]
+        return out
       }
-    };
-    const finish = () => {
-      $('confirm').hidden = true;
-      $('done').hidden = false;
-      status($('done-status'), '浏览器设备会话已建立（cookie 由本节点签发）。');
-    };
 
-    $('approve').addEventListener('click', async () => {
-      if (busy) return;
-      busy = true;
-      $('approve').disabled = true;
-      $('reject').disabled = true;
-      status($('status'), '已提交，等待电脑端批准…');
-      try {
-        const current = await json('/v1/pairings/' + encodeURIComponent(claim.requestId) + '/confirm', { method: 'POST', headers });
-        if (current.complete) finish();
-        else { busy = false; poll(); }
-      } catch (error) {
-        busy = false;
-        $('approve').disabled = false;
-        $('reject').disabled = false;
-        status($('status'), '确认失败：' + (error.message || '未知错误'), 'bad');
+      async function loadIdentity() {
+        const stored = localStorage.getItem(IDENTITY_STORAGE)
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored)
+            if (typeof parsed.deviceId === 'string' && typeof parsed.identityKey === 'string') return parsed
+          } catch {
+            // Regenerate below.
+          }
+        }
+        if (!crypto.subtle) throw new Error('当前浏览器不支持 WebCrypto，无法完成配对。')
+        const keys = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits'])
+        const spki = await crypto.subtle.exportKey('spki', keys.publicKey)
+        const identity = { deviceId: ulid(), identityKey: b64url(new Uint8Array(spki)) }
+        localStorage.setItem(IDENTITY_STORAGE, JSON.stringify(identity))
+        return identity
       }
-    });
 
-    $('reject').addEventListener('click', async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        await json('/v1/pairings/' + encodeURIComponent(claim.requestId) + '/reject', { method: 'POST', headers });
-        status($('status'), '已拒绝本次配对。', 'bad');
-      } catch (error) {
-        status($('status'), '操作失败：' + (error.message || '未知错误'), 'bad');
+      function parseTicket() {
+        const params = new URLSearchParams(location.hash.slice(1))
+        const version = params.get('v')
+        const ticket = params.get('ticket') || ''
+        const hostIdentityKey = params.get('key') || ''
+        if (version !== '1' || !B64URL.test(ticket) || !B64URL.test(hostIdentityKey)) return null
+        history.replaceState(null, '', location.pathname + location.search)
+        return { ticket, hostIdentityKey }
       }
-    });
-  }
 
-  start();
-})();
-</script>
-</body>
+      async function fingerprintOf(identityKey) {
+        const der = fromB64url(identityKey)
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', der))
+        const hex = Array.from(digest.subarray(0, 16), byte => byte.toString(16).padStart(2, '0')).join('')
+        return hex.match(/.{4}/g).join('-').toUpperCase()
+      }
+
+      async function json(path, options) {
+        const response = await fetch(path, options)
+        const text = await response.text()
+        let body = null
+        try {
+          body = text ? JSON.parse(text) : null
+        } catch {
+          body = null
+        }
+        if (!response.ok) {
+          const error = new Error((body && (body.message || body.error)) || '请求失败（HTTP ' + response.status + '）')
+          error.code = body && body.error
+          throw error
+        }
+        return body
+      }
+
+      function formatTime(ms) {
+        if (typeof ms !== 'number') return '—'
+        return new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      }
+
+      function finish() {
+        $('confirm').hidden = true
+        $('idle').hidden = true
+        $('done').hidden = false
+        $('done-status').textContent = '配对完成，已建立加密通道。'
+      }
+
+      function showFailure(message) {
+        $('confirm').hidden = true
+        $('done').hidden = true
+        $('idle').hidden = false
+        const hint = $('idle-hint')
+        hint.textContent = '配对链接不可用或已过期：' + message
+        hint.className = 'status bad'
+      }
+
+      async function start() {
+        let config = null
+        try {
+          config = await json('/v1/config')
+          $('node-name').textContent = (config && config.name) || '公网节点'
+          setDot('ok')
+        } catch (error) {
+          setDot('bad')
+          showFailure(error instanceof Error ? error.message : String(error))
+          return
+        }
+
+        const context = parseTicket()
+        if (!context) {
+          $('idle').hidden = false
+          return
+        }
+
+        $('confirm').hidden = false
+        $('confirm-name').textContent = config.name || '公网节点'
+        $('confirm-type').textContent = config.kind === 'gateway' ? '隧道网关' : '自托管服务'
+        setStatus($('status'), '正在向电脑端发起配对…')
+
+        let identity
+        let fingerprint
+        try {
+          identity = await loadIdentity()
+          fingerprint = await fingerprintOf(context.hostIdentityKey)
+        } catch (error) {
+          showFailure(error instanceof Error ? error.message : String(error))
+          return
+        }
+        $('host-fp').textContent = fingerprint
+
+        let claim
+        try {
+          claim = await json('/v1/pairings/claim', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              ticket: context.ticket,
+              client: {
+                deviceId: identity.deviceId,
+                name: '网页浏览器',
+                platform: 'web',
+                identityKey: identity.identityKey,
+              },
+            }),
+          })
+        } catch (error) {
+          showFailure(error instanceof Error ? error.message : String(error))
+          return
+        }
+
+        $('expires').textContent = formatTime(claim.expiresAt)
+        setStatus($('status'), '核对目标主机指纹和电脑端一致后，再确认风险并继续。')
+
+        const headers = { 'x-pairing-token': claim.pairingToken }
+        const approve = $('approve')
+        const reject = $('reject')
+        let settled = false
+
+        async function poll() {
+          for (let attempt = 0; attempt < 120 && !settled; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 1500))
+            let state
+            try {
+              state = await json('/v1/pairings/' + encodeURIComponent(claim.requestId), { headers })
+            } catch (error) {
+              const code = error && error.code
+              if (code === 'PAIRING_NOT_FOUND' || code === 'PAIRING_EXPIRED') {
+                setStatus($('status'), '配对已失效，请回到电脑端重新生成二维码。', 'bad')
+                approve.disabled = true
+                reject.disabled = true
+                return
+              }
+              continue
+            }
+            if (state.state === 'complete') {
+              settled = true
+              finish()
+              return
+            }
+            if (state.state === 'rejected') {
+              setStatus($('status'), '配对已被拒绝。', 'bad')
+              approve.disabled = true
+              reject.disabled = true
+              return
+            }
+            if (state.state === 'client_approved' || state.state === 'pending') {
+              setStatus($('status'), '等待电脑端批准…')
+            }
+          }
+        }
+
+        approve.addEventListener('click', async () => {
+          approve.disabled = true
+          reject.disabled = true
+          try {
+            const result = await json('/v1/pairings/' + encodeURIComponent(claim.requestId) + '/confirm', {
+              method: 'POST',
+              headers,
+            })
+            if (result.state === 'complete') finish()
+            else {
+              setStatus($('status'), '等待电脑端批准…')
+              await poll()
+            }
+          } catch (error) {
+            setStatus($('status'), '确认失败：' + (error instanceof Error ? error.message : String(error)), 'bad')
+            approve.disabled = false
+            reject.disabled = false
+          }
+        })
+
+        reject.addEventListener('click', async () => {
+          approve.disabled = true
+          reject.disabled = true
+          try {
+            await json('/v1/pairings/' + encodeURIComponent(claim.requestId) + '/reject', {
+              method: 'POST',
+              headers,
+            })
+          } catch {
+            // A rejected coupon must not look approved: fall through to the idle view.
+          }
+          showFailure('已拒绝本次配对。')
+        })
+
+        poll()
+      }
+
+      start()
+    </script>
+  </body>
 </html>

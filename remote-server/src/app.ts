@@ -20,6 +20,7 @@ import { registerTurnRoutes } from './http/routes/turn.js'
 import { Router } from './http/router.js'
 import { sendError } from './http/util.js'
 import { createLogger, type Logger } from './logger.js'
+import { loadOrCreateNodeIdentity, type NodeIdentity } from './node-identity.js'
 import { PairingService } from './pairing.js'
 import type { ControlFrame } from './protocol.js'
 import { RateLimiter } from './rate-limit.js'
@@ -45,6 +46,7 @@ export interface RemoteServerApp {
   readonly server: Server
   readonly db: Database
   readonly hub: ControlHub
+  readonly nodeIdentity: NodeIdentity
   readonly services: AppServices
   /** Bind the HTTP server; resolves with the actual TCP address. */
   listen(port?: number, host?: string): Promise<AddressInfo>
@@ -161,6 +163,9 @@ async function handleRequest(
 export async function createApp(options: CreateAppOptions = {}): Promise<RemoteServerApp> {
   const config = options.config ?? loadConfig(options.env ?? process.env)
   const logger = options.logger ?? createLogger(config.logLevel)
+  // A service node has its own identity from the first start: it exists before
+  // (and independently of) any Host registration, and never changes afterwards.
+  const nodeIdentity = loadOrCreateNodeIdentity(config.dataDir)
   const db = openDatabase(config.databasePath)
   const repos = new Repositories(db)
   const sessions = new SessionService(repos, config)
@@ -196,6 +201,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<RemoteS
     config,
     logger,
     db,
+    nodeIdentity,
     repos,
     sessions,
     auth,
@@ -292,5 +298,5 @@ export async function createApp(options: CreateAppOptions = {}): Promise<RemoteS
     db.close()
   }
 
-  return { config, logger, server, db, hub, services, listen, close }
+  return { config, logger, server, db, hub, nodeIdentity, services, listen, close }
 }

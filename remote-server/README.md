@@ -14,26 +14,18 @@
 `GET /.well-known/dsh-remote`（`application/json; charset=utf-8`、`cache-control: no-store`、不返回 3xx）：
 
 ```json
-{
-  "protocol": 2,
-  "kind": "service",
-  "name": "我的公网节点",
-  "version": "0.6.2",
-  "capabilities": ["pairing", "cache", "official-ui"],
-  "node": {
-    "id": "<43 字符 base64url>",
-    "fingerprint": "<32 位小写 hex>",
-    "publicKey": "<Ed25519 SPKI DER 的 base64url>"
-  }
-}
+{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.2","capabilities":["pairing","cache","official-ui","relay"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
 ```
 
-- `kind` 固定 `"service"`，`protocol` 为数字 `2`；完整字段规则见 [`docs/public-node.md`](../docs/public-node.md)。
-- `capabilities` 只能是 `pairing`、`cache`、`official-ui` 的子集，且必须含 `pairing`（0.6.2 不允许宣告 `relay`/`turn`，它们为将来版本保留）。
-- `node` 是**节点身份**：启动时从 `<DATA_DIR>/node-identity.json` 读取（不存在则生成，Ed25519、`0600`、原子写）。`node.id` = base64url(sha256(SPKI DER))，43 字符；`node.fingerprint` = 同一摘要前 16 字节的小写十六进制（32 字符）；客户端必须校验 `sha256(DER)` 同时等于两者。
-- 服务节点**不返回**扁平的 `hostId`/`fingerprint`：一个节点可被多台 Host 共用，扁平字段无法如实表达；节点身份与任何主机身份无关，多台主机注册不改变节点指纹。
-- `name`、`version` 可由 `NODE_NAME`、`NODE_VERSION` 覆盖。节点在启动时就有身份，不再返回占位身份。
-- `/healthz` 返回 `{ok:true,version}`；`/v1/config` 返回 `{protocol,kind,name,version,capabilities}`，不含密钥。
+- `kind` 固定 `"service"`；`protocol` 为数字 `2`，客户端必须拒绝其他值。
+- `capabilities` 只能是 `pairing`、`cache`、`official-ui`、`relay`、`turn` 的子集，且必须含 `pairing`。0.6.2 的默认值就是 `pairing`、`cache`、`official-ui`：产品路径只走 HTTPS/WSS 隧道转发，不宣告尚未接入的 TURN/WebRTC；`relay`/`turn` 保留给将来版本，需要显式配置 `CAPABILITIES` 才会出现，且声明 `turn` 时 `TURN_URLS`/`TURN_SECRET` 必须已配置。
+- `node.id` = base64url(sha256(节点公钥的 SPKI DER))，43 字符；`node.fingerprint` = 同一 sha256 前 16 字节的小写十六进制（32 字符）；`node.publicKey` = base64url(SPKI DER)。客户端必须自行解码并复核摘要，不得信任节点返回的 `id`/`fingerprint`。
+- **服务节点不返回扁平的 `hostId`/`fingerprint`**：一个服务节点可以承载多台 Host，扁平字段属于 `kind: "gateway"` 的旧式网关，不应出现在 service 文档里。
+- `name`、`version` 可由 `NODE_NAME`、`NODE_VERSION` 覆盖。
+- 节点身份持久化在 `DATA_DIR/node-identity.json`：`{version:1,algorithm:"ed25519",publicKey,createdAt}`，权限 0600、临时文件 + rename 原子写；私钥只在进程内存中，不落盘、不出现在任何接口与日志里。文件损坏时启动直接失败并报「节点身份文件已损坏」，**不会静默重建**（重建会改变指纹，等于让所有已信任该节点的客户端失效）。
+- 节点身份与 Host 无关：启动即有身份（不存在"第一个 Host 注册前的占位值"），多台 Host 注册、注销、注销后重注册都不改变 `node.id`/`node.fingerprint`；重启读取同一 `node-identity.json`，值保持不变。丢失该文件会得到新指纹，需重新分发节点地址/记录。
+
+`GET /v1/config` 返回同一份公开身份：`{protocol:2,kind:"service",name,version,capabilities,node:{id,fingerprint,publicKey}}`，`no-store`。
 
 ## 架构
 
@@ -46,7 +38,9 @@ Host ───HTTPS/WSS──▶                                              �
                                                                   └─ 节点身份：<DATA_DIR>/node-identity.json（0600）
 ```
 
-- `src/app.ts`：装配 HTTP 服务与 WSS 升级（请求限流、跨源拒绝、路由分发、优雅关闭）；`src/http/routes/*` 按资源拆分。`/.well-known/dsh-remote` 在认证/配对之前注册，且只放行该精确路径的 `GET`/`HEAD`。
+- `src/app.ts`：装配 HTTP 服务与 WSS 升级（请求限流、跨源拒绝、路由分发、优雅关闭）；启动时先加载/创建节点身份。
+- `src/node-identity.ts`：节点身份文件的加载、校验、原子生成与 `nodeId`/`fingerprint` 派生。
+- `src/http/routes/*`：按资源拆分（discovery、landing、hosts、pairings、assets、turn）。
 - `src/wss/hub.ts`：`/v1/control` WebSocket 集线器（鉴权、配对帧、连接登记、透明转发、限流、心跳）。
 - `src/db.ts`：`node:sqlite` `DatabaseSync`、迁移表、幂等建表。
 - `src/repositories.ts`：所有 SQL 访问集中在此；其余模块不直接拼 SQL。
@@ -78,7 +72,7 @@ Host ───HTTPS/WSS──▶                                              �
 | --- | --- | --- | --- |
 | GET | `/.well-known/dsh-remote` | 无 | v2 节点契约（见上），`no-store`、无 3xx |
 | GET | `/healthz` | 无 | `{ok:true,version}` |
-| GET | `/v1/config` | 无 | `{protocol,kind,name,version,capabilities}`，不含密钥 |
+| GET | `/v1/config` | 无 | `{protocol:2,kind,name,version,capabilities,node}`，与发现文档同源、不含密钥 |
 | POST | `/v1/hosts` | 无（默认开放） | `{deviceId,name,identityKey,clientVersion}`（`identityKey` = base64url(SPKI DER)，如 Ed25519 44 字节/59 字符）→ `201 {credential,host:{hostId,deviceId,name,fingerprint}}`（凭证只返回一次，仅存哈希）。注册默认开放，受注册限流与双端授权保护；**注册本身不授予跨主机访问权**。同一 `deviceId` 重复注册返回 `409 HOST_ALREADY_REGISTERED`，公钥已被其他 Host 使用返回 `409 IDENTITY_IN_USE`，不是合法 SPKI 公钥返回 `400 INVALID_IDENTITY_KEY`（失败关闭） |
 | POST | `/v1/pairings` | Host Bearer | `{ticket?,expiresAt?}`（省略则服务端生成 32 字节票据、TTL≤5min）→ `201 {ticket,expiresAt,host:{name,hostId,fingerprint}}`，票据哈希入库、单次使用 |
 | POST | `/v1/pairings/claim` | 无（票据即凭据） | `{ticket,client:{deviceId,name,platform,identityKey}}`（`identityKey` 同样是 base64url(SPKI DER)）→ `201 {requestId,pairingToken,host:{...},verificationCode,expiresAt}`；票据被消费；Host 必须在线，`pair.request` 帧推给 Host。`verificationCode` 仅作 v1 传输兼容字段保留，`/pair` 页面与新授权逻辑不读取、不显示、不参与判定 |
@@ -91,7 +85,13 @@ Host ───HTTPS/WSS──▶                                              �
 | PUT | `/v1/assets?path=...&rev=...` | Host Bearer | 推送/覆盖资源（body 为原始字节，≤`ASSET_MAX_BYTES`），返回 `201 {ok,path,revision,etag,size}` |
 | GET/HEAD | `/assets/:hid/:rev/*` | 无 | 按 `hid`+`rev` 隔离的静态资源；普通资源 `immutable`+`ETag`+304，HTML `no-store`、清单类 `no-cache` |
 | GET | `/v1/turn-credentials` | Device cookie | coturn REST HMAC 临时凭据；未配置 TURN 返回 `501 TURN_NOT_CONFIGURED` |
-| GET | `/`、`/pair` | 无 | 最小落地页（`web/index.html`），`no-store` |
+| GET | `/`、`/pair` | 无 | 配对落地页（`web/index.html`），`no-store` |
+
+### 配对页（`/pair`）
+
+- 二维码参数保持 `#v=1&ticket=<43 字符>&key=<Host SPKI DER base64url>`；页面只用 `ticket` 发起 claim，用 `key` **在本地**计算目标主机指纹（sha256(SPKI DER) 前 16 字节，按 8 组 4 位大写展示）。
+- 页面展示节点名称、节点类型（隧道网关/自托管服务）、目标主机指纹与有效期，操作按钮为「拒绝」与「确认是本机」；**不再显示任何 8 位数字短码**，也不读取 claim 返回的 `verificationCode`。
+- 授权条件不变：手机确认 + 电脑端批准 + 指纹核对一致；拒绝、过期、重放（同一票据二次 claim）都不会签发设备 cookie。
 
 ### `/v1/control` WebSocket
 
@@ -106,7 +106,7 @@ Host ───HTTPS/WSS──▶                                              �
 
 - **节点能看到转发内容**：节点终止 TLS 后代理 HTTP/SSE/WebSocket 流量，节点或隧道运营者可能看到转发给本机的请求与内容；不提供端到端加密。发行方不托管任何节点。
 - 不记录：私钥、cookie 明文、配对票据明文、claim token、聊天/审批内容、转发密文正文；日志只写事件名、状态码、耗时、脱敏后的设备标签。
-- 持久化只存哈希（Host 凭证、设备会话、票据、claim token）；节点身份私钥只存 `<DATA_DIR>/node-identity.json`（`0600`）。
+- 持久化只存哈希（Host 凭证、设备会话、票据、claim token）；`<DATA_DIR>/node-identity.json`（`0600`）只存节点身份**公钥**，私钥不落盘、不出接口、不写日志；启动日志只打印 `nodeId`/`nodeFingerprint` 便于运维核对。
 - 注册默认开放，但注册本身不授予任何访问权：只有「手机确认 + 电脑批准 + 指纹一致」才产生设备授权；注册与配对均有限流。
 - `X-Forwarded-*` 仅在 `TRUST_PROXY=1` 时信任；默认按直连地址限流。
 - 全局限流 + 端点级限流（注册、claim、confirm 单独收紧），超限 `429` 并带 `Retry-After`。
@@ -119,6 +119,7 @@ Host ───HTTPS/WSS──▶                                              �
 3. 真实 TLS 与 TURN 未在本机实测：TLS 由 Caddy 终止（compose 提供），TURN 凭据算法有单元测试但未连真实 coturn。
 4. 多实例不支持：在线状态与转发成员表在进程内存，SQLite 也是单写者；横向扩展需要 PostgreSQL 与共享在线协调。
 5. 静态资源存 SQLite BLOB，适合单节点与中小体积资源（默认上限 16MiB/个），不适合大文件或 CDN 级流量。
+6. `node-identity.json` 只含公钥，但它是节点指纹的唯一来源：部署时需备份；删除或损坏（不做静默重建）都会改变节点身份，已信任旧指纹的客户端需要重新确认。
 
 ## 自测
 
@@ -132,19 +133,20 @@ npm test
 node dist/remote-server/src/main.js   # 可用 PORT/DATA_DIR 临时指定
 ```
 
-`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物）。v2 变更后的测试文件与用例数以实际输出为准（本工作树未在 B 合并后复跑）。
+`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 8 个文件 76 个用例。
 
 ## 故障排查
 
 - 本机凭据丢失、节点仍保留该 Host 注册（重新注册返回 `409 HOST_ALREADY_REGISTERED`）：在 `remote-server/` 目录运行 `npm run admin:reset -- <hostId>`（即 `node dist/remote-server/src/tools/reset-host.js <hostId>`），它会用同一 `DATA_DIR` 直接打开 SQLite 删除该 Host 及级联数据并打印删除行数。Host 正常运行时可改用 `DELETE /v1/hosts/:hostId`（Host Bearer）自助注销。
+- 启动报「节点身份文件已损坏」：检查 `DATA_DIR/node-identity.json` 是否被截断或手改；修复文件或从备份恢复，不要直接删除（会更换节点指纹）。
 
 ## 目录
 
 ```
 remote-server/
-  src/            服务端源码（app、http、wss、db、pairing、assets、turn、identity、tools/reset-host 运维工具）
+  src/            服务端源码（app、http、wss、db、pairing、assets、turn、identity、node-identity、tools/reset-host 运维工具）
   test/           node --test 集成测试（对编译产物运行）
-  web/            最小落地页（配对入口 /pair）
+  web/            配对落地页（配对入口 /pair）
   Dockerfile      多阶段构建（node:24-alpine）
   compose.yaml    server + caddy + 可选 coturn
   Caddyfile       自动 HTTPS 反代（含 Upgrade）

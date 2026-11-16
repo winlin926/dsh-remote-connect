@@ -144,13 +144,6 @@ export class Repositories {
       .get(credentialHash) as HostRow | undefined
   }
 
-  /** Node identity shown by `/.well-known/dsh-remote`: the first registered host. */
-  findFirstHost(): HostRow | undefined {
-    return this.db.prepare('SELECT * FROM hosts ORDER BY created_at ASC, rowid ASC LIMIT 1').get() as
-      | HostRow
-      | undefined
-  }
-
   touchHost(hostId: string, now: number): void {
     this.db.prepare('UPDATE hosts SET last_seen_at = ? WHERE host_id = ?').run(now, hostId)
   }

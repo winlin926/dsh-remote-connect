@@ -9,6 +9,8 @@ async function main(): Promise<void> {
     event: 'server.listening',
     host: address.address,
     port: address.port,
+    nodeId: app.nodeIdentity.nodeId,
+    nodeFingerprint: app.nodeIdentity.fingerprint,
     nodeName: app.config.nodeName,
     version: app.config.nodeVersion,
     capabilities: app.config.capabilities,

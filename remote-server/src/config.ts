@@ -36,7 +36,6 @@ export interface Config {
   nodeName: string
   nodeVersion: string
   capabilities: Capability[]
-  hostRegistrationToken: string | null
   pairingTicketTtlMs: number
   sessionTtlMs: number
   assetMaxBytes: number
@@ -152,8 +151,10 @@ function readTurn(env: NodeJS.ProcessEnv): TurnConfig | null {
 function readCapabilities(env: NodeJS.ProcessEnv, turn: TurnConfig | null): Capability[] {
   const raw = readString(env, 'CAPABILITIES')
   if (raw === null) {
-    const defaults: Capability[] = ['pairing', 'cache', 'official-ui', 'relay']
-    return turn ? [...defaults, 'turn'] : defaults
+    // 0.6.2 advertises only what the product path actually uses (HTTPS/WSS tunnel
+    // forwarding). relay/turn stay in the schema for a future version and must be
+    // opted into explicitly through CAPABILITIES.
+    return ['pairing', 'cache', 'official-ui']
   }
   const values: Capability[] = []
   for (const entry of raw.split(',')) {
@@ -169,7 +170,6 @@ function readCapabilities(env: NodeJS.ProcessEnv, turn: TurnConfig | null): Capa
   if (values.includes('turn') && !turn) {
     throw new ConfigError('CAPABILITIES includes "turn" but TURN_URLS/TURN_SECRET are not configured.')
   }
-  if (turn && !values.includes('turn')) values.push('turn')
   return values
 }
 
@@ -180,8 +180,10 @@ function readName(env: NodeJS.ProcessEnv): string {
 }
 
 function readVersion(env: NodeJS.ProcessEnv): string {
-  const raw = readString(env, 'NODE_VERSION') ?? '0.6.0'
-  if ([...raw].length > 64) throw new ConfigError('NODE_VERSION must be at most 64 characters.')
+  const raw = readString(env, 'NODE_VERSION') ?? '0.6.2'
+  if (!/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/u.test(raw)) {
+    throw new ConfigError('NODE_VERSION must match ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$.')
+  }
   return raw
 }
 
@@ -211,7 +213,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     nodeName: readName(env),
     nodeVersion: readVersion(env),
     capabilities: readCapabilities(env, turn),
-    hostRegistrationToken: readString(env, 'HOST_REGISTRATION_TOKEN'),
     pairingTicketTtlMs,
     sessionTtlMs: readInt(env, 'SESSION_TTL_DAYS', 30, 1, 365) * 86_400_000,
     assetMaxBytes: readInt(env, 'ASSET_MAX_BYTES', 16 * 1024 * 1024, 1024, 64 * 1024 * 1024),

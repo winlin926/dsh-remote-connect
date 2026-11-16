@@ -46,10 +46,11 @@ test('a node with TURN issues coturn REST credentials bound to the device', asyn
     assert.notEqual(response.json.credential, TURN_SECRET)
 
     const config = await api(node.baseUrl, 'GET', '/v1/config')
-    assert.ok(config.json.capabilities.includes('turn'), 'TURN is advertised once configured')
+    assert.deepEqual(config.json.capabilities, ['pairing', 'cache', 'official-ui'])
+    assert.ok(!config.json.capabilities.includes('turn'), '0.6.2 never advertises TURN')
     const wellKnown = await api(node.baseUrl, 'GET', '/.well-known/dsh-remote')
-    assert.ok(wellKnown.json.capabilities.includes('turn'))
-    assert.ok(node.app.config.capabilities.includes('turn'))
+    assert.deepEqual(wellKnown.json.capabilities, ['pairing', 'cache', 'official-ui'])
+    assert.deepEqual(node.app.config.capabilities, ['pairing', 'cache', 'official-ui'])
   } finally {
     paired.hostClient.close()
     await node.stop()
@@ -76,5 +77,7 @@ test('invalid TURN configuration fails closed at startup', () => {
   )
   const valid = loadConfig({ ...base, TURN_URLS: 'turn:127.0.0.1:3478', TURN_SECRET, CAPABILITIES: 'pairing,relay' })
   assert.deepEqual(valid.turn?.urls, ['turn:127.0.0.1:3478'])
-  assert.ok(valid.capabilities.includes('turn'))
+  assert.ok(!valid.capabilities.includes('turn'), 'TURN config never auto-advertises')
+  const optedIn = loadConfig({ ...base, TURN_URLS: 'turn:127.0.0.1:3478', TURN_SECRET, CAPABILITIES: 'pairing,turn' })
+  assert.deepEqual(optedIn.capabilities, ['pairing', 'turn'])
 })
