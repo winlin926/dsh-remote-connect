@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
@@ -114,6 +115,7 @@ it('records the pairing address and renames authorized devices', () => {
 })
 
 it.each(['request', 'claim'])('resumes pairing after a failed %s without rescanning', async failed => {
+
   const enter = { hidden: true, textContent: '', onclick: undefined as (() => Promise<void>) | undefined }
   const state = { textContent: '' }
   const tokens: string[] = [], claims: string[] = []
@@ -140,4 +142,57 @@ it.each(['request', 'claim'])('resumes pairing after a failed %s without rescann
   expect(redirected).toBe('/')
   expect(tokens).toEqual(failed === 'request' ? ['scan-token', 'scan-token'] : ['scan-token'])
   expect(claims).toEqual(failed === 'claim' ? ['pending-device', 'pending-device'] : ['pending-device'])
+})
+
+it('marks only historical public-entry authorizations for repair, exactly once', () => {
+  const now = 1000000, folder = mkdtempSync(join(tmpdir(), 'dsh-rc-legacy-')); folders.push(folder)
+  const file = join(folder, 'devices.json'), secret = 'legacy-secret'
+  const hash = createHash('sha256').update(secret).digest('hex')
+  const record = (id: string, name: string, host: string) => ({ id, name, createdAt: now - 1000, lastSeenAt: now - 1000, hash, host })
+  writeFileSync(file, JSON.stringify({ version: 1, devices: [record('lan-device', '我的手机', '192.168.1.23:5173'), record('public-device', '旧公网手机', 'old-name.trycloudflare.com'), record('other-device', '其他设备', 'other.example.com')] }))
+  const service = new PairingService({ file, now: () => now })
+  expect(service.migratePublicDevices(['https://old-name.trycloudflare.com'])).toEqual({ marked: 1, already: 0, devices: 3 })
+  const listed = service.list()
+  // The device name and every record stay readable; only the historical public entry is flagged.
+  expect(listed.find(device => device.id === 'public-device')).toMatchObject({ name: '旧公网手机', requiresRepair: true })
+  expect(listed.find(device => device.id === 'lan-device')?.requiresRepair).toBeUndefined()
+  expect(listed.find(device => device.id === 'other-device')?.requiresRepair).toBeUndefined()
+  const stored = JSON.parse(readFileSync(file, 'utf8'))
+  expect(stored.version).toBe(1); expect(stored.devices).toHaveLength(3)
+  expect(stored.devices.find((device: { id: string }) => device.id === 'public-device')?.name).toBe('旧公网手机')
+  // The old public cookie no longer authenticates; the LAN authorization keeps working.
+  expect(service.authenticate(`public-device.${secret}`)).toBeUndefined()
+  expect(service.authenticate(`lan-device.${secret}`)?.name).toBe('我的手机')
+  // A restart sees the flag on disk, and a second migration changes nothing.
+  const restarted = new PairingService({ file, now: () => now }), before = readFileSync(file, 'utf8')
+  expect(restarted.migratePublicDevices(['https://old-name.trycloudflare.com'])).toEqual({ marked: 0, already: 1, devices: 3 })
+  expect(readFileSync(file, 'utf8')).toBe(before)
+  expect(restarted.authenticate(`public-device.${secret}`)).toBeUndefined()
+})
+
+it('cannot approve a public pairing until the browser confirms this host', () => {
+  const { service } = fixture()
+  const unconfirmed = service.request(service.issue().token, 'Android', 'dsh.example.com', undefined, 'public', false)
+  expect(service.requests()).toEqual([expect.objectContaining({ id: unconfirmed.id, via: 'public', nodeConfirmed: false })])
+  expect(() => service.approve(unconfirmed.id)).toThrow('浏览器还没有确认本机指纹')
+  expect(service.requests()).toHaveLength(1)
+  // A LAN request needs no browser confirmation, and a public one may carry it.
+  const lan = service.request(service.issue().token, 'Android', '192.168.1.23:5173')
+  expect(service.requests()[0]).toMatchObject({ id: lan.id, via: 'lan', nodeConfirmed: true })
+  service.approve(lan.id)
+  expect(service.claim(lan.id, lan.key).state).toBe('approved')
+  const confirmed = service.request(service.issue().token, 'iPhone', 'dsh.example.com', undefined, 'public', true)
+  expect(service.requests()[0]).toMatchObject({ id: confirmed.id, via: 'public', nodeConfirmed: true })
+  service.approve(confirmed.id)
+  expect(service.claim(confirmed.id, confirmed.key).state).toBe('approved')
+  expect(service.list().map(device => device.via)).toEqual(['lan', 'public'])
+})
+
+it('records a refused confirmation so the panel can show the reason', () => {
+  const { service } = fixture()
+  expect(service.failure()).toBeUndefined()
+  service.reportFailure('旧公网手机', '主机指纹与配对页不一致，本次配对已拒绝。')
+  expect(service.failure()).toMatchObject({ name: '旧公网手机', reason: '主机指纹与配对页不一致，本次配对已拒绝。' })
+  service.issue()
+  expect(service.failure()).toBeUndefined()
 })

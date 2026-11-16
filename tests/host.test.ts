@@ -111,50 +111,53 @@ it('explicitly switches entries, invalidates the old entry, and can retry a fail
   expect((await command('start')).activeMode).toBe('public')
 }))
 
-it('changes the public PIN only locally and revokes existing device authorization', async () => withHost(async command => {
+it('confirms the public node on both ends before issuing a device cookie', async () => withHost(async command => {
   await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' })
   const state = await command('start')
-  const base = `http://127.0.0.1:${state.gatewayPort}`
-  const call = (path: string, body: unknown, headers: Record<string, string> = {}) => new Promise<{ status: number; body: any; cookie: string }>((resolve, reject) => {
-    const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method: 'POST', headers: { host: 'dsh.example.com', origin: 'https://dsh.example.com', 'content-type': 'application/json', ...headers } }, res => {
-      let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), cookie: res.headers['set-cookie']?.[0]?.split(';')[0] ?? '' }))
-    }); req.on('error', reject); req.end(JSON.stringify(body))
+  expect(state.node).toMatchObject({ kind: 'gateway', protocol: 1, fingerprint: expect.stringMatching(/^[a-f0-9]{32}$/), fingerprintGroups: expect.stringMatching(/^([A-F0-9]{4}-){7}[A-F0-9]{4}$/) })
+  const send = (path: string, body: unknown, headers: Record<string, string> = {}, method = 'POST') => new Promise<{ status: number; body: any; text: string; cookie: string }>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method, headers: { host: 'dsh.example.com', origin: 'https://dsh.example.com', 'content-type': 'application/json', ...headers } }, res => {
+      let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text.startsWith('{') ? JSON.parse(text) : {}, text, cookie: res.headers['set-cookie']?.[0] ?? '' }))
+    }); req.on('error', reject); req.end(method === 'GET' ? undefined : JSON.stringify(body))
   })
-  const entry = await call('/rc/pair/verify', { pin: state.pairingPin })
-  expect(entry.status).toBe(200)
-  const requestPairing = await call('/rc/pair/request', { token: new URL(state.links[0].url).hash.slice(6) }, { cookie: entry.cookie })
-  await command('approve', { id: requestPairing.body.id })
-  const claim = await call('/rc/pair/claim', { id: requestPairing.body.id, key: requestPairing.body.key }, { cookie: entry.cookie })
-  expect(claim.status).toBe(200)
+  // The page the browser reaches first names this node, not the Host behind it.
+  const page = await send('/pair', undefined, { accept: 'text/html' }, 'GET')
+  expect(page.status).toBe(200)
+  for (const text of ['确认是本机', state.node.fingerprintGroups, '隧道网关', 'v1', '主机指纹']) expect(page.text).toContain(text)
+  const discovery = await send('/.well-known/dsh-remote', undefined, {}, 'GET')
+  expect(discovery.status).toBe(200)
+  expect(discovery.body).toMatchObject({ protocol: 1, kind: 'gateway', name: 'DeepSeek Harness', fingerprint: state.node.fingerprint })
+  expect(discovery.body.hostId).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  const token = new URL(state.links[0].url).hash.slice(6)
+  // A page that did not confirm this host's fingerprint cannot even ask for a ticket.
+  const mismatched = await send('/rc/pair/request', { token, fingerprint: '0'.repeat(32) })
+  expect(mismatched.status).toBe(403); expect(mismatched.body.code).toBe('fingerprint_mismatch')
+  expect((await command('status')).pairingFailure.reason).toContain('指纹')
+  const pairRequest = await send('/rc/pair/request', { token, fingerprint: state.node.fingerprint })
+  expect(pairRequest.status).toBe(200)
+  const pending = (await command('status')).requests[0]
+  expect(pending).toMatchObject({ id: pairRequest.body.id, via: 'public', nodeConfirmed: true, name: '远程设备' })
+  // The computer confirms the same device name and the same fingerprint; anything else is refused.
+  const wrongName = await command('approve', { id: pairRequest.body.id, name: '另一台设备', fingerprint: state.node.fingerprint })
+  expect(wrongName.status).toBe(400)
+  expect((await command('status')).requests).toHaveLength(0)
+  expect((await command('status')).pairingFailure.reason).toContain('设备名')
+  const second = await send('/rc/pair/request', { token, fingerprint: state.node.fingerprint })
+  const wrongFingerprint = await command('approve', { id: second.body.id, name: '远程设备', fingerprint: 'f'.repeat(32) })
+  expect(wrongFingerprint.status).toBe(400)
+  expect((await command('status')).pairingFailure.reason).toContain('指纹')
+  const third = await send('/rc/pair/request', { token, fingerprint: state.node.fingerprint })
+  expect((await command('approve', { id: third.body.id, name: '远程设备', fingerprint: state.node.fingerprint })).status).toBe(200)
+  const claim = await send('/rc/pair/claim', { id: third.body.id, key: third.body.key })
+  expect(claim.status).toBe(200); expect(claim.cookie).toContain('dsh_rc='); expect(claim.cookie).toContain('; Secure')
   expect((await command('status')).devices).toHaveLength(1)
-  expect((await command('setPin', { pin: '123456' })).pairingPin).toBe('123456')
-  expect((await command('status')).devices).toHaveLength(0)
-  expect((await call(MANAGE_PATH, { action: 'status' }, { cookie: claim.cookie })).status).toBe(403)
-}))
-
-it('pairs a device directly with the password only when the switch is on', async () => withHost(async command => {
-  await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' })
-  const state = await command('start')
-  const call = (path: string, body: unknown, headers: Record<string, string> = {}) => new Promise<{ status: number; body: any; cookie: string }>((resolve, reject) => {
-    const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method: 'POST', headers: { host: 'dsh.example.com', origin: 'https://dsh.example.com', 'content-type': 'application/json', ...headers } }, res => {
-      let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text), cookie: res.headers['set-cookie']?.[0]?.split(';')[0] ?? '' }))
-    }); req.on('error', reject); req.end(JSON.stringify(body))
-  })
-  await command('setPin', { pin: '654321' })
-  expect((await call('/rc/pair/direct', { pin: '654321' })).status).toBe(403)
-  await command('preferences', { passwordPairing: true })
-  expect((await command('status')).passwordPairing).toBe(true)
-  expect((await call('/rc/pair/direct', { pin: '000000' })).status).toBe(401)
-  const direct = await call('/rc/pair/direct', { pin: '654321' })
-  expect(direct.status).toBe(200)
-  expect(direct.cookie).toContain('dsh_rc=')
-  expect((await command('status')).devices).toHaveLength(1)
-  // The directly paired device has full device access through the gateway, but the switch itself stays local-only.
-  expect((await call(MANAGE_PATH, { action: 'requests' }, { cookie: direct.cookie })).status).toBe(200)
-  expect((await call(MANAGE_PATH, { action: 'preferences', passwordPairing: false }, { cookie: direct.cookie })).status).toBe(400)
-  expect((await command('status')).passwordPairing).toBe(true)
-  // Workspace-file links from messages: served to paired devices, refused otherwise.
-  const get = (path: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: string; location: string }>((resolve, reject) => {
+  const cookie = claim.cookie.split(';')[0]!
+  // The boot script handed to the paired browser carries this host's LAN fallback, so an offline
+  // public connection can switch to the LAN entry without asking the user to rescan.
+  const opened = await send('/rc/boot.js', undefined, { cookie }, 'GET')
+  expect(opened.status).toBe(200); expect(opened.text).toContain('rc=lan'); expect(opened.text).toContain('lanFallback')
+  // Workspace-file links from messages: served to the paired device, refused to an unpaired one.
+  const raw = (path: string, headers: Record<string, string>) => new Promise<{ status: number; body: string; location: string }>((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method: 'GET', headers: { host: 'dsh.example.com', ...headers } }, res => {
       let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text, location: String(res.headers.location ?? '') }))
     }); req.on('error', reject); req.end()
@@ -162,14 +165,12 @@ it('pairs a device directly with the password only when the switch is on', async
   const preview = join(tmpdir(), `dsh-rc-preview-${Date.now()}.html`)
   writeFileSync(preview, '<p>preview-ok</p>')
   try {
-    expect((await get('/rc/workspace-file?p=' + encodeURIComponent(preview))).status).toBe(403)
-    const opened = await get('/rc/workspace-file?p=' + encodeURIComponent(preview), { cookie: direct.cookie })
-    expect(opened.status).toBe(303)
-    const served = await get(opened.location, { origin: 'null' })
-    expect(served.status).toBe(200)
-    expect(served.body).toContain('preview-ok')
-    expect(served.body).toContain('<p>preview-ok</p>')
-    expect((await get('/rc/workspace-file?p=' + encodeURIComponent('C:/data/../secrets.txt'), { cookie: direct.cookie })).status).toBe(400)
+    expect((await raw('/rc/workspace-file?p=' + encodeURIComponent(preview), {})).status).toBe(403)
+    const redirected = await raw('/rc/workspace-file?p=' + encodeURIComponent(preview), { cookie })
+    expect(redirected.status).toBe(303)
+    const served = await raw(redirected.location, { origin: 'null' })
+    expect(served.status).toBe(200); expect(served.body).toContain('preview-ok'); expect(served.body).toContain('<p>preview-ok</p>')
+    expect((await raw('/rc/workspace-file?p=' + encodeURIComponent('C:/data/../secrets.txt'), { cookie })).status).toBe(400)
   } finally { rmSync(preview, { force: true }) }
 }))
 
@@ -190,10 +191,19 @@ async function remoteClient(command: (action: string, fields?: Record<string, un
   const base = `http://127.0.0.1:${state.gatewayPort}`
   const post = (path: string, data: unknown, cookie = '') => fetch(base + path, { method: 'POST', headers: { origin: base, cookie, 'content-type': 'application/json' }, body: JSON.stringify(data) })
   const request = await (await post('/rc/pair/request', { token: new URL(state.links[0].url).hash.slice(6) })).json()
-  await command('approve', { id: request.id })
+  await approve(command, request.id)
   const claim = await post('/rc/pair/claim', { id: request.id, key: request.key })
   const cookie = claim.headers.get('set-cookie')!.split(';')[0]!
   return { state, base, post: (path: string, data: unknown) => post(path, data, cookie), manage: async (action: string, fields: Record<string, unknown> = {}) => { const response = await post(MANAGE_PATH, { action, ...fields }, cookie); return { status: response.status, ...await response.json() } } }
+}
+
+/** The computer-side confirmation: the same device name and the same fingerprint the page showed. */
+async function approve(command: (action: string, fields?: Record<string, unknown>) => Promise<any>, id: string) {
+  const state = await command('status')
+  const pending = state.requests.find((row: { id: string }) => row.id === id)
+  expect(pending).toBeDefined()
+  const approved = await command('approve', { id, name: pending.name, fingerprint: state.node.fingerprint })
+  expect(approved.status).toBe(200)
 }
 
 it('stores bounded boot diagnostics without credentials or client-controlled metadata', async () => withHost(async command => {
@@ -239,7 +249,7 @@ it('publishes a fixed HTTPS entry, secures pairing and reloads certificates only
         }); req.on('error', reject); req.end(data ? JSON.stringify(data) : undefined)
       })
       const pending = await call('/rc/pair/request', { token: new URL(state.links[0].url).hash.slice(6) })
-      await command('approve', { id: pending.body.id })
+      await approve(command, pending.body.id)
       const claim = await call('/rc/pair/claim', { id: pending.body.id, key: pending.body.key })
       expect(claim.cookie).toContain('; Secure')
       expect((await call(MANAGE_PATH, { action: 'reloadLanCertificate' }, claim.cookie.split(';')[0])).status).toBe(400)

@@ -5,13 +5,19 @@ const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
 interface Status {
   enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null
-  publicUrl?: string | null; publicPort: number; pairingPin?: string; pinFixed?: boolean; passwordPairing?: boolean
-  publicUrlCheck?: { at: number; reachable: boolean; status: number | null; error: string | null }
+  publicUrl?: string | null; publicPort: number
+  /** What the public pairing page shows and what the panel confirms: the same name and fingerprint. */
+  node: { name: string; kind: 'gateway' | 'service'; protocol: number; fingerprint: string; fingerprintGroups: string }
+  /** Why the last pairing attempt was rejected; the panel is the place that has to explain it. */
+  pairingFailure?: { at: number; name: string; reason: string }
+  /** Authorizations from a public entry recorded before the double-confirmation flow. */
+  repairRequired: number
+  publicUrlCheck?: { at: number; reachable: boolean; status: number | null; failure: 'unreachable' | 'identity' | 'tls' | null; error: string | null }
   certificate?: { domain?: string; expiresAt?: number; renewAt?: number; selfSigned: boolean; pending: boolean; restartRequired: boolean; error?: string }
   lanTls?: { origin?: string; expiresAt?: number; error?: string }
   phase: string; error?: string; gatewayPort: number; local: boolean; expiresAt?: number; qr?: string
-  links: Array<{ base: string; url?: string }>; requests: Array<{ id: string; name: string; expiresAt: number }>
-  devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public' }>; lanHint: string
+  links: Array<{ base: string; url?: string }>; requests: Array<{ id: string; name: string; via: 'lan' | 'public'; nodeConfirmed: boolean; expiresAt: number }>
+  devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public'; requiresRepair?: boolean }>; lanHint: string
 }
 interface ClientContext {
   effect(run: () => void | (() => void), label?: string): void
@@ -114,6 +120,7 @@ function DeviceRow({ device, disabled, act }: { device: Status['devices'][number
     block('div', 'dsrc-device-main', [
       name === null ? block('div', 'dsrc-device-name', [device.name,
         device.via ? h('span', { className: 'dsrc-tag', 'data-way': device.via }, wayName(device.via)) : null,
+        device.requiresRepair ? h('span', { className: 'dsrc-tag dsrc-pending' }, '需重新配对') : null,
         device.online ? h('span', { className: 'dsrc-tag dsrc-online' }, '在线') : null])
         : h('input', { className: 'dsrc-rename', 'aria-label': `重命名 ${device.name}`, autoFocus: true, maxLength: 40, value: name, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value), onBlur: () => finish(true), onKeyDown: (event: React.KeyboardEvent) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); finish(event.key === 'Enter') } } }),
       h('div', { className: 'dsrc-device-meta' }, `配对于 ${when(device.createdAt)} · 最近使用 ${when(device.lastSeenAt)}`)]),
@@ -130,7 +137,6 @@ export function RemoteControlPanel(): React.ReactElement {
   const [workingAction, setWorkingAction] = React.useState('')
   const [proxy, setProxy] = React.useState<string | null>(null)
   const [domain, setDomain] = React.useState<string | null>(null)
-  const [pin, setPin] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState('')
   const [copyFallback, setCopyFallback] = React.useState<string | null>(null)
   const [toast, setToast] = React.useState('')
@@ -171,8 +177,8 @@ export function RemoteControlPanel(): React.ReactElement {
       else if (action === 'stop') {
         setState(previous => previous ? { ...previous, enabled: false, activeMode: undefined, phase: 'off', links: [], requests: [], qr: undefined } : previous)
         setNotice('远程连接已关闭，设备授权保留。')
-      } else if (['preferences', 'setPin', 'rename'].includes(action)) {
-        setNotice(action === 'preferences' ? '设置已保存。' : action === 'setPin' ? '连接密码已更新，请重新配对设备。' : '设备名称已更新。')
+      } else if (['preferences', 'rename'].includes(action)) {
+        setNotice(action === 'preferences' ? '设置已保存。' : '设备名称已更新。')
         setTimeout(() => { void refresh() }, 200)
       } else if (['approve', 'reject', 'revoke', 'revokeAll'].includes(action)) setTimeout(() => { void refresh() }, 200)
       return true
@@ -205,8 +211,6 @@ export function RemoteControlPanel(): React.ReactElement {
     try { const url = new URL(domainDraft.trim()); domainInvalid = url.protocol !== 'https:' || url.pathname !== '/' || !!url.username || !!url.password || !!url.search || !!url.hash || !url.hostname.includes('.') }
     catch { domainInvalid = true }
   }
-  const pinDraft = pin ?? (state?.pinFixed ? state.pairingPin ?? '' : '')
-  const pinInvalid = !!pinDraft && !/^\d{6}$/.test(pinDraft)
   const certificate = state?.certificate
   const certificateExpired = !!certificate?.expiresAt && certificate.expiresAt <= Date.now()
   const certificateLabel = state && !state.local ? '仅本机可管理' : !publicUrl ? '配置域名后可管理' : !certificate ? '正在读取证书状态' : certificate.pending ? '正在申请或续期' : certificateExpired ? '证书已过期' : certificate.selfSigned ? 'frpc 自签证书' : certificate.expiresAt ? `有效至 ${new Date(certificate.expiresAt).toLocaleDateString('zh-CN')}` : '尚未申请'
@@ -293,8 +297,8 @@ export function RemoteControlPanel(): React.ReactElement {
       state.qr && !expired ? block('div', 'dsrc-code', [h('img', { src: state.qr, alt: `${wayName(shown)}远程控制配对二维码`, draggable: false })], { 'data-ready': true })
         : block('div', 'dsrc-code', [block('div', 'dsrc-placeholder', [expired ? '正在更新二维码…' : state.busy ? '连接就绪后显示二维码' : domainBlocked ? '配置域名并开启后显示二维码' : '开启连接后显示配对二维码'])]),
       state.qr && !expired ? h('button', { type: 'button', className: 'dsrc-button dsrc-ghost dsrc-code-refresh', disabled, onClick: refreshCode }, workingAction === 'refresh' ? '正在刷新…' : '刷新二维码') : null,
-      shown === 'public' && state.local && state.publicUrlCheck && !state.publicUrlCheck.reachable ? h('p', { className: 'dsrc-error', role: 'alert' }, '公网入口当前不可达，现在扫码打不开。请先启动电脑上的 SakuraFrp / frpc 服务。') : null,
-      block('div', 'dsrc-steps', ['手机相机扫码', shown === 'public' ? state.passwordPairing ? '输入密码直接进入' : '输入密码，本机确认' : '在本机确认配对', '继续会话与审批'].map((step, index) => block('span', 'dsrc-step', [h('span', { className: 'dsrc-number' }, String(index + 1)), h('span', null, step)], { key: step }))),
+      shown === 'public' && state.local && state.publicUrlCheck && !state.publicUrlCheck.reachable ? h('p', { className: 'dsrc-error', role: 'alert' }, state.publicUrlCheck.error ?? '公网节点不可达，请确认隧道客户端正在运行，或检查域名配置。') : null,
+      block('div', 'dsrc-steps', ['手机相机扫码', shown === 'public' ? state.node.kind === 'gateway' ? '核对指纹，本机确认' : '核对节点，本机确认' : '在本机确认配对', '继续会话与审批'].map((step, index) => block('span', 'dsrc-step', [h('span', { className: 'dsrc-number' }, String(index + 1)), h('span', null, step)], { key: step }))),
     ])
     const brief = block('div', 'dsrc-brief', [
       block('div', 'dsrc-connection-state', [
@@ -305,7 +309,8 @@ export function RemoteControlPanel(): React.ReactElement {
       shown === 'lan' && lanCertificate ? h(InlineNotice, { tone: lanCertificate.error || lanCertificateDue ? 'warn' : 'info' },
         lanCertificate.error || (lanCertificateDue ? '局域网证书即将到期，请在外部续期后，在本机连接设置中重载。' : '使用局域网 HTTPS。请将域名解析到电脑的局域网地址，并使用手机信任的证书。')) : null,
       state.error ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
-      shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, '公网入口当前不可达：请确认电脑上的 SakuraFrp / frpc 服务正在运行、隧道已启动，且域名仍指向本机。')]) : null,
+      state.pairingFailure ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, `配对被拒绝${state.pairingFailure.name ? `（${state.pairingFailure.name}）` : ''}：${state.pairingFailure.reason}`)]) : null,
+      shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, state.publicUrlCheck.error ?? '公网节点不可达，请确认隧道客户端正在运行，或检查域名配置。')]) : null,
       block('div', 'dsrc-connection-actions', [state.enabled ? h('button', { type: 'button', className: 'dsrc-button dsrc-stop', disabled, onClick: stopConnection }, workingAction === 'stop' ? '正在关闭…' : '关闭远程连接')
         : h('button', { type: 'button', className: 'dsrc-button dsrc-primary dsrc-start', disabled, onClick: start }, state.busy || workingAction === 'start' ? '正在开启…' : domainBlocked ? '先配置域名' : '开启远程连接')]),
       h('label', { className: 'dsrc-toggle' }, h('input', { type: 'checkbox', checked: state.autoStart, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { autoStart: event.target.checked }) } }), '随 DSH 自动开启'),
@@ -343,20 +348,6 @@ export function RemoteControlPanel(): React.ReactElement {
       h('p', { className: 'dsrc-note' }, '证书由外部签发和续期；更新文件后在本机重载。域名、证书路径和固定端口在插件配置中设置。'),
       h('p', { className: 'dsrc-note' }, state.lanHint),
     ], { 'aria-label': '局域网 HTTPS' }) : null
-    const pinField = state.local && publicUrl ? block('div', 'dsrc-pin', [
-      block('div', 'dsrc-pin-head', [h('span', { className: 'dsrc-field-label' }, '连接密码'), h('span', { className: 'dsrc-pin-kind' }, state.pinFixed ? '固定' : '随机')]),
-      pin === null ? block('div', 'dsrc-secret', [
-        h('code', null, state.pairingPin ?? '------'),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: disabled || !state.pairingPin, onClick: () => { if (state.pairingPin) void copy(state.pairingPin, '已复制连接密码') } }, '复制'),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled, onClick: () => setPin(state.pinFixed ? state.pairingPin ?? '' : '') }, state.pinFixed ? '修改' : '设为固定'),
-      ]) : block('div', 'dsrc-input', [
-        h('input', { 'aria-label': '固定连接密码', inputMode: 'numeric', maxLength: 6, placeholder: '6 位数字', value: pinDraft, 'aria-invalid': pinInvalid, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setPin(event.target.value.replace(/\D/g, '')) }),
-        h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: disabled || pinInvalid, onClick: () => { if (confirm('修改连接密码会断开所有已授权手机，需要重新配对。继续？')) void act('setPin', { pin: pinDraft }).then(saved => { if (saved) setPin(null) }) } }, '保存'),
-        h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setPin(null) }, '取消'),
-      ]),
-      h('p', { className: 'dsrc-note' }, pin === null ? '手机打开公网入口时需要输入它；修改密码会撤销授权。' : '留空恢复随机密码；保存将撤销授权。'),
-      pinInvalid ? h('p', { className: 'dsrc-error' }, '连接密码必须是 6 位数字。') : null,
-    ]) : publicUrl ? h('p', { className: 'dsrc-note' }, '连接密码仅能在本机面板查看和修改。') : null
     const publicSettings = block('section', 'dsrc-setting-group', [
       block('div', 'dsrc-setting-heading', [h('h3', null, '公网连接'), h('span', { className: 'dsrc-setting-kicker' }, '固定域名与证书')]),
       block('div', 'dsrc-field dsrc-domain-field', [
@@ -369,6 +360,11 @@ export function RemoteControlPanel(): React.ReactElement {
         h('p', { className: 'dsrc-note' }, !state.local ? '域名只能在连接到此电脑的本机面板修改。' : state.activeMode === 'public' ? '如需修改域名，请先关闭远程连接。' : `将 frpc 的 80 / 443 转发到本机端口 ${state.publicPort}。`),
       ]),
       block('div', 'dsrc-setting-row', [
+        h(StatusNote, { label: '本机身份', value: `${state.node.name} · ${state.node.kind === 'gateway' ? '隧道网关' : '自托管服务'}` }),
+        h(StatusNote, { label: '主机指纹', value: state.node.fingerprintGroups }),
+      ]),
+      h('p', { className: 'dsrc-note' }, '手机首次从公网配对时，页面先显示本机身份与主机指纹；在本机面板确认同一设备名与指纹后，才会下发设备授权。'),
+      block('div', 'dsrc-setting-row', [
         h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !publicUrl || domainDirty, onClick: () => { void act('checkPublicUrl') } }, workingAction === 'checkPublicUrl' ? '正在检测…' : state.publicUrlCheck ? '重新检测' : '检测连通性'),
         h(StatusNote, { label: '域名', value: state.publicUrlCheck ? state.publicUrlCheck.reachable ? `可访问${state.publicUrlCheck.status ? ` · HTTP ${state.publicUrlCheck.status}` : ''}` : `无法访问${state.publicUrlCheck.error ? ` · ${state.publicUrlCheck.error}` : ''}` : state.local ? '尚未检测' : '仅本机可检测', tone: state.publicUrlCheck ? state.publicUrlCheck.reachable ? 'ok' : 'danger' : 'neutral' }),
       ]),
@@ -380,13 +376,6 @@ export function RemoteControlPanel(): React.ReactElement {
         certificate?.restartRequired ? h('p', { className: 'dsrc-note' }, '证书已部署，请在 SakuraFrp 中重载对应隧道。') : null,
         certificate?.error ? h('p', { className: 'dsrc-error' }, '证书错误：' + certificate.error) : null,
       ]),
-      publicUrl ? h('label', { className: 'dsrc-check dsrc-direct' },
-        h('input', { type: 'checkbox', checked: state.passwordPairing === true, disabled: disabled || !state.local, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { passwordPairing: event.target.checked }) } }),
-        block('span', 'dsrc-check-copy', [
-          h('span', { className: 'dsrc-field-label' }, '密码直连配对'),
-          h('span', { className: 'dsrc-note' }, '开启后，新设备在浏览器输入连接密码即可直接配对进入，无需扫码和电脑确认。'),
-        ])) : null,
-      pinField,
     ], { 'aria-label': '公网连接' })
     const network = block('section', 'dsrc-setting-group', [
       block('div', 'dsrc-setting-heading', [h('h3', null, '电脑网络代理'), h('span', { className: 'dsrc-setting-kicker' }, proxyMode === 'system' ? '自动检测' : proxyMode === 'manual' ? '手动设置' : '不使用')]),
@@ -421,10 +410,13 @@ export function RemoteControlPanel(): React.ReactElement {
       h('h3', null, '待确认配对'),
       h('span', { className: 'dsrc-tag dsrc-pending' }, `${state.requests.length} 项`),
     ]),
-    h('p', { className: 'dsrc-note' }, '手机正在等待本机确认；仅允许本人设备。'),
+    h('p', { className: 'dsrc-note' }, '手机正在等待本机确认。请核对设备名与主机指纹；两项都一致再允许连接。'),
     ...state.requests.map(request => block('div', 'dsrc-device dsrc-row', [
-      block('div', 'dsrc-device-main', [block('div', 'dsrc-device-name', [request.name]), h('div', { className: 'dsrc-muted' }, '请求访问此电脑')]),
-      block('div', 'dsrc-actions', [button('拒绝', 'reject', { id: request.id }), button('允许连接', 'approve', { id: request.id }, 'dsrc-primary')]),
+      block('div', 'dsrc-device-main', [block('div', 'dsrc-device-name', [request.name,
+        h('span', { className: 'dsrc-tag', 'data-way': request.via }, wayName(request.via)),
+        request.via === 'public' ? h('span', { className: 'dsrc-tag' }, request.nodeConfirmed ? '手机已确认本机' : '手机未确认') : null]),
+        h('div', { className: 'dsrc-muted' }, request.via === 'public' ? `主机指纹 ${state.node.fingerprintGroups}` : '局域网配对请求')]),
+      block('div', 'dsrc-actions', [button('拒绝', 'reject', { id: request.id }), button('允许连接', 'approve', { id: request.id, name: request.name, fingerprint: state.node.fingerprint }, 'dsrc-primary')]),
     ], { key: request.id })),
   ], { 'data-section': 'requests' }) : null
   const devices = () => state ? block('section', 'dsrc-surface dsrc-devices', [
@@ -436,6 +428,7 @@ export function RemoteControlPanel(): React.ReactElement {
       state.devices.length ? h('button', { type: 'button', className: 'dsrc-button dsrc-danger', disabled, onClick: () => { if (confirm(`确定撤销全部 ${state.devices.length} 台设备的授权？所有已授权手机都需要重新配对。`)) void act('revokeAll') } }, '撤销全部') : null,
     ]),
     state.devices.length ? block('div', 'dsrc-device-list', state.devices.map(device => h(DeviceRow, { key: device.id, device, disabled, act }))) : h('p', { className: 'dsrc-empty' }, '暂无设备，扫码确认后会显示在这里。'),
+    state.repairRequired ? h(InlineNotice, { tone: 'warn' }, `有 ${state.repairRequired} 台设备是通过旧公网入口授权的，升级后已标记为需要重新配对；旧授权不再放行。`) : null,
     h('p', { className: 'dsrc-note' }, '不同连接方式分别记录授权；连续 30 天未使用的授权会过期。'),
   ], { 'data-section': 'devices' }) : null
   return block('div', 'dsrc', [
@@ -448,7 +441,7 @@ export function RemoteControlPanel(): React.ReactElement {
     toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
   ], { 'data-dsh-plugin': 'dsh-remote-connect' })
 }
-interface Waiting { enabled: boolean; requests: Array<{ id: string; name: string; expiresAt: number }> }
+interface Waiting { enabled: boolean; node: { name: string; fingerprint: string; fingerprintGroups: string }; requests: Array<{ id: string; name: string; via: 'lan' | 'public'; nodeConfirmed: boolean; expiresAt: number }> }
 
 /** Pairing requests pop up on the computer as they arrive, so they are not missed while the panel is closed. */
 function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => void }): React.ReactElement | null {
@@ -464,14 +457,17 @@ function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => vo
   const answer = async (action: 'approve' | 'reject') => {
     if (!request) return
     setWorking(true); setError('')
-    try { await command({ action, id: request.id }) } catch (failure) { setError(failure instanceof Error ? failure.message : '操作失败。') }
+    // Approving confirms the same device name and host fingerprint the pairing page displayed; the
+    // Host checks both again before the device cookie is issued.
+    try { await command(action === 'approve' ? { action, id: request.id, name: request.name, fingerprint: waiting.node.fingerprint } : { action, id: request.id }) } catch (failure) { setError(failure instanceof Error ? failure.message : '操作失败。') }
     finally { setWorking(false); onDone() }
   }
   return h('dialog', { className: 'dsrc-dialog dsrc-prompt', ref: dialog, 'aria-labelledby': 'dsrc-pairing-title', onCancel: (event: React.SyntheticEvent) => event.preventDefault() },
     request ? block('div', 'dsrc', [
       h('h2', { id: 'dsrc-pairing-title', tabIndex: -1, autoFocus: true }, '新的配对请求'),
       h('p', { className: 'dsrc-prompt-device' }, request.name),
-      h('p', { className: 'dsrc-note' }, '这台设备扫描了远程控制二维码。允许后，它与本机拥有相同的权限，可以管理设置、凭据和插件。不是你本人操作请拒绝。'),
+      h('p', { className: 'dsrc-note' }, `主机指纹 ${waiting.node.fingerprintGroups} · ${request.via === 'public' ? '公网入口' : '局域网'}${request.via === 'public' ? request.nodeConfirmed ? ' · 手机已确认本机' : ' · 手机尚未确认本机' : ''}`),
+      h('p', { className: 'dsrc-note' }, '这台设备扫描了远程控制二维码。请核对设备名与主机指纹；允许后，它与本机拥有相同的权限，可以管理设置、凭据和插件。不是你本人操作请拒绝。'),
       waiting.requests.length > 1 ? h('p', { className: 'dsrc-note' }, `还有 ${waiting.requests.length - 1} 个请求在等待。`) : null,
       error ? block('div', 'dsrc-error', [error], { role: 'alert' }) : null,
       block('div', 'dsrc-actions dsrc-prompt-actions', [
@@ -481,7 +477,7 @@ function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => vo
 }
 function SidebarEntry(): React.ReactElement {
   const [open, setOpen] = React.useState(false), dialog = React.useRef<HTMLDialogElement>(null)
-  const [waiting, setWaiting] = React.useState<Waiting>({ enabled: false, requests: [] })
+  const [waiting, setWaiting] = React.useState<Waiting>({ enabled: false, node: { name: '', fingerprint: '', fingerprintGroups: '' }, requests: [] })
   React.useEffect(() => { if (open) dialog.current?.showModal(); else dialog.current?.close() }, [open])
   React.useEffect(() => {
     const element = dialog.current, view = window.visualViewport

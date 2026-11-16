@@ -1,13 +1,26 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
 import { localFilePath } from './local-file.js'
 
-function remoteBoot(parseLocalFile: (href: string) => string | undefined): void {
+/** The same computer's LAN entry, injected only into a paired device's public page. */
+export interface LanFallback { hostId: string; fingerprint: string; url: string }
+export interface BootContext { fallback: LanFallback }
+
+function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null): void {
   const globals = window as unknown as Record<string, any>
   globals.__DSH_REMOTE_CONTROL__ = true
   // The Host owns the document language, theme colour and keyboard policy since 0.2.2: a phone
   // gets its mobile layout from the Host itself. Only the browser's translate offer is ours to
   // refuse, because the app's own copy is what the reader is looking at.
   document.documentElement.setAttribute('translate', 'no')
+  // A page reached through the same-host fallback says so once, then drops the marker from the address.
+  if (new URLSearchParams(location.search || '').get('rc') === 'lan') {
+    try {
+      const clean = new URL(location.href)
+      clean.searchParams.delete('rc')
+      window.history?.replaceState?.(null, '', clean.pathname + clean.search + clean.hash)
+    } catch { /* the notice still shows if the address cannot be rewritten */ }
+    notice('已切换到局域网')
+  }
   const transport = globals.__DSH_TRANSPORT__ ?? {}
   globals.__DSH_TRANSPORT__ = transport
   const originalFetch = window.fetch.bind(window)
@@ -206,8 +219,41 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
     retry.onclick = () => location.reload()
     bar.append(text, retry); (document.body ?? document.documentElement).append(bar)
   }
-  window.addEventListener('dsh-rc-offline', () => connectionBanner(true))
-  window.addEventListener('dsh-rc-online', () => connectionBanner(false))
+  /** A public entry that dies must not strand the phone on a dead page. */
+  const lanFallback = context?.fallback
+  let fallbackTried = false
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+  const rescan = (): void => disconnected('无法自动切换到局域网。请在电脑上打开远程控制面板，扫描新的二维码重新配对。')
+  /**
+   * Offered only when this same gateway answers that the LAN entry is the same Host, and the answer
+   * must carry the identity this page was given. Anything else asks for a fresh QR code instead of
+   * navigating to some other computer. The address itself is checked too, so a forged `url` is inert.
+   */
+  async function switchToLan(): Promise<void> {
+    if (!lanFallback || fallbackTried) return
+    fallbackTried = true
+    try {
+      const response = await originalFetch('/rc/fallback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      const data = await response.json().catch(() => null) as { sameHost?: unknown; url?: unknown; hostId?: unknown; fingerprint?: unknown } | null
+      const target = typeof data?.url === 'string' ? data.url : ''
+      let same = false
+      try {
+        const wanted = new URL(lanFallback.url), found = new URL(target)
+        same = data?.sameHost === true && data.hostId === lanFallback.hostId && data.fingerprint === lanFallback.fingerprint && found.origin === wanted.origin && found.protocol === wanted.protocol
+      } catch { same = false }
+      if (!same) { rescan(); return }
+      notice('已切换到局域网')
+      location.replace(new URL('/?rc=lan', target).href)
+    } catch { rescan() }
+  }
+  window.addEventListener('dsh-rc-offline', () => {
+    connectionBanner(true)
+    if (!lanFallback || fallbackTried) return
+    // One short grace period: a reconnect that succeeds clears this timer.
+    clearTimeout(fallbackTimer)
+    fallbackTimer = setTimeout(() => { void switchToLan() }, 1500)
+  })
+  window.addEventListener('dsh-rc-online', () => { connectionBanner(false); clearTimeout(fallbackTimer) })
 
   /** The gateway's own refusal. A 403 from the Host (a path it will not read, say) is an ordinary error. */
   async function unpaired(response: Response): Promise<boolean> {
@@ -301,8 +347,8 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined): void 
   globals.EventSource = RemoteEventSource
 }
 /** The Host reads this same string every request, so it stays one self-contained function. */
-export function bootScript(): string {
-  return `(${remoteBoot.toString()})(${localFilePath.toString()});`
+export function bootScript(context?: BootContext): string {
+  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)});`
 }
 /** The boot script is a same-origin file, not an inline script, so a Host CSP cannot block it. */
 export const BOOT_PATH = '/rc/boot.js'

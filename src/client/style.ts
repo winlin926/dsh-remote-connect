@@ -95,14 +95,6 @@ export const CSS = `
 .dsrc-steps{display:flex;flex-direction:column;align-items:flex-start;gap:7px;width:100%;margin-top:13px;padding-top:11px;border-top:1px dashed var(--rc-line)}
 .dsrc-step{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:11px;line-height:1.5;color:var(--rc-muted)}
 .dsrc-number{flex:none;width:17px;height:17px;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,var(--rc-teal) 10%,var(--rc-paper));color:var(--rc-teal);font-size:9px;font-weight:700}
-.dsrc-pin{display:block;min-width:0;padding:9px 11px;border:1px solid color-mix(in srgb,var(--rc-warm) 20%,var(--rc-line));border-radius:9px;background:var(--rc-warm-soft);margin-top:12px!important}
-.dsrc-pin-head{display:flex;align-items:center;gap:7px;min-width:0}
-.dsrc-pin-kind{padding:0 5px;border-radius:4px;background:color-mix(in srgb,var(--rc-warm) 11%,transparent);color:var(--rc-warm);font-size:10px;line-height:18px}
-.dsrc-secret{display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0;margin-top:4px}
-.dsrc-secret code{padding:1px 8px;border-radius:6px;background:color-mix(in srgb,var(--rc-warm) 8%,transparent);font:600 19px/28px ui-monospace,Consolas,monospace;letter-spacing:.12em;font-variant-numeric:tabular-nums}
-.dsrc-secret .dsrc-button{min-height:28px;padding:2px 6px;font-size:12px}
-.dsrc-pin .dsrc-note{margin-top:0!important;font-size:11px}
-.dsrc-pin .dsrc-input{margin-top:0}
 .dsrc-pair-link{display:flex;align-items:center;gap:8px;min-width:0;margin-top:12px;padding-top:10px;border-top:1px solid var(--rc-line)}
 .dsrc-link{min-width:0;flex:1;padding:5px 8px;border-radius:7px;background:var(--rc-fill);color:var(--rc-muted);font:11px/20px ui-monospace,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsrc-pair-link .dsrc-button{min-height:30px;padding:3px 9px;font-size:12px}
@@ -252,8 +244,7 @@ export const CSS = `
 .dsrc-muted,.dsrc-note,.dsrc-sub,.dsrc-summary-value,.dsrc-way-name,.dsrc-field-label,.dsrc-field>label,.dsrc-status-note,.dsrc-step,.dsrc-connection-state p,.dsrc-inline-notice,.dsrc-panel-message{font-size:14px}
 .dsrc-connection-state strong{font-size:16px}
 .dsrc-setting-kicker{font-size:12px}
-.dsrc-code-refresh,.dsrc-secret .dsrc-button,.dsrc-pair-link .dsrc-button,.dsrc-notice-action{min-height:44px;font-size:14px}
-.dsrc-secret code{font-size:22px;line-height:32px}
+.dsrc-code-refresh,.dsrc-pair-link .dsrc-button,.dsrc-notice-action{min-height:44px;font-size:14px}
 .dsrc-placeholder{font-size:14px}
 }
 @media(prefers-reduced-motion:reduce){.dsrc *{transition:none!important;animation:none!important;scroll-behavior:auto!important}}

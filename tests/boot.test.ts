@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { BOOT_PATH, bootScript, injectBoot } from '../src/boot.js'
+import { BOOT_PATH, bootScript, injectBoot, type BootContext } from '../src/boot.js'
 import { localFilePath } from '../src/local-file.js'
 
 const page = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DeepSeek Harness</title></head><body><div id="root"></div></body></html>'
@@ -86,17 +86,20 @@ class StandInElement {
     return null
   }
 }
-function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: Uint8Array) => array }, transport: Record<string, unknown> = {}) {
+function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: Uint8Array) => array }, transport: Record<string, unknown> = {}, session: { context?: BootContext; search?: string; href?: string } = {}) {
   StandInSocket.all = []
   const requests: Array<{ url: string; body?: string; method?: string }> = []
   const waiting: Array<(response: Response) => void> = []
   const timers: Array<{ delay: number; run: () => void; cancelled: boolean }> = []
   const listeners = new Map<string, Array<(event: unknown) => void>>()
+  const replacements: string[] = []
+  const historyReplacements: string[] = []
   const NativeEventSource = class { constructor(readonly url: string, readonly init?: EventSourceInit) {} }
   const window: Record<string, any> = {
     fetch: (input: unknown, init?: { body?: string; method?: string }) => { requests.push({ url: String(input), body: init?.body, method: init?.method }); return new Promise<Response>(resolve => waiting.push(resolve)) },
     addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, [...listeners.get(type) ?? [], listener]) },
     dispatchEvent: () => true, WebSocket: StandInSocket, EventSource: NativeEventSource, __DSH_TRANSPORT__: transport,
+    history: { replaceState: (_state: unknown, _title: string, url: string) => { historyReplacements.push(url) } },
   }
   const elements: StandInElement[] = []
   const createElement = (tag: string): StandInElement => {
@@ -109,8 +112,8 @@ function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: U
   let mutation: (() => void) | undefined
   const MutationObserver = class { constructor(listener: () => void) { mutation = listener } observe() {} disconnect() { mutation = undefined } }
   let reloads = 0
-  const location = { href: 'https://rc.example/app?token=page-secret#credential', origin: 'https://rc.example', protocol: 'https:', assign: () => {}, reload: () => { reloads++ } }
-  new Function('window', 'document', 'location', 'crypto', 'setTimeout', 'clearTimeout', 'MutationObserver', 'navigator', 'innerWidth', 'innerHeight', 'devicePixelRatio', bootScript())(
+  const location = { href: session.href ?? 'https://rc.example/app?token=page-secret#credential', search: session.search ?? '?token=page-secret', origin: 'https://rc.example', protocol: 'https:', assign: () => {}, reload: () => { reloads++ }, replace: (href: string) => { replacements.push(href) } }
+  new Function('window', 'document', 'location', 'crypto', 'setTimeout', 'clearTimeout', 'MutationObserver', 'navigator', 'innerWidth', 'innerHeight', 'devicePixelRatio', bootScript(session.context))(
     window, document, location, crypto,
     (run: () => void, delay: number) => { timers.push({ delay, run, cancelled: false }); return timers.length },
     (id: number) => { if (timers[id - 1]) timers[id - 1]!.cancelled = true },
@@ -125,7 +128,7 @@ function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: U
   }
   return {
     window, NativeEventSource, requests, timers, sockets: StandInSocket.all, document, root, createElement, mountBoot,
-    mutate: () => { mutation?.() }, reloads: () => reloads,
+    mutate: () => { mutation?.() }, reloads: () => reloads, replacements, historyReplacements,
     fire: (type: string, event: unknown) => { for (const listener of listeners.get(type) ?? []) listener(event) },
     report: () => { timers.filter(timer => !timer.cancelled).at(-1)!.run(); return JSON.parse(requests.at(-1)!.body!) },
     answer: () => waiting.shift()?.(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
@@ -306,4 +309,78 @@ it('shows a revoked device as a modal dialog that starts on its only action', as
   } finally {
     delete globals.getComputedStyle; delete globals.matchMedia
   }
+})
+
+const HOST_ID = '5QKQY_VIKcY52sBuej3ozcSh4gUAwAYe0YENr18qsfA'
+const FINGERPRINT = 'e5029063f54829c639dac06e7a3de8cd'
+const LAN_URL = 'http://192.168.1.9:59395'
+const context = (): BootContext => ({ fallback: { hostId: HOST_ID, fingerprint: FINGERPRINT, url: LAN_URL } })
+const settle = async () => { await new Promise(resolve => setTimeout(resolve, 0)); await new Promise(resolve => setImmediate(resolve)) }
+const dialog = (elements: StandInElement[]) => elements.find(node => node.id === 'dsh-rc-disconnected')
+const toast = (elements: StandInElement[]) => elements.find(node => node.id === 'dsh-rc-notice')
+function withTheme(): () => void {
+  const globals = globalThis as Record<string, any>
+  globals.getComputedStyle = () => ({ colorScheme: 'light' })
+  globals.matchMedia = () => ({ matches: false })
+  return () => { delete globals.getComputedStyle; delete globals.matchMedia }
+}
+
+it('says it already switched to the LAN entry when the LAN page boots', () => {
+  const f = bootPage(undefined, {}, { search: '?rc=lan', href: 'https://rc.example/?rc=lan' })
+  expect(f.historyReplacements).toEqual(['/'])
+  expect(toast(f.elements)!.textContent).toBe('已切换到局域网')
+})
+
+it('switches a paired browser to the same Host LAN entry when the public connection dies', async () => {
+  const f = bootPage(undefined, {}, { context: context() })
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  const timer = f.timers.at(-1)!
+  expect(timer.delay).toBe(1500)
+  timer.run()
+  const request = f.requests.at(-1)!
+  expect(request).toMatchObject({ url: '/rc/fallback', method: 'POST' })
+  f.answerWith(200, JSON.stringify({ sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT }))
+  await settle()
+  expect(f.replacements).toEqual([`${LAN_URL}/?rc=lan`])
+  expect(toast(f.elements)!.textContent).toBe('已切换到局域网')
+  expect(dialog(f.elements)).toBeUndefined()
+})
+
+it('cancels the fallback when the connection comes back first', async () => {
+  const f = bootPage(undefined, {}, { context: context() })
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  const timer = f.timers.at(-1)!
+  f.fire('dsh-rc-online', new Event('dsh-rc-online'))
+  expect(timer.cancelled).toBe(true)
+  await settle()
+  expect(f.requests).toHaveLength(0)
+  expect(f.replacements).toEqual([])
+})
+
+it('never follows a LAN entry that reports another Host, another fingerprint or another address', async () => {
+  const restore = withTheme()
+  try {
+    for (const answer of [
+      { sameHost: true, url: LAN_URL, hostId: 'A'.repeat(43), fingerprint: FINGERPRINT },
+      { sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: '0'.repeat(32) },
+      { sameHost: true, url: 'http://10.0.0.7:59395', hostId: HOST_ID, fingerprint: FINGERPRINT },
+      { sameHost: false, reason: 'identity', url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT },
+    ]) {
+      const f = bootPage(undefined, {}, { context: context() })
+      f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+      f.timers.at(-1)!.run()
+      f.answerWith(200, JSON.stringify(answer))
+      await settle()
+      expect(f.replacements).toEqual([])
+      expect(dialog(f.elements)!.textContent).toContain('扫描新的二维码')
+    }
+  } finally { restore() }
+})
+
+it('does not try a fallback when this page holds no same-host LAN entry', async () => {
+  const f = bootPage()
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  await settle()
+  expect(f.requests).toHaveLength(0)
+  expect(f.replacements).toEqual([])
 })

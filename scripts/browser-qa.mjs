@@ -225,17 +225,15 @@ if (typeof taskSpace !== 'function') {
     results.push('composition Enter ignored; ordinary Enter saves')
     await manage('preferences', { publicUrl: 'https://smoke.example.com' })
     if (!await desktop.evaluate(() => document.querySelector('.dsrc-preferences')?.open)) await desktop.click('.dsrc-preferences > summary', { label: '展开连接设置' })
-    await desktop.waitForSelector('.dsrc-pin .dsrc-secret button', { state: 'visible' })
+    await desktop.waitForSelector('.dsrc-domain-field input', { state: 'visible' })
+    assert.equal(await desktop.evaluate(() => [...document.querySelectorAll('.dsrc-status-label')].some(node => node.textContent.includes('主机指纹'))), true, 'panel shows the host fingerprint')
     await desktop.evaluate(() => {
       if (navigator.clipboard) Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { throw new Error('clipboard denied') } })
       document.execCommand = () => false
     })
-    await desktop.click('.dsrc-pin .dsrc-secret button:text-is("复制")', { label: '验证密码复制失败反馈' })
-    const expectedPin = (await manage('status')).pairingPin
-    assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-copy-fallback')?.value), expectedPin)
     await desktop.click('.dsrc-pair-link button', { label: '验证链接复制失败反馈' })
     assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-copy-fallback')?.value), started.links[0].url)
-    results.push('copy fallback preserves requested password or link')
+    results.push('copy fallback preserves the requested pairing link')
     await desktop.evaluate(() => {
       const transport = window.__DSH_TRANSPORT__ ??= {}, original = transport.fetch ?? window.fetch
       const state = window.__qaPoll = { held: false, released: false, resume: null, restore: () => { transport.fetch = original } }

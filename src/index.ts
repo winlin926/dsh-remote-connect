@@ -17,7 +17,7 @@ import { body, isLoopback, json, sameOrigin } from './http.js'
 import { bootScript } from './boot.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 import { readLanTls, type LanTlsConfig, type LanTlsMaterial } from './lan-tls.js'
-import { loadHostIdentity } from './host-identity.js'
+import { loadHostIdentity, fingerprintGroupsOf } from './host-identity.js'
 import { PUBLIC_NODE_PROTOCOL, type PublicNodeDiscovery } from './public-node.js'
 
 /** Advertised by discovery; read from the installed package so it always matches the running build. */
@@ -46,8 +46,6 @@ interface Preferences {
   autoStart: boolean; mode: Mode; proxy?: string; proxyMode: ProxyMode
   /** The port last used, tried again so the address a phone knows keeps working after a restart. */
   port?: number
-  /** Password-direct pairing: a new device that enters the fixed public password is paired at once. Off by default. */
-  passwordPairing?: boolean
 }
 /** Adapters that are rarely the network a phone is on: virtual switches, VPN / proxy tunnels. */
 const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|vmware|virtualbox|vbox|docker|loopback|tailscale|zerotier|tap|tun|vpn|clash|meta|wintun|utun|bluetooth/i
@@ -131,7 +129,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       const stored = JSON.parse(readFileSync(prefsFile, 'utf8')) as Partial<Preferences>
       preferences = { autoStart: stored.autoStart === true, mode: stored.mode === 'public' ? 'public' : 'lan', proxy: typeof stored.proxy === 'string' ? stored.proxy : undefined,
         // An address typed before proxy modes existed is still an explicit manual choice.
-        proxyMode: isProxyMode(stored.proxyMode) ? stored.proxyMode : stored.proxy ? 'manual' : 'off', port: Number.isInteger(stored.port) && stored.port! > 0 && stored.port! < 65536 ? stored.port : undefined, passwordPairing: stored.passwordPairing === true }
+        proxyMode: isProxyMode(stored.proxyMode) ? stored.proxyMode : stored.proxy ? 'manual' : 'off', port: Number.isInteger(stored.port) && stored.port! > 0 && stored.port! < 65536 ? stored.port : undefined }
     } catch {
       // A damaged preferences file must not keep the plugin from loading; device authorizations live elsewhere.
       error = '远程控制的偏好设置文件已损坏，已恢复默认设置（设备授权不受影响）。'
@@ -197,14 +195,22 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       if (fresh || !detected || Date.now() - detected.at > 15_000) detected = { at: Date.now(), value: await detectSystemProxy().catch(() => null) }
       return detected.value
     }
-    access = new PublicAccess({ certificateDir: config.certificateDir || process.env.DSH_RC_CERTIFICATE_DIR || FRPC_CERTIFICATE_DIR, storage, legacyStorage: join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-roam'), proxy: async () => {
+    access = new PublicAccess({ certificateDir: config.certificateDir || process.env.DSH_RC_CERTIFICATE_DIR || FRPC_CERTIFICATE_DIR, storage, legacyStorage: join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-roam'), identity: { hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }, proxy: async () => {
       if (preferences.proxyMode === 'manual') return preferences.proxy
       if (preferences.proxyMode === 'system') return (await systemProxy(true))?.url
       return undefined
     }, beforeIssue: async () => {
       if (!enabled || activeMode !== 'public' || gateway?.port !== PUBLIC_PORT) throw new Error('请先开启固定公网连接，再申请证书。')
     }, log: message => ready.logger?.warn?.(message) })
+    // An explicit, idempotent migration: authorizations issued through a public entry before the
+    // double-confirmation flow stay readable in the panel, but are marked `requiresRepair` so an
+    // upgrade cannot keep letting that cookie in. LAN authorizations are untouched.
+    const migrateDevices = (): void => {
+      try { pairing.migratePublicDevices(access?.domain ? [access.domain] : []) }
+      catch (failure) { error = failure instanceof Error ? failure.message : '旧公网设备授权迁移失败。' }
+    }
     await access.migrate()
+    migrateDevices()
     access.certificates.startAutoRenew()
     // The QR library is loaded with the first code drawn, and a code is only redrawn when its link changes.
     let drawn: { url: string; image: string } | undefined
@@ -215,18 +221,24 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     const status = async (local: boolean) => {
       const links = baseURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
       const active = new Set(gateway?.onlineIds() ?? [])
+      const devices = pairing.list()
       return {
         enabled, busy, mode: preferences.mode, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
         systemProxy: preferences.proxyMode === 'system' && preferences.mode === 'public' ? await systemProxy() : undefined,
-        publicUrl: access?.domain, publicPort: PUBLIC_PORT, pairingPin: access?.password(local), pinFixed: access?.fixedPin, passwordPairing: preferences.passwordPairing === true,
+        publicUrl: access?.domain, publicPort: PUBLIC_PORT,
+        // The public pairing page and the panel show the same identity; the browser and the
+        // computer each confirm it before a device cookie is issued.
+        node: { name: discovery.name, kind: discovery.kind, protocol: discovery.protocol, fingerprint: discovery.fingerprint, fingerprintGroups: fingerprintGroupsOf(discovery.fingerprint) },
+        pairingFailure: local ? pairing.failure() : undefined,
+        repairRequired: devices.filter(device => device.requiresRepair).length,
         publicUrlCheck: local ? access?.lastCheck : undefined, certificate: local && access?.domain ? await access.certificateStatus() : undefined,
         lanTls: config.lanTls ? { origin: lanTls?.origin, expiresAt: lanTls?.expiresAt, error: lanTlsError } : undefined,
         phase: enabled ? 'ready' : error ? 'error' : 'off', error, gatewayPort: gateway?.port ?? 0, local,
         expiresAt: qr?.expiresAt, links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
-        devices: pairing.list().map(({ host, ...device }) => ({
-          ...device, via: host === undefined ? undefined : access?.domain && host.toLowerCase() === new URL(access.domain).host.toLowerCase() ? 'public' : 'lan', online: active.has(device.id)
+        devices: devices.map(({ host, via: pairedVia, ...device }) => ({
+          ...device, via: pairedVia ?? (host && access?.domain && host.toLowerCase() === new URL(access.domain).host.toLowerCase() ? 'public' : 'lan'), online: active.has(device.id)
         })),
         lanHint: config.lanTls ? '手机需在同一局域网，并将 HTTPS 域名解析到电脑的局域网地址。证书需由手机信任；插件不修改 DNS、防火墙或证书信任。' : '手机需与电脑处于同一局域网。若连接被防火墙阻断，请手动允许网关端口；插件不会修改防火墙。',
       }
@@ -269,8 +281,24 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         stopped = true
         await stopping; if (disposed || ticket !== generation) return
         credential = hostCookie(ready.connection, upstreamPort)
-        const create = () => new Gateway({ pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex, boot: () => bootScript(), discovery, lanTls: tls, addresses: mode === 'lan' ? lanAddresses : undefined, public: mode === 'public' ? () => access : undefined, directPairing: () => preferences.passwordPairing === true, websocketCompression: config.websocketCompression !== false, onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } } })
-        const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
+        const create = () => new Gateway({
+          pairing, upstreamPort, upstreamCookie: () => credential, manage, index: renderIndex,
+          boot: context => bootScript(context), discovery, lanTls: tls,
+          // Both modes listen on the LAN: a public phone can fall back to the same port, and those
+          // addresses are exactly what the gateway's Host validation admits.
+          addresses: lanAddresses,
+          public: mode === 'public' ? () => access : undefined,
+          // This same computer's LAN entry, handed only to an authorized public page through the
+          // injected boot context; the fallback target never comes from the phone.
+          lanFallback: () => {
+            if (!enabled || activeMode !== 'public' || !gateway) return undefined
+            const address = lanAddresses()[0]
+            return address ? `http://${address}:${gateway.port}` : undefined
+          },
+          websocketCompression: config.websocketCompression !== false,
+          onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } },
+        })
+        const host = '0.0.0.0'
         next = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.
         const wanted = mode === 'public' ? PUBLIC_PORT : config.gatewayPort || preferences.port || 0
@@ -299,7 +327,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       switch (input.action) {
         case 'status': return status(local)
         // What the always-mounted sidebar entry polls: no QR code is rendered for it.
-        case 'requests': return { enabled, requests: local ? pairing.requests() : [] }
+        // The popup confirms the same identity the pairing page showed: this node's name and fingerprint.
+        case 'requests': return { enabled, node: { name: discovery.name, fingerprint: discovery.fingerprint, fingerprintGroups: fingerprintGroupsOf(discovery.fingerprint) }, requests: local ? pairing.requests() : [] }
         case 'start': if (!enabled) await start(); return status(local)
         case 'reloadLanCertificate': {
           if (!local) throw new Error('局域网证书只能在本机面板重载。')
@@ -331,7 +360,23 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           if (pairing.outstanding()) throw new Error('还有配对请求在等待确认，请先处理后再刷新二维码。')
           qr = pairing.issue(); return status(local)
         }
-        case 'approve': if (!local) throw new Error('首次配对必须在本机确认。'); pairing.approve(String(input.id)); return status(local)
+        case 'approve': {
+          if (!local) throw new Error('首次配对必须在本机确认。')
+          const id = String(input.id)
+          const pending = pairing.requests().find(request => request.id === id)
+          if (!pending) throw new Error('配对请求已失效，请重新扫码。')
+          const reject = (reason: string): never => {
+            pairing.reject(id)
+            pairing.reportFailure(pending.name, reason)
+            throw new Error(reason)
+          }
+          // The computer confirms the same device name and the same fingerprint the pairing page
+          // showed; a mismatch cancels the request and leaves the reason on the panel.
+          if (String(input.name ?? '') !== pending.name) reject('设备名与配对页不一致，本次配对已拒绝。')
+          if (String(input.fingerprint ?? '') !== discovery.fingerprint) reject('主机指纹与配对页不一致，本次配对已拒绝。')
+          pairing.approve(id)
+          return status(local)
+        }
         case 'reject': if (!local) throw new Error('配对请求由本机处理。'); pairing.reject(String(input.id)); return status(local)
         case 'revoke': {
           const id = String(input.id)
@@ -347,11 +392,6 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           const next = { ...preferences }
           if (typeof input.autoStart === 'boolean') next.autoStart = input.autoStart
           if (input.mode !== undefined) { if (input.mode !== 'public' && input.mode !== 'lan') throw new Error('连接模式不正确。'); next.mode = input.mode }
-          if (input.passwordPairing !== undefined) {
-            if (!local) throw new Error('密码直连配对开关只能在本机面板修改。')
-            if (typeof input.passwordPairing !== 'boolean') throw new Error('密码直连配对选项不正确。')
-            next.passwordPairing = input.passwordPairing
-          }
           if (input.proxyMode !== undefined) { if (!isProxyMode(input.proxyMode)) throw new Error('代理方式不正确。'); next.proxyMode = input.proxyMode }
           if (input.publicUrl !== undefined) {
             if (!local) throw new Error('公网域名只能在本机面板修改。')
@@ -374,12 +414,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
             throw failure
           }
           if (previous.proxy !== next.proxy || previous.proxyMode !== next.proxyMode) await access?.resetOutbound()
-          return status(local)
-        }
-        case 'setPin': {
-          if (!local) throw new Error('连接密码只能在本机面板修改。')
-          if (typeof input.pin !== 'string') throw new Error('请提供连接密码。')
-          if (await access?.setPin(input.pin)) { gateway?.revokeEntries(); pairing.revokeAll(); qr = enabled ? pairing.issue() : undefined }
+          if (input.publicUrl !== undefined) migrateDevices()
           return status(local)
         }
         case 'checkPublicUrl': {

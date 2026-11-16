@@ -31,16 +31,15 @@ function get(port: number, headers: Record<string, string>): Promise<{ status: n
   })
 }
 
-it.each(['qr', 'password'])('makes room for %s pairing without dropping an online device', mode => {
+it('makes room for QR pairing without dropping an online device', () => {
   let now = 1_000_000
   const online = new Set<string>(), revoked: string[] = []
   const service = new PairingService({ file: join(folder(), 'devices.json'), now: () => now, onRevoke: id => revoked.push(id), isOnline: id => online.has(id) })
-  const connect = () => mode === 'qr' ? pair(service) : service.pairDirectly('Android')
   const ids: string[] = []
-  for (let i = 0; i < MAX_DEVICES; i++) { now += 1000; ids.push(connect().split('.')[0]!) }
+  for (let i = 0; i < MAX_DEVICES; i++) { now += 1000; ids.push(pair(service).split('.')[0]!) }
   online.add(ids[0]!)
   now += 1000
-  const added = connect().split('.')[0]!
+  const added = pair(service).split('.')[0]!
   const kept = service.list().map(device => device.id)
   expect(kept).toHaveLength(MAX_DEVICES)
   expect(kept).toContain(ids[0])
@@ -48,7 +47,7 @@ it.each(['qr', 'password'])('makes room for %s pairing without dropping an onlin
   expect(kept).not.toContain(ids[1])
   expect(revoked).toEqual([ids[1]])
   for (const id of kept) online.add(id)
-  expect(() => connect()).toThrow(/在线/)
+  expect(() => pair(service)).toThrow(/在线/)
 })
 
 it.each(['replace', 'expire', 'revokeAll'])('keeps previous authorization when saving %s fails', action => {
@@ -56,10 +55,10 @@ it.each(['replace', 'expire', 'revokeAll'])('keeps previous authorization when s
   let file = original, now = 1_000_000
   const revoked: string[] = []
   const service = new PairingService({ get file() { return file }, now: () => now, onRevoke: id => revoked.push(id) })
-  const credentials = Array.from({ length: MAX_DEVICES }, () => service.pairDirectly('Android'))
+  const credentials = Array.from({ length: MAX_DEVICES }, () => pair(service))
   writeFileSync(blocked, 'not a directory')
   file = join(blocked, 'devices.json')
-  if (action === 'replace') expect(() => service.pairDirectly('iPhone')).toThrow()
+  if (action === 'replace') expect(() => pair(service)).toThrow()
   else if (action === 'expire') { now += IDLE_MS + 1; expect(() => service.list()).toThrow() }
   else expect(() => service.revokeAll()).toThrow()
   file = original; now = 1_000_000
@@ -131,7 +130,8 @@ it('loads with default preferences when the file is damaged, and refuses forward
 })
 
 it('paints every page with the one built-in accent colour', () => {
-  for (const html of [pairingPage(), pairingPage('password'), deniedPage()]) {
+  const node = { name: 'DeepSeek Harness', kind: 'gateway' as const, fingerprint: 'e5029063f54829c639dac06e7a3de8cd', fingerprintGroups: 'E502-9063-F548-29C6-39DA-C06E-7A3D-E8CD', protocol: 1 }
+  for (const html of [pairingPage(), pairingPage(node), deniedPage(), deniedPage('设备名与配对页不一致，本次配对已拒绝。')]) {
     expect(html).toContain('--rc-accent:#D97757')
     expect(html).not.toContain('data-rc-accent')
   }

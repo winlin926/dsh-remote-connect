@@ -114,17 +114,17 @@ dsh plugin --profile web add @winlin926/dsh-remote-connect@latest
 1. 将域名的访问请求转发至插件的公网网关 `127.0.0.1:43128`；自定义端口时以面板为准。
 2. 在 **任意网络 → 连接设置** 中填写域名，例如 `https://dsh.example.com`。
 3. 确保转发服务运行且 HTTPS 证书有效，开启远程连接并点击 **检测连通性**。
-4. 检测通过后用手机扫码，输入电脑显示的 6 位连接密码，再在电脑上确认配对。
+4. 检测通过后用手机扫码。公网首次配对时，手机页面先显示节点名称、类型、协议版本与主机指纹，点“确认是本机”后在电脑面板核对同一设备名与指纹并允许；两次确认都完成才授权。
 
 SakuraFrp 只是转发方式之一，已有 frpc、Nginx、Caddy 或其他反向代理时，可继续使用。插件不购买域名、不创建临时 Cloudflare/Pinggy 隧道，也不代为启动转发服务。
 
 需要插件申请证书时，HTTP 80 的 ACME 校验请求也必须转发至网关。使用 SakuraFrp 时，插件按其 `FrpcWorkingDirectory` 约定部署证书，面板提示后需手动重载隧道；其他反向代理也可自行管理证书。
 
-检测会核对当前电脑的实例身份。出现“公网入口不可达”时，检查域名解析、转发目标、转发服务和证书，避免把入口转到另一台电脑。
+检测会请求公网入口的节点发现文档 `/.well-known/dsh-remote`，核对节点类型、协议版本、主机身份与指纹。出现“公网节点不可达，请确认隧道客户端正在运行，或检查域名配置。”时，检查域名解析、转发目标、转发服务和证书；入口指向另一台电脑时会单独提示指纹不一致，避免连错主机。
 
 ## 升级
 
-更新当前插件、重载宿主中的插件后，刷新手机页面即可。包名、内部插件标识、设备凭据格式与存储位置保持兼容；访问入口不变时已有设备不需要重新配对。
+更新当前插件、重载宿主中的插件后，刷新手机页面即可。包名、内部插件标识、设备凭据格式与存储位置保持兼容；访问入口不变时，局域网授权不需要重新配对。通过旧版公网入口授权的设备会在升级时被显式标记为需要重新配对（设备名保留在列表中），旧公网 cookie 不再放行。
 
 日常宿主使用固定发布版本或经过验收的 `.tgz`，开发 profile 才使用 `link:`。本地 `.tgz` 应保存在持久发行目录，不能指向会清理的测试目录。本地目录 `file:` 仍可能跟随开发文件变化，不作为冻结产物。更新来源时保留其他插件、配置和授权；安装后重载宿主，并核对实际入口文件哈希。
 
@@ -154,7 +154,7 @@ SakuraFrp 只是转发方式之一，已有 frpc、Nginx、Caddy 或其他反向
 
 ## 授权与安全
 
-已授权手机拥有与电脑本机相近的操作权限，包括管理设置、凭据和插件。只批准自己的设备，不公开配对链接与连接密码，不再使用时撤销授权。局域网入口只在可信网络使用；公网入口使用 HTTPS。
+已授权手机拥有与电脑本机相近的操作权限，包括管理设置、凭据和插件。只批准自己的设备，不公开配对链接，不在不可信的网络上批准配对。公网首次配对必须同时确认节点身份与主机指纹；不再使用时撤销授权。局域网入口只在可信网络使用；公网入口使用 HTTPS。
 
 ## 开发与验证
 
@@ -174,6 +174,6 @@ SDK 升级或跨模块修改运行完整回归，局部修复选择受影响的�
 
 ## 致谢与许可证
 
-感谢原项目 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 及作者 Copy。固定域名、密码和证书设计还参考了 [dsh-remote-web-ui](https://github.com/zhu1090093659/dsh-web/tree/main/packages/dsh-remote-web-ui)、[DSH Remote](https://github.com/mrRisega/dsh-remote/tree/main/packages/dsh-remote) 与 [dsh-roam](https://github.com/winlin926/dsh-roam)。
+感谢原项目 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 及作者 Copy。固定域名和证书设计还参考了 [dsh-remote-web-ui](https://github.com/zhu1090093659/dsh-web/tree/main/packages/dsh-remote-web-ui)、[DSH Remote](https://github.com/mrRisega/dsh-remote/tree/main/packages/dsh-remote) 与 [dsh-roam](https://github.com/winlin926/dsh-roam)。
 
 MIT，保留原项目版权声明，见 [LICENSE](LICENSE)。

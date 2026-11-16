@@ -50,7 +50,9 @@ async function tlsFixture() {
   gateway = new Gateway({ pairing, upstreamPort: (upstream.address() as { port: number }).port, upstreamCookie: () => 'host-private=secret', manage: async () => ({}), index: async () => '<head><meta name="viewport" content="width=device-width"></head><body><div id="root"></div></body>', boot: bootScript, lanTls: material, addresses: () => ['192.168.1.23'] })
   cleanup.push(() => gateway.close())
   await gateway.listen('127.0.0.1', port)
-  const credential = pairing.pairDirectly('Test device'), cookie = `dsh_rc=${credential}`, authority = new URL(material.origin).host
+  const ticket = pairing.issue(), claim = pairing.request(ticket.token, 'Test device')
+  pairing.approve(claim.id)
+  const credential = pairing.claim(claim.id, claim.key).credential!, cookie = `dsh_rc=${credential}`, authority = new URL(material.origin).host
   const call = (path: string, headers: Record<string, string> = {}, body?: unknown) => new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', servername: 'lan.example.test', port, ca, agent: false, path, method: body === undefined ? 'GET' : 'POST', headers: { host: authority, ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) } }, res => {
       let text = ''; res.setEncoding('utf8'); res.on('data', chunk => { text += chunk }); res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text })); res.on('error', reject)
@@ -75,14 +77,13 @@ it('serves LAN HTTPS only at the canonical Host with a Secure device cookie', as
   for (const origin of [`http://${f.authority}`, 'https://lan.example.test:1', 'https://evil.example']) expect((await f.call('/api/asset', { cookie: f.cookie, origin })).status).toBe(403)
   expect((await f.call('/api/asset')).status).toBe(403)
   expect((await f.call('/pair')).body).toContain('在电脑上确认')
-  expect((await f.call('/rc/pair/direct', { origin: f.material.origin }, { pin: '123456' })).status).toBe(403)
   await expect(new Promise((resolve, reject) => {
     const req = httpRequest({ hostname: '127.0.0.1', port: f.port, path: '/pair', headers: { host: f.authority } }, res => { res.resume(); resolve(res.statusCode) })
     req.on('error', reject); req.end()
   })).rejects.toMatchObject({ code: 'ECONNRESET' })
 })
 
-it('issues a Secure cookie after QR approval without enabling the public password gate', async () => {
+it('issues a Secure cookie after QR approval on the LAN entry', async () => {
   const f = await tlsFixture(), token = f.pairing.issue().token, headers = { origin: f.material.origin }
   const requested = await f.call('/rc/pair/request', headers, { token })
   expect(requested.status).toBe(200)
