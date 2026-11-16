@@ -297,7 +297,7 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 - 手机配对页展示：节点名称、节点类型（隧道网关/自托管服务）、**目标主机指纹**（8 组 4 位大写十六进制，来自二维码里的 `key`，本地计算，不经节点转发）、「确认是本机」按钮。
 - 电脑确认页展示：请求设备名、**本机主机指纹**（8 组 4 位大写）、「批准」/「拒绝」。
 - 授权条件：手机确认 + 电脑批准 + 指纹一致，三者缺一不可；任一端拒绝、票据过期、重放（同一票据二次 claim）都不得产生设备授权。
-- 二维码参数保持现状：`https://<origin>/#v=1&ticket=<43 位>&key=<host SPKI DER base64url>`；`v` 是页面票据格式版本，与节点协议版本无关，本轮不升。
+- 二维码参数保持现状：`https://<origin>/#v=1&ticket=<43 位>&key=<host SPKI DER base64url>`；`v` 是页面票据格式版本，与节点协议版本无关。
 - 通过 v2 网关配对与通过 v2 服务节点配对使用同一套双端确认；旧版节点仍按 v1 配对流程处理。
 
 ## 8. 主机身份（`host-identity.json`）
@@ -327,7 +327,6 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 
 ## 9. Host 注册（服务节点）
 
-- 删除 `HOST_REGISTRATION_TOKEN`：`remote-server` 的配置项、`x-host-registration-token` 头校验、`.env.example` 条目、部署文档与相关测试全部移除。
 - `POST /v1/hosts` 默认开放，保留现有注册限流（同源/同 IP 的频率与并发上限）与输入校验（`identityKey` 必须是合法 SPKI DER）。
 - 注册本身不授予任何访问权：注册只产生该主机自己的凭据；设备会话、关系、配对票据都按 `host_id` 隔离；任何 Host 凭据都不能读写其它 Host 的资源或隧道。
 - 同一 `identityKey` 重复注册的现有语义（409 `HOST_ALREADY_REGISTERED` / `IDENTITY_IN_USE`）保持不变。
@@ -350,7 +349,7 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 
 - 浏览器按 origin 隔离响应；固定域名网关透传宿主资源 URL 与缓存头，`/rc/boot.js` 使用内容 ETag 重新验证。
 - 服务节点接收 Host 上传的资源，数据库与 `/assets/:hostId/:revision/*` 路径同时按主机、revision 和资源路径隔离；HTML 不缓存，普通资源可用 immutable 与 ETag。
-- 普通手机 HTTP/SSE/WebSocket 请求通过 Host 反向隧道转发；不得把模拟缓存键辅助函数的单元测试当作真实缓存命中证据。
+- 普通手机 HTTP/SSE/WebSocket 请求通过 Host 反向隧道转发。
 - 不引入 Service Worker，不预下载另一份前端，不改宿主模块加载器的重试、去重与回退职责。
 
 ## 12. 面板与文案

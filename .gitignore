@@ -6,6 +6,9 @@ test-results/
 package-manifest.json
 .mnemon/
 .agents/
+agentworkrecords/
+AGENTS.md
+CLAUDE.md
 lib/
 coverage/
 .env

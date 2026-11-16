@@ -84,13 +84,13 @@ dsh plugin --profile web add @winlin926/dsh-remote-connect@latest
     gatewayPort: 59395
     lanTls:
       hostname: dsh.example.com
-      certFile: F:/Certificates/dsh.example.com.crt
-      keyFile: F:/Certificates/dsh.example.com.key
+      certFile: C:/Certificates/dsh.example.com.crt
+      keyFile: C:/Certificates/dsh.example.com.key
 ```
 
 在路由器中将该域名解析到电脑的局域网地址，并固定电脑地址；公网 DNS 可以保留原记录。证书必须覆盖这个域名并被手机信任。重载插件后，选择“同一 Wi-Fi”，面板和二维码会使用 `https://dsh.example.com:59395`。不能将 HTTP 地址直接改成 HTTPS，也不应忽略浏览器证书警告。
 
-路由器不能设置局域网 DNS 时，可以使用你能管理的子域名（例如 `dsh-lan.sanlin.xin`），将其 A 记录指向电脑的局域网地址，并为这个名称签发受手机信任的证书。现有 `dsh2.sanlin.xin` 证书不覆盖新的子域名，不能直接复用。此子域名用于家中 Wi-Fi；移动网络继续使用单独配置的公网入口。
+路由器不能设置局域网 DNS 时，可以使用你能管理的子域名，将其 A 记录指向电脑的局域网地址，并为这个名称签发受手机信任的证书。局域网与移动网络可以分别使用不同入口。
 
 启动会验证证书日期、域名和私钥；证书错误或固定端口被占用时明确失败，不自动退回 HTTP。证书到期前 30 天提示更新；外部完成续期并替换文件后，在本机“连接设置 → 局域网 HTTPS”点击“重载证书”。重载失败不会替换当前有效证书。局域网证书不由插件自动签发或续期。
 
@@ -139,11 +139,7 @@ dsh plugin --profile web add @winlin926/dsh-remote-connect@latest
 
 更新当前插件、重载宿主中的插件后，刷新手机页面即可。包名、内部插件标识、设备凭据格式与存储位置保持兼容；访问入口不变时，局域网授权不需要重新配对。通过旧版公网入口授权的设备会在升级时被显式标记为需要重新配对（设备名保留在列表中），旧公网 cookie 不再放行。
 
-日常宿主使用固定发布版本或经过验收的 `.tgz`，开发 profile 才使用 `link:`。本地 `.tgz` 应保存在持久发行目录，不能指向会清理的测试目录。本地目录 `file:` 仍可能跟随开发文件变化，不作为冻结产物。更新来源时保留其他插件、配置和授权；安装后重载宿主，并核对实际入口文件哈希。
-
 旧版的自定义手机界面和 `mobileShim` 配置已退出使用。`/?ui=custom`、`/?ui=native` 链接会转到宿主界面，旧界面偏好会被忽略。
-
-如果曾用另一个依赖键名将源码 `link:` 到 profile，需将依赖键改为包自身的 `@winlin926/dsh-remote-connect`；DSH 0.2.2 按包自身名称加载插件。
 
 ### 从 dsh-roam 迁移
 
@@ -171,21 +167,19 @@ dsh plugin --profile web add @winlin926/dsh-remote-connect@latest
 
 ## 开发与验证
 
-版本策略、提交范围和标签发布流程见 [发布约定](docs/releasing.md)，本次变化见 [0.6.0 发行说明](docs/release-notes.md)，检查范围见 [验证说明](docs/verification.md)。
+自托管部署见[服务节点指南](docs/self-host.md)，节点通信格式见[节点协议](docs/public-node.md)，开发检查项见[测试指南](docs/verification.md)，版本发布规则见[发布指南](docs/releasing.md)。
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm qa:host
-# 另一终端；需要 PATH 中的 ego-browser.exe
-pnpm qa:browser
+npm ci --prefix remote-server
+npm --prefix remote-server run typecheck
+npm --prefix remote-server test
 ```
 
-浏览器验收前运行 `ego-browser skill` 阅读当前指南。隔离宿主和浏览器只使用本轮 `.qa/smoke/` 数据，不配置真实模型、不向模型发送请求；结束时回收本轮进程、认证地址、日志和截图。
-
-SDK 升级或跨模块修改运行完整回归，局部修复选择受影响的测试。测试通过仅表示对应场景通过，浏览器窄屏模拟不等于手机真机验收；公网真实签发与手机网络切换需在对应环境验证。
+SDK 升级或跨模块修改运行完整回归，局部修复选择受影响的测试。测试通过不代表真实手机、公网节点或证书签发已验证。
 
 ## 致谢与许可证
 
