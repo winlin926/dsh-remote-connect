@@ -20,7 +20,7 @@ import { bootScript } from './boot.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 import { readLanTls, type LanTlsConfig, type LanTlsMaterial } from './lan-tls.js'
 import { loadHostIdentity, fingerprintGroupsOf } from './host-identity.js'
-import { PUBLIC_NODE_PROTOCOL, detectPublicNode, type PublicNodeDiscovery } from './public-node.js'
+import { PUBLIC_NODE_PROTOCOL_V2, detectPublicNode, type PublicNodeDiscovery } from './public-node.js'
 
 /** Advertised by discovery; read from the installed package so it always matches the running build. */
 const NODE_VERSION = (() => {
@@ -51,6 +51,12 @@ interface Preferences {
 }
 /** Adapters that are rarely the network a phone is on: virtual switches, VPN / proxy tunnels. */
 const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|vmware|virtualbox|vbox|docker|loopback|tailscale|zerotier|tap|tun|vpn|clash|meta|wintun|utun|bluetooth/i
+/** A node that presents a new identity stays blocked until the user confirms it in the panel. */
+const IDENTITY_CHANGE_ERROR = '公网节点的身份已变化，请先在面板确认。'
+/** The same reason persisted on the record so it survives a panel reload. */
+const IDENTITY_CHANGE_CHECK = '节点身份已变化，需要重新确认。'
+/** A confirmed protocol-2 node may not silently fall back to the flat protocol-1 shape. */
+const DOWNGRADE_CHECK = '节点已降级为旧版协议，需要重新检测。'
 
 /** This computer's IPv4 addresses, the ones a phone on the same network can most likely reach first. */
 export function lanAddresses(interfaces = networkInterfaces()): string[] {
@@ -123,7 +129,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   // One identity per profile: the gateway advertises it now, and any future local service reuses the
   // same file, so the Host keeps one hostId across restarts and never shares a pairing/cache scope.
   const hostIdentity = await loadHostIdentity(join(storage, 'host-identity.json'))
-  const discovery: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL, kind: 'gateway', name: 'DeepSeek Harness', version: NODE_VERSION, capabilities: ['pairing', 'official-ui', 'cache'], hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }
+  // Protocol 2: one self-certifying node identity, plus the flat aliases protocol-1 clients still read.
+  // The aliases carry the same values; a protocol-2 reader drops them and compares only `node`.
+  const discovery: PublicNodeDiscovery = {
+    protocol: PUBLIC_NODE_PROTOCOL_V2, kind: 'gateway', name: 'DeepSeek Harness', version: NODE_VERSION,
+    capabilities: ['pairing', 'cache', 'official-ui'],
+    node: { id: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint, publicKey: hostIdentity.publicKey },
+    hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint,
+  }
   const prefsFile = join(storage, 'preferences.json')
   let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off' }
   let error: string | undefined
@@ -287,7 +300,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     }
     const reconcileServiceNode = async (): Promise<void> => {
       const record = currentNode()
-      const wanted = enabled && activeMode === 'public' && preferences.mode === 'public' && record?.kind === 'service' ? record.url : undefined
+      // A node whose identity changed is used for nothing until the user confirms it: the tunnel must
+      // not register this Host with a node that may be someone else now.
+      const wanted = enabled && activeMode === 'public' && preferences.mode === 'public' && record?.kind === 'service' && record.identityChange === null ? record.url : undefined
       if (serviceNode && serviceNode.status().origin !== wanted) {
         const previous = serviceNode
         serviceNode = undefined
@@ -309,11 +324,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     }
     const status = async (local: boolean) => {
       const record = currentNode()
-      const tunnel = serviceNode?.status()
+      // A node that started presenting another identity is unusable until the user confirms it: no
+      // link, no QR and no tunnel, even when a previous session left one running.
+      const identityBlocked = record !== undefined && record.identityChange !== null
+      const tunnel = identityBlocked ? undefined : serviceNode?.status()
       // An expired ticket is not a usable link: the panel shows its updating state until the next
       // connect or refresh issues one.
-      const serviceTicket = record?.kind === 'service' && serviceQr && serviceQr.expiresAt > Date.now() ? serviceQr : undefined
-      const links = record?.kind === 'service'
+      const serviceTicket = !identityBlocked && record?.kind === 'service' && serviceQr && serviceQr.expiresAt > Date.now() ? serviceQr : undefined
+      const links = identityBlocked ? [] : record?.kind === 'service'
         ? baseURLs().map(base => ({ base, url: serviceTicket?.url }))
         : baseURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
       const active = new Set(gateway?.onlineIds() ?? [])
@@ -338,9 +356,13 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           : null
       // The tunnel is the public entry for a service node: report connecting until it is up, but never
       // let its failure become the plugin's error — LAN fallback and device access stay independent.
-      const phase = enabled && activeMode === 'public' && record?.kind === 'service'
-        ? (tunnel?.connected ? 'ready' : 'connecting')
-        : enabled ? 'ready' : error ? 'error' : 'off'
+      // An unconfirmed identity change is the one condition that makes the whole public entry an error.
+      const phase = identityBlocked ? 'error'
+        : enabled && activeMode === 'public' && record?.kind === 'service'
+          ? (tunnel?.connected ? 'ready' : 'connecting')
+          : enabled ? 'ready' : error ? 'error' : 'off'
+      // The panel shows one failure string; the contract names it `lastError` while the panel reads `error`.
+      const lastError = identityBlocked ? IDENTITY_CHANGE_ERROR : error
       return {
         enabled, busy, mode: preferences.mode, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
@@ -348,15 +370,15 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         publicUrl: access?.domain, publicPort: PUBLIC_PORT,
         // The public pairing page and the panel show the same identity; the browser and the
         // computer each confirm it before a device cookie is issued.
-        node: { name: discovery.name, kind: discovery.kind, protocol: discovery.protocol, fingerprint: discovery.fingerprint, fingerprintGroups: fingerprintGroupsOf(discovery.fingerprint) },
+        node: { name: discovery.name, kind: discovery.kind, protocol: discovery.protocol, fingerprint: hostIdentity.fingerprint, fingerprintGroups: fingerprintGroupsOf(hostIdentity.fingerprint) },
         pairingFailure: local ? pairing.failure() : undefined,
         repairRequired: devices.filter(device => device.requiresRepair).length,
         publicUrlCheck: local ? access?.lastCheck : undefined, certificate: local && access?.domain ? await access.certificateStatus() : undefined,
         lanTls: config.lanTls ? { origin: lanTls?.origin, expiresAt: lanTls?.expiresAt, error: lanTlsError } : undefined,
         publicNodes: { current: publicNodes?.current ?? null, list: publicNodeList, pendingReview: publicNodeList.some(item => item.pending) },
         serviceNode: service,
-        phase, error, gatewayPort: gateway?.port ?? 0, local,
-        expiresAt: record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
+        phase, error: lastError, lastError, gatewayPort: gateway?.port ?? 0, local,
+        expiresAt: identityBlocked ? undefined : record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
         links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
         devices: devices.map(({ host, via: pairedVia, ...device }) => ({
@@ -389,6 +411,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       if (busy) throw new Error('连接操作正在进行，请稍后再试。')
       // A service node is reached through its own tunnel origin, so it needs no stored public domain.
       const serviceNodeMode = currentNode()?.kind === 'service'
+      // A node that started presenting another identity may not be connected through until confirmed.
+      if (preferences.mode === 'public' && currentNode()?.identityChange) throw new Error(IDENTITY_CHANGE_ERROR)
       if (preferences.mode === 'public' && !serviceNodeMode && !access?.domain) throw new Error('请先添加公网节点并设为当前，再开启“公网连接”。')
       busy = true; error = undefined
       let ticket = generation
@@ -461,7 +485,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         case 'status': return status(local)
         // What the always-mounted sidebar entry polls: no QR code is rendered for it.
         // The popup confirms the same identity the pairing page showed: this node's name and fingerprint.
-        case 'requests': return { enabled, node: { name: discovery.name, fingerprint: discovery.fingerprint, fingerprintGroups: fingerprintGroupsOf(discovery.fingerprint) }, requests: local ? pairing.requests() : [] }
+        case 'requests': return { enabled, node: { name: discovery.name, fingerprint: hostIdentity.fingerprint, fingerprintGroups: fingerprintGroupsOf(hostIdentity.fingerprint) }, requests: local ? pairing.requests() : [] }
         case 'start': if (!enabled) await start(); return status(local)
         case 'reloadLanCertificate': {
           if (!local) throw new Error('局域网证书只能在本机面板重载。')
@@ -489,6 +513,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         }
         case 'stop': if (local) await stop(); else { ++generation; setTimeout(() => { void stop() }, 75) }; return { stopped: true }
         case 'refresh': {
+          // An identity change outranks "not started": there is nothing to refresh until it is confirmed.
+          if (currentNode()?.identityChange) throw new Error(IDENTITY_CHANGE_ERROR)
           if (!enabled) throw new Error('请先开启远程连接。')
           if (currentNode()?.kind === 'service') {
             if (!serviceNode) throw new Error('当前没有连接自托管公网节点。')
@@ -512,7 +538,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           // The computer confirms the same device name and the same fingerprint the pairing page
           // showed; a mismatch cancels the request and leaves the reason on the panel.
           if (String(input.name ?? '') !== pending.name) reject('设备名与配对页不一致，本次配对已拒绝。')
-          if (String(input.fingerprint ?? '') !== discovery.fingerprint) reject('主机指纹与配对页不一致，本次配对已拒绝。')
+          if (String(input.fingerprint ?? '') !== hostIdentity.fingerprint) reject('主机指纹与配对页不一致，本次配对已拒绝。')
           pairing.approve(id)
           return status(local)
         }
@@ -575,13 +601,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           if (!url) throw new Error('请填写公网节点地址。')
           const detected = await detectPublicNode(url)
           if (!detected.ok) return { ok: false, message: detected.message }
-          // A service node may advertise a placeholder identity until this Host registers there, so only
-          // its structure is judged here; ServiceNode asserts the real hostId during registration.
+          // A protocol-2 service node may advertise a placeholder identity until this Host registers
+          // there, so this only records what the node published; ServiceNode asserts the real hostId
+          // during registration. The record is written only after a successful probe.
           if (store.list().some(record => record.url === detected.node.url)) return { ok: false, message: '该公网节点已存在。' }
           const record = store.add({
             url: detected.node.url, kind: detected.node.kind, name: detected.node.name, version: detected.node.version,
-            protocol: detected.node.protocol, capabilities: detected.node.capabilities, hostId: detected.node.hostId,
-            fingerprint: detected.node.fingerprint, pending: false,
+            protocol: detected.node.protocol, capabilities: detected.node.capabilities, node: detected.node.node,
+            hostId: detected.node.hostId, fingerprint: detected.node.fingerprint, pending: false,
           })
           if (serviceUnregisterNotice?.origin === record.url) serviceUnregisterNotice = undefined
           return { ok: true, node: record }
@@ -592,24 +619,90 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           const record = store.list().find(item => item.id === id)
           if (!record) throw new Error('公网节点不存在。')
           const detected = await detectPublicNode(record.url)
+          const checkedAt = Date.now()
           if (!detected.ok) {
-            store.update(id, { lastCheckAt: Date.now(), lastCheckOk: false, lastCheckError: detected.message })
+            store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: detected.message })
             return { ok: false, message: detected.message }
           }
+          const found = detected.node
+          // Rule 5: a confirmed protocol-2 node never falls back to the flat protocol-1 shape in silence.
+          if (found.protocol !== PUBLIC_NODE_PROTOCOL_V2) {
+            if (record.node !== null) {
+              store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: DOWNGRADE_CHECK })
+              return { ok: false, message: DOWNGRADE_CHECK }
+            }
+            return {
+              ok: true,
+              node: store.update(id, {
+                url: found.url, kind: found.kind, name: found.name, version: found.version, protocol: 1, capabilities: found.capabilities,
+                hostId: found.hostId, fingerprint: found.fingerprint, lastCheckAt: checkedAt, lastCheckOk: true, lastCheckError: null, pending: false,
+              }),
+            }
+          }
+          const identity = found.node
+          if (!identity) return { ok: false, message: '节点身份无效：协议 2 的发现文档缺少 node 身份对象。' }
+          // Already waiting for a user decision: never rotate the recorded identity on our own.
+          if (record.identityChange !== null) {
+            store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: IDENTITY_CHANGE_CHECK })
+            return { ok: false, message: IDENTITY_CHANGE_ERROR }
+          }
+          // Rule 3: a different identity is recorded beside the old one and blocks the node until confirmed.
+          if (record.node !== null && record.node.id !== identity.id) {
+            store.markIdentityChange(id, identity)
+            store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: IDENTITY_CHANGE_CHECK })
+            await reconcileServiceNode()
+            return { ok: false, message: IDENTITY_CHANGE_CHECK }
+          }
+          // Rule 2: no identity to compare with yet (migrated record or never-probed candidate) — adopt it.
+          if (record.node === null) store.adoptIdentity(id, identity)
           return {
             ok: true,
             node: store.update(id, {
-              url: detected.node.url, kind: detected.node.kind, name: detected.node.name, version: detected.node.version,
-              protocol: detected.node.protocol, capabilities: detected.node.capabilities, hostId: detected.node.hostId,
-              fingerprint: detected.node.fingerprint, lastCheckAt: Date.now(), lastCheckOk: true, lastCheckError: null, pending: false,
+              url: found.url, kind: found.kind, name: found.name, version: found.version, protocol: 2, capabilities: found.capabilities,
+              hostId: null, fingerprint: null, lastCheckAt: checkedAt, lastCheckOk: true, lastCheckError: null, pending: false,
             }),
           }
+        }
+        case 'confirmPublicNodeIdentity': {
+          if (!local) throw new Error('公网节点身份必须在本机面板确认。')
+          const store = nodeStore()
+          const id = String(input.id ?? '')
+          const confirmed = store.confirmIdentity(id)
+          // Re-probe once so the panel shows a fresh state. The confirmation already happened, so a
+          // failed probe only lands in the check fields and never undoes it.
+          const detected = await detectPublicNode(confirmed.url)
+          const checkedAt = Date.now()
+          if (!detected.ok) {
+            return { ok: true, node: store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: detected.message }) }
+          }
+          const found = detected.node
+          if (found.protocol !== PUBLIC_NODE_PROTOCOL_V2) {
+            return { ok: true, node: store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: DOWNGRADE_CHECK }) }
+          }
+          const identity = found.node
+          if (!identity) return { ok: true, node: confirmed }
+          // The node changed again between confirmation and the probe: record the new change instead of
+          // pretending the confirmed identity still matches.
+          if (confirmed.node !== null && identity.id !== confirmed.node.id) {
+            store.markIdentityChange(id, identity)
+            await reconcileServiceNode()
+            return { ok: true, node: store.update(id, { lastCheckAt: checkedAt, lastCheckOk: false, lastCheckError: IDENTITY_CHANGE_CHECK }) }
+          }
+          const node = store.update(id, {
+            url: found.url, kind: found.kind, name: found.name, version: found.version, protocol: 2, capabilities: found.capabilities,
+            hostId: null, fingerprint: null, lastCheckAt: checkedAt, lastCheckOk: true, lastCheckError: null, pending: false,
+          })
+          await reconcileServiceNode()
+          return { ok: true, node }
         }
         case 'setCurrentPublicNode': {
           const store = nodeStore()
           const id = String(input.id ?? '')
           const record = store.list().find(item => item.id === id)
           if (!record) throw new Error('公网节点不存在。')
+          // An unconfirmed identity change means the node the user chose may not be the node at that
+          // address any more; it cannot become the current node.
+          if (record.identityChange !== null) throw new Error(IDENTITY_CHANGE_ERROR)
           if (enabled && preferences.mode === 'public' && busy) throw new Error('请等待当前连接操作完成。')
           // A gateway node's public entry still rides on the saved domain; a service node's entry is the
           // tunnel itself and leaves PublicAccess alone.
