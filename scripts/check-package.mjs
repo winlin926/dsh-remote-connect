@@ -7,17 +7,18 @@ import { isDeepStrictEqual } from 'node:util'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const expected = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const server = JSON.parse(readFileSync(join(root, 'remote-server', 'package.json'), 'utf8'))
+if (server.version !== expected.version) throw new Error('Plugin and service-node versions must match')
 const entries = ['lib/index.js', 'lib/client.js']
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
 function checkFiles(paths) {
-  for (const path of [...entries, 'lib/types/index.d.ts', 'cordis.patch.yml', 'README.md']) {
+  for (const path of [...entries, 'lib/types/index.d.ts', 'cordis.patch.yml', 'README.md', 'LICENSE', 'package.json']) {
     if (!paths.has(path)) throw new Error(`Missing package file: ${path}`)
   }
   for (const path of paths) {
     if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part => part === '..' || part === '.')) throw new Error(`Invalid package path: ${path}`)
-    if (/^(\.qa|scripts|tests|docs|node_modules)\//.test(path) || /\.npmrc$/.test(path)) throw new Error(`Private or development file packaged: ${path}`)
-    if (/^lib\/(remote|style)/.test(path)) throw new Error(`Retired remote UI asset packaged: ${path}`)
+    if (!['package.json', 'README.md', 'LICENSE', 'cordis.patch.yml'].includes(path) && !/^lib\/[^/]+\.js$/.test(path) && !/^lib\/types\/.+\.d\.ts$/.test(path)) throw new Error(`Unexpected package file: ${path}`)
     if (path.startsWith('lib/types/') && path.endsWith('.d.ts') && !existsSync(join(root, path.replace('lib/types/', 'src/').replace(/\.d\.ts$/, '.ts')))) throw new Error(`Declaration without source: ${path}`)
   }
   if (Object.keys(expected.dependencies).includes('dsh-web-frontend')) throw new Error('The package must not ship its own copy of the DSH frontend')

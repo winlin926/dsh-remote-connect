@@ -43,15 +43,6 @@ export function hashToken(token: string): string {
   return sha256Hex(token)
 }
 
-/** Constant-time comparison of two hex digests. */
-export function constantTimeHexEqual(left: string, right: string): boolean {
-  if (left.length !== right.length || left.length === 0) return false
-  const a = Buffer.from(left, 'hex')
-  const b = Buffer.from(right, 'hex')
-  if (a.byteLength !== b.byteLength || a.byteLength === 0) return false
-  return timingSafeEqual(a, b)
-}
-
 /** Constant-time comparison of two opaque strings by their SHA-256 digests. */
 export function constantTimeStringEqual(left: string, right: string): boolean {
   return timingSafeEqual(sha256(left), sha256(right))
@@ -100,10 +91,8 @@ export function deriveHostIdentity(identityKey: string): HostIdentity {
 }
 
 /**
- * Eight-digit comparison code shown by both ends during pairing. This mirrors
- * the Host/browser implementation exactly (same transcript and truncation) so
- * all three parties display the same number. It is display-only, never a
- * credential, and is never persisted.
+ * Retained on the v1 wire for existing peers; current pairing confirms the Host
+ * fingerprint instead. The code is neither a credential nor persisted.
  */
 export function pairingVerificationCode(ticket: string, hostIdentityKey: string, clientIdentityKey: string): string {
   const transcript = new TextEncoder().encode(

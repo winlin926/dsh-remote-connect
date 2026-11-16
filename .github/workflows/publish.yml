@@ -1,10 +1,9 @@
-name: Publish npm
+name: Release
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
   id-token: write
 concurrency:
   group: npm-publish
@@ -23,12 +22,16 @@ jobs:
           version: 10.28.0
       - run: npm install --global npm@^11
       - run: pnpm install --frozen-lockfile --ignore-scripts
-      - run: pnpm test && pnpm build
+      - run: npm ci --prefix remote-server --ignore-scripts --no-audit --no-fund
+      - run: pnpm typecheck && npm --prefix remote-server run typecheck
+      - run: pnpm test && npm --prefix remote-server test && pnpm build
       - name: Validate tag and package
         run: |
           node --input-type=module -e "import p from './package.json' with {type:'json'}; if(process.env.GITHUB_REF_TYPE==='tag' && process.env.GITHUB_REF_NAME!=='v'+p.version) throw Error('Tag must match package version')"
-          npm pack --dry-run --ignore-scripts --json > package-manifest.json
+          npm pack --ignore-scripts --json > package-manifest.json
           node scripts/check-package.mjs package-manifest.json
+          TARBALL=$(node -p 'require("./package-manifest.json")[0].filename')
+          node scripts/check-package.mjs "$PWD/$TARBALL"
       - name: Publish with npm Trusted Publisher
         run: |
           PACKAGE=$(node -p 'require("./package.json").name')
@@ -36,5 +39,12 @@ jobs:
           if npm view "$PACKAGE@$VERSION" version --prefer-online >/dev/null 2>&1; then
             echo "$PACKAGE@$VERSION already published; skipping."
           else
-            npm publish --access public --provenance
+            TARBALL=$(node -p 'require("./package-manifest.json")[0].filename')
+            npm publish "$TARBALL" --access public --provenance
           fi
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TARBALL=$(node -p 'require("./package-manifest.json")[0].filename')
+          gh release create "$GITHUB_REF_NAME" "$TARBALL" --verify-tag --title "$GITHUB_REF_NAME" --notes-file docs/release-notes.md

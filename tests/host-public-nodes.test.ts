@@ -55,7 +55,7 @@ const NODE_A = nodeIdentity()
 const NODE_B = nodeIdentity()
 
 interface DiscoveryOptions { kind?: 'gateway' | 'service'; name?: string; version?: string; identity?: PublicNodeIdentity }
-/** The protocol-2 document a node serves: the node identity plus the flat aliases ≤0.6.1 clients read. */
+/** The protocol-2 document a node serves: the node identity plus the flat aliases ≤0.5.0 clients read. */
 function discovery(options: DiscoveryOptions = {}): Response {
   const node = options.identity ?? NODE_A
   return Response.json({

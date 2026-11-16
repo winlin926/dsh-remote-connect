@@ -20,7 +20,13 @@ jobs:
         with:
           version: 10.28.0
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: npm ci --prefix remote-server --ignore-scripts --no-audit --no-fund
+      - run: pnpm typecheck
+      - run: npm --prefix remote-server run typecheck
       - run: pnpm test
+      - run: npm --prefix remote-server test
       - run: pnpm build
       - run: npm pack --dry-run --ignore-scripts --json > package-manifest.json
       - run: node scripts/check-package.mjs package-manifest.json
+      - if: runner.os == 'Linux'
+        run: docker build -f remote-server/Dockerfile -t dsh-remote-server:ci .

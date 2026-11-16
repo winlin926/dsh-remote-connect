@@ -232,11 +232,6 @@ export class PublicNodeConfig {
     }
   }
   private commit(state: PublicNodesFile): void { this.save(state); this.state = state }
-  private record(id: string): PublicNodeRecord {
-    const record = this.state.nodes.find(node => node.id === id)
-    if (!record) throw new Error('公网节点不存在。')
-    return record
-  }
   get current(): string | null { return this.state.current }
   list(): PublicNodeRecord[] {
     return this.state.nodes.map(node => ({

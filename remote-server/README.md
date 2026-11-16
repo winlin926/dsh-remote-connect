@@ -2,7 +2,7 @@
 
 自托管的公网节点：把电脑上的 DeepSeek Harness（Host）与手机浏览器（Client）配对，并在两端之间转发隧道帧与官方界面流量。服务端只做节点身份、关系、路由、限流与静态资源缓存，**不持有 Host/手机的私钥**。
 
-**信任边界**：HTTPS/WSS 只保护「手机到节点」「主机到节点」两段传输。节点终止 TLS 并代理 HTTP/SSE/WebSocket，**节点运营者可能看到转发的请求与内容**；本服务不提供端到端加密。隧道帧按透明转发处理（不解析、不落盘、不打日志），但不要把它当作对运营者的内容保护。
+**信任边界**：HTTPS/WSS 只保护「手机到节点」「主机到节点」两段传输。节点终止 TLS 并代理 HTTP/SSE/WebSocket，**节点运营者可能看到转发的请求与内容**；本服务不提供端到端加密。节点解析隧道帧头并转发负载，不持久化业务正文，但不要把它当作对运营者的内容保护。
 
 - 运行时：Node.js 24（`node:sqlite` 内置 SQLite，无需原生模块）
 - 语言：TypeScript，`tsc` 编译，`module: NodeNext`
@@ -14,7 +14,7 @@
 `GET /.well-known/dsh-remote`（`application/json; charset=utf-8`、`cache-control: no-store`、不返回 3xx）：
 
 ```json
-{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.2","capabilities":["pairing","cache","official-ui"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
+{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.0","capabilities":["pairing","cache","official-ui"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
 ```
 
 - `kind` 固定 `"service"`；`protocol` 为数字 `2`，客户端必须拒绝其他值。
@@ -22,7 +22,7 @@
 - `node.id` = base64url(sha256(节点公钥的 SPKI DER))，43 字符；`node.fingerprint` = 同一 sha256 前 16 字节的小写十六进制（32 字符）；`node.publicKey` = base64url(SPKI DER)。客户端必须自行解码并复核摘要，不得信任节点返回的 `id`/`fingerprint`。
 - **服务节点不返回扁平的 `hostId`/`fingerprint`**：一个服务节点可以承载多台 Host，扁平字段属于 `kind: "gateway"` 的旧式网关，不应出现在 service 文档里。
 - `name`、`version` 可由 `NODE_NAME`、`NODE_VERSION` 覆盖。
-- 节点身份持久化在 `DATA_DIR/node-identity.json`：`{version:1,algorithm:"ed25519",publicKey,createdAt}`，权限 0600、临时文件 + rename 原子写；私钥只在进程内存中，不落盘、不出现在任何接口与日志里。文件损坏时启动直接失败并报「节点身份文件已损坏」，**不会静默重建**（重建会改变指纹，等于让所有已信任该节点的客户端失效）。
+- 节点身份持久化在 `DATA_DIR/node-identity.json`：`{version:1,algorithm:"ed25519",publicKey,createdAt}`，权限 0600、临时文件 + rename 原子写；生成时的私钥不保留，不出现在文件、接口与日志里。文件损坏时启动直接失败并报「节点身份文件已损坏」，**不会静默重建**（重建会改变指纹，等于让所有已信任该节点的客户端失效）。
 - 节点身份与 Host 无关：启动即有身份（不存在"第一个 Host 注册前的占位值"），多台 Host 注册、注销、注销后重注册都不改变 `node.id`/`node.fingerprint`；重启读取同一 `node-identity.json`，值保持不变。丢失该文件会得到新指纹，需重新分发节点地址/记录。
 
 `GET /v1/config` 返回同一份公开身份：`{protocol:2,kind:"service",name,version,capabilities,node:{id,fingerprint,publicKey}}`，`no-store`。
@@ -34,7 +34,7 @@
 ```
 浏览器 ──HTTPS/WSS──▶ Caddy（TLS 终止，可选）──HTTP/WSS──▶ remote-server ──▶ SQLite（单实例）
 Host ───HTTPS/WSS──▶                                              │
-                                                                  ├─ 透明转发隧道帧（不解析、不落盘、不打日志）
+                                                                  ├─ 解析帧头并转发负载（业务正文不落盘）
                                                                   └─ 节点身份：<DATA_DIR>/node-identity.json（0600）
 ```
 
@@ -62,7 +62,7 @@ Host ───HTTPS/WSS──▶                                              �
 | `device_sessions` | `credential_hash` | 设备 cookie（只存哈希）：`device_id`、`bound_origin`（cookie 与 origin 绑定）、`created_at`、`last_seen_at`、`expires_at` |
 | `assets` | `(host_id, revision, path)` | Host 推送的静态资源：`content_type`、`etag`、`size`、`content`（BLOB）、`created_at` |
 
-所有凭证/票据只以 `sha256(hex)` 形式落库；私钥、cookie 明文、密文正文从不入库。节点身份私钥单独保存在 `<DATA_DIR>/node-identity.json`（`0600`，原子写），不写入 SQLite。
+所有凭证/票据只以 `sha256(hex)` 形式落库；私钥、cookie 明文、密文正文从不入库。节点身份公钥单独保存在 `<DATA_DIR>/node-identity.json`（`0600`，原子写）；生成时的私钥不保留。
 
 ### HTTP 接口
 
@@ -149,7 +149,6 @@ remote-server/
   compose.yaml    server + caddy
   Caddyfile       自动 HTTPS 反代（含 Upgrade）
   .env.example    全部环境变量占位示例
-  docs/           仓库级部署与安全说明（docs/self-host.md）
 ```
 
 部署步骤见仓库 `docs/self-host.md`。

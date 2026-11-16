@@ -30,10 +30,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const serverDir = path.join(root, 'remote-server')
-const distCandidates = [
-  path.join(serverDir, 'dist', 'remote-server', 'src', 'main.js'),
-  path.join(serverDir, 'dist', 'main.js'),
-]
+const mainPath = path.join(serverDir, 'dist', 'remote-server', 'src', 'main.js')
 const WELL_KNOWN = '/.well-known/dsh-remote'
 const logs = []
 const checks = []
@@ -190,7 +187,7 @@ async function verifyDiscovery(baseUrl, dataDir) {
     const advertised = new Set(['pairing', 'cache', 'official-ui'])
     for (const item of body.capabilities) {
       assert(typeof item === 'string' && allowed.has(item), `capabilities 含未知能力 ${JSON.stringify(item)}。`)
-      assert(advertised.has(item), `0.6.2 节点不得宣告 ${JSON.stringify(item)}（仅为将来版本保留）。`)
+      assert(advertised.has(item), `0.6.0 节点不得宣告 ${JSON.stringify(item)}（仅为将来版本保留）。`)
     }
     assert(body.capabilities.includes('pairing'), 'capabilities 缺少必需的 pairing。')
     return body.capabilities
@@ -283,7 +280,7 @@ async function verifyHttp(baseUrl) {
         deviceId: randomUUID(),
         name: 'verify-node-v2',
         identityKey,
-        clientVersion: '0.6.2',
+        clientVersion: '0.6.0',
       }),
     })
     const text = await response.text()
@@ -297,13 +294,12 @@ async function verifyHttp(baseUrl) {
 
 async function main() {
   const startedAt = Date.now()
-  const mainPath = distCandidates.find((candidate) => existsSync(candidate))
-  if (!mainPath) {
+  if (!existsSync(mainPath)) {
     const output = {
       ok: false,
       error: 'not-built',
       message: '未找到服务端构建产物，请先在 remote-server/ 运行 npm run build。',
-      searched: distCandidates,
+      searched: mainPath,
     }
     console.log(JSON.stringify(output, null, 2))
     process.exitCode = 1

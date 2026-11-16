@@ -6,7 +6,6 @@ import WebSocket from 'ws'
 import {
   decodeTunnelFrame,
   encodeTunnelFrame,
-  TUNNEL_PROTOCOL_VERSION,
   type TunnelFrame,
   type TunnelHelloFrame,
 } from '../dist/src/remote/tunnel-protocol.js'
@@ -37,7 +36,6 @@ export async function startNode(overrides: Record<string, string> = {}): Promise
     BIND_HOST: '127.0.0.1',
     DATA_DIR: dataDir,
     LOG_LEVEL: 'error',
-    HELLO_TIMEOUT_MS: '2000',
     ...overrides,
   }
   const app = await createApp({ env })
@@ -267,7 +265,7 @@ export class TestHost {
     const hello: TunnelHelloFrame = {
       t: 'hello',
       hostId: host.host.hostId,
-      version: TUNNEL_PROTOCOL_VERSION,
+      version: 'test',
       capabilities: ['http', 'ws', 'assets'],
     }
     testHost.send(hello)

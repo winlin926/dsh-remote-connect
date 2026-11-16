@@ -183,8 +183,6 @@ if (typeof taskSpace !== 'function') {
     await layout(desktop, 'desktop-light')
     await desktop.cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] })
     await layout(desktop, 'desktop-dark')
-    await desktop.cdp('Network.clearBrowserCache')
-    await desktop.cdp('Network.setCacheDisabled', { cacheDisabled: false })
     phone = await task.newPage()
     await phone.cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, mobile: true, deviceScaleFactor: 1 })
     await phone.cdp('Emulation.setTouchEmulationEnabled', { enabled: true })
@@ -341,7 +339,7 @@ if (typeof taskSpace !== 'function') {
       const original = transport.fetch ?? window.fetch.bind(window)
       const now = Date.now()
       const v2Node = {
-        id: 'qa-public-node-v2', url: 'https://node-a.example.com', kind: 'service', name: '合成节点甲', version: '0.6.2',
+        id: 'qa-public-node-v2', url: 'https://node-a.example.com', kind: 'service', name: '合成节点甲', version: '0.6.0',
         protocol: 2, capabilities: ['pairing', 'cache', 'official-ui'],
         node: {
           id: 'H_lyxbdXZlbAV90iARzG7fkrZnsuyxzJkzSvszJvqjw',
@@ -352,7 +350,7 @@ if (typeof taskSpace !== 'function') {
         lastCheckError: null, pending: false, identityChange: null,
       }
       const v1Node = {
-        id: 'qa-public-node-v1', url: 'https://node-b.example.com', kind: 'service', name: '合成节点乙', version: '0.6.1',
+        id: 'qa-public-node-v1', url: 'https://node-b.example.com', kind: 'service', name: '合成节点乙', version: '0.5.0',
         protocol: 1, capabilities: ['pairing'], node: null,
         hostId: 'A'.repeat(43), fingerprint: '0'.repeat(32), addedAt: now - 120_000, lastCheckAt: now,
         lastCheckOk: true, lastCheckError: null, pending: false,
@@ -391,8 +389,8 @@ if (typeof taskSpace !== 'function') {
       }))
       const v2Row = nodesV2.rows.find(row => row.includes('合成节点甲'))
       const v1Row = nodesV2.rows.find(row => row.includes('合成节点乙'))
-      assert.ok(v2Row, 'v2 节点行缺失；需 A 合并并实现 v2 面板后运行本段：' + JSON.stringify(nodesV2.section))
-      assert.ok(v1Row, 'v1 节点行缺失；需 A 合并并实现 v2 面板后运行本段：' + JSON.stringify(nodesV2.section))
+      assert.ok(v2Row, 'v2 节点行缺失：' + JSON.stringify(nodesV2.section))
+      assert.ok(v1Row, 'v1 节点行缺失：' + JSON.stringify(nodesV2.section))
       assert.ok(v2Row.includes('1FF9-72C5-B757-6656-C057-DD22-011C-C6ED'), `v2 节点指纹未按 8 组 4 位大写展示：${JSON.stringify(v2Row)}`)
       assert.ok(/v2/.test(v2Row), `v2 节点缺少协议标签 v2：${JSON.stringify(v2Row)}`)
       assert.ok(v1Row.includes('旧版 v1（单主机）'), `v1 节点缺少「旧版 v1（单主机）」标签：${JSON.stringify(v1Row)}`)
@@ -421,9 +419,9 @@ if (typeof taskSpace !== 'function') {
     await desktop.evaluate(() => {
       window.__qaUpdateCalls = []
       window.__DSH_RC_UPDATE_FIXTURE__ = {
-        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-remote-connect', installed: true, version: '0.6.2', update: 'registry' }] } },
-        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.2', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
-        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.2', to: version, result: { changed: true, application: 'restart-required' } } } },
+        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-remote-connect', installed: true, version: '0.6.0', update: 'registry' }] } },
+        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.0', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
+        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.0', to: version, result: { changed: true, application: 'restart-required' } } } },
       }
     })
     await clickButton(desktop, '检查更新')

@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import pkg from '../package.json' with { type: 'json' }
 import { CAPABILITY_VALUES, type Capability } from './contract.js'
 import type { LogLevel } from './logger.js'
 
@@ -140,7 +141,7 @@ function readName(env: NodeJS.ProcessEnv): string {
 }
 
 function readVersion(env: NodeJS.ProcessEnv): string {
-  const raw = readString(env, 'NODE_VERSION') ?? '0.6.3'
+  const raw = readString(env, 'NODE_VERSION') ?? pkg.version
   if (!/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/u.test(raw)) {
     throw new ConfigError('NODE_VERSION must match ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$.')
   }

@@ -6,7 +6,7 @@ import {
   hashToken,
 } from '../../identity.js'
 import type { AppServices } from '../../services.js'
-import type { RouteContext, Router } from '../router.js'
+import type { Router } from '../router.js'
 import { baseHeaders, readJsonBody, sendJson } from '../util.js'
 
 /**

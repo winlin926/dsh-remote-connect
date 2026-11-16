@@ -12,7 +12,6 @@
  */
 import { Buffer } from 'node:buffer'
 
-export const TUNNEL_PROTOCOL_VERSION = 1
 /** The single upgrade path the node accepts Host tunnels on. */
 export const TUNNEL_PATH = '/v1/tunnel'
 
@@ -154,22 +153,6 @@ export type TunnelFrame =
   | TunnelPairCompleteFrame
 
 export type TunnelFrameType = TunnelFrame['t']
-
-/** Frames a node may send to a Host. */
-export const NODE_TO_HOST_FRAME_TYPES: ReadonlySet<TunnelFrameType> = new Set([
-  'http.request',
-  'http.body',
-  'http.body.end',
-  'http.cancel',
-  'ws.open',
-  'ws.frame',
-  'ws.close',
-  'ping',
-  'pong',
-  'pair.request',
-  'pair.complete',
-  'pair.reject',
-])
 
 /** Frames a Host may send to a node. */
 export const HOST_TO_NODE_FRAME_TYPES: ReadonlySet<TunnelFrameType> = new Set([

@@ -7,9 +7,9 @@
  * Two protocol versions are accepted. Protocol 1 names one Host identity with flat `hostId` and
  * `fingerprint` fields. Protocol 2 names the node with a self-certifying `node` object
  * (`id`/`fingerprint`/`publicKey`); a gateway also repeats the flat fields as a compatibility
- * alias for clients up to 0.6.1, while a protocol-2 service node must not send them.
+ * alias for protocol-1 clients, while a protocol-2 service node must not send them.
  */
-import { createHash, createPublicKey } from 'node:crypto'
+import { createPublicKey } from 'node:crypto'
 import { identityOfPublicKey } from './host-identity.js'
 
 /** The only discovery path; the exact path is also the gateway's only unpaired route. */
@@ -18,8 +18,6 @@ export const PUBLIC_NODE_PATH = '/.well-known/dsh-remote'
 export const PUBLIC_NODE_PROTOCOL_V1 = 1
 /** Protocol 2: a self-certifying node identity. Clients that do not know it refuse the node. */
 export const PUBLIC_NODE_PROTOCOL_V2 = 2
-/** Both versions this plugin can read. */
-export const PUBLIC_NODE_PROTOCOLS: readonly PublicNodeProtocol[] = [PUBLIC_NODE_PROTOCOL_V1, PUBLIC_NODE_PROTOCOL_V2]
 export type PublicNodeProtocol = 1 | 2
 /** Discovery doubles as a reachability check; a node slower than this is unusable for the check. */
 export const PUBLIC_NODE_TIMEOUT = 5000
@@ -28,7 +26,6 @@ export const NODE_NAME_MAX = 64
 
 export type PublicNodeKind = 'gateway' | 'service'
 export type PublicNodeCapability = 'pairing' | 'cache' | 'official-ui'
-export const PUBLIC_NODE_KINDS: readonly PublicNodeKind[] = ['gateway', 'service']
 /** Exact lowercase spellings; an unknown capability fails detection so a new one needs a protocol bump. */
 export const PUBLIC_NODE_CAPABILITIES: readonly PublicNodeCapability[] = ['pairing', 'cache', 'official-ui']
 
@@ -39,8 +36,6 @@ export const FINGERPRINT_PATTERN = /^[a-f0-9]{32}$/
 export const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{40,120}$/
 /** 1–32 ASCII characters, starting with a letter or digit: a semver fits, prose and spaces do not. */
 export const NODE_VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
-/** A content revision: the same alphabet the Host's own asset URLs use. */
-export const REVISION_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/
 
 export function isPublicNodeKind(value: unknown): value is PublicNodeKind {
@@ -253,29 +248,4 @@ export async function detectPublicNode(input: string | URL, options: DetectPubli
     if (timedOut) return timeoutFailure()
     return validateDiscovery(parsed.origin, body)
   } finally { clearTimeout(timer) }
-}
-
-/**
- * Cache partition rule for one Host under one origin. The browser isolates by origin already;
- * within one origin (a service fronting several Hosts) `hid` separates Hosts and `rev` separates
- * builds, so an asset URL can never be answered from another Host's copy.
- */
-export interface CacheScopeInput { origin: string; hostId: string; rev: string }
-export interface CacheScope {
-  origin: string
-  hid: string
-  rev: string
-  /** The exact query fragment to append to every asset URL served for this Host. */
-  query: string
-  /** Partition key for tests and diagnostics: origin + the two isolation parameters. */
-  key: string
-}
-
-export function cacheScope(input: CacheScopeInput): CacheScope {
-  const origin = normalizeNodeOrigin(input.origin)
-  if (!origin) throw new Error('缓存作用域需要不带路径的 HTTPS origin。')
-  if (!HOST_ID_PATTERN.test(input.hostId)) throw new Error('缓存作用域需要 43 位 base64url 的 hostId。')
-  if (!REVISION_PATTERN.test(input.rev)) throw new Error('缓存作用域需要 1–64 位字母、数字、_ 或 - 的 rev。')
-  const query = `hid=${input.hostId}&rev=${input.rev}`
-  return { origin, hid: input.hostId, rev: input.rev, query, key: `${origin}?${query}` }
 }

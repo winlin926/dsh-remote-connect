@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import WebSocket from 'ws'
 import {
-  TUNNEL_PROTOCOL_VERSION,
   encodeTunnelFrame,
   type TunnelHelloFrame,
 } from '../dist/src/remote/tunnel-protocol.js'
@@ -220,7 +219,7 @@ test('two registered Hosts are isolated from each other', async () => {
       encodeTunnelFrame({
         t: 'hello',
         hostId: b.hostId,
-        version: TUNNEL_PROTOCOL_VERSION,
+        version: 'test',
         capabilities: ['http', 'ws', 'assets'],
       } as TunnelHelloFrame),
     )

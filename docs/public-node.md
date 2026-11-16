@@ -2,7 +2,7 @@
 
 本文是 `@winlin926/dsh-remote-connect` 的**协议规范**：用户只填一个 HTTPS 地址，插件探测它背后是哪一种节点、身份是谁。实现必须与此文档逐字段一致；服务端（`remote-server` 与隧道网关）照本文第 2、10 节实现即可与插件互通。
 
-自 0.6.2 起定义 v2 契约（`protocol: 2`），并保留 v1（`protocol: 1`）兼容规则。新插件同时接受 v1/v2 节点；v1 节点按旧规则处理。
+自 0.6.0 起定义 v2 契约（`protocol: 2`），并保留 v1（`protocol: 1`）兼容规则。新插件同时接受 v1/v2 节点；v1 节点按旧规则处理。
 
 ```text
                  GET https://node.example.com/.well-known/dsh-remote
@@ -57,15 +57,15 @@
   "protocol": 2,
   "kind": "gateway",
   "name": "DeepSeek Harness",
-  "version": "0.6.2",
+  "version": "0.6.0",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
-    "id": "g7iflg32huZJkCXpOeWlLfYIOgAkPLcCyVIU-e2Un_Q",
-    "fingerprint": "83b89f960df686e6499025e939e5a52d",
-    "publicKey": "MCowBQYDK2VwAyEAsjRRZlO6GiXrf2MrTLiWC9vXXgI3LKzF5LFTsHlHjcQ"
+    "id": "BuP9j9opu2CrWVV95h7bCuzbIxE0vjDnW0Vfjht5L6k",
+    "fingerprint": "06e3fd8fda29bb60ab59557de61edb0a",
+    "publicKey": "MCowBQYDK2VwAyEA11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
   },
-  "hostId": "g7iflg32huZJkCXpOeWlLfYIOgAkPLcCyVIU-e2Un_Q",
-  "fingerprint": "83b89f960df686e6499025e939e5a52d"
+  "hostId": "BuP9j9opu2CrWVV95h7bCuzbIxE0vjDnW0Vfjht5L6k",
+  "fingerprint": "06e3fd8fda29bb60ab59557de61edb0a"
 }
 ```
 
@@ -76,7 +76,7 @@
   "protocol": 2,
   "kind": "service",
   "name": "我的节点",
-  "version": "0.6.2",
+  "version": "0.6.0",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "Di6lw5vsvhdLKYAG4LFOoPgX6mIfMoYOQ2Tz3oECWs0",
@@ -89,7 +89,7 @@
 - 字段顺序无意义，客户端不依赖顺序。
 - **未知字段忽略**（为向前兼容），但本文列出的字段一个都不能错。
 - 重复的 `capabilities` 项在客户端去重（保留首次出现的顺序），不算失败。
-- 网关为兼容 ≤0.6.1 客户端，**同时**保留扁平 `hostId`/`fingerprint`（同值，旧字段）；新客户端在 `protocol: 2` 下忽略扁平字段。
+- 网关为兼容 仅支持 v1 的客户端，**同时**保留扁平 `hostId`/`fingerprint`（同值，旧字段）；新客户端在 `protocol: 2` 下忽略扁平字段。
 - 服务节点**不得**带扁平 `hostId`/`fingerprint`：一个节点对应多台主机，扁平字段无法如实表达。
 
 ### 2.2 字段定义
@@ -101,7 +101,7 @@
 | `protocol` | number | 必须**等于数字 2**（不是 `"2"`） | 协议版本。客户端拒绝其它值，不做兼容猜测；升版即破坏性变更。 |
 | `kind` | string | 精确小写 `"gateway"` 或 `"service"` | 节点类型。大小写敏感，不接受其他拼写。 |
 | `name` | string | 1–64 个 **Unicode 码点**；不得含 C0 控制符（U+0000–U+001F）或 DEL（U+007F） | 人类可读名称，仅用于展示，**不参与身份判断**。gateway 固定用 `DeepSeek Harness`（不暴露计算机名）。 |
-| `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.6.2`、`1.2.0-rc.3`。 |
+| `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.6.0`、`1.2.0-rc.3`。 |
 | `capabilities` | string[] | 非空数组；每项精确小写、取值必须属于 `pairing` `cache` `official-ui`；元素唯一；**必须包含 `"pairing"`** | 节点能力广告；未知能力即失败（新增能力必须升 protocol）。见 2.3。 |
 | `node` | object | v2 必填；`node` 缺失或任一子字段非法即 `bad-identity` | 节点身份，见 2.4。 |
 | `node.id` | string | 正则 `^[A-Za-z0-9_-]{43}$`，**恰好 43 个字符** | `base64url(sha256(SPKI DER))`，无 `=` 填充。 |
@@ -118,12 +118,12 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 | `cache` | 否 | 节点提供带 `rev` 的可缓存静态资源，并按 `hid`/`rev` 正确分区。 |
 | `official-ui` | 否 | 节点提供官方 DSH 界面外壳（gateway 通常有）。 |
 
-节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.2 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
+节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.0 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
 
 ### 2.4 身份来源
 
-- **网关**：复用主机身份（`<DSH_HOME>/dsh-remote-connect/<profile>/host-identity.json`），`node.*` 与宿主 `hostId`/`fingerprint` 同值。为兼容 ≤0.6.1 客户端，网关的 v2 文档同时保留扁平 `hostId`/`fingerprint`（同值，旧字段）。
-- **服务**：节点自己在数据目录生成并持久保存节点密钥（`node-identity.json`，`0600`、临时文件 + `rename` 原子写、Ed25519），与任何主机身份无关；多台主机注册不改变节点指纹；服务节点的 v2 文档不得带扁平 `hostId`/`fingerprint`。
+- **网关**：复用主机身份（`<DSH_HOME>/dsh-remote-connect/<profile>/host-identity.json`），`node.*` 与宿主 `hostId`/`fingerprint` 同值。为兼容 仅支持 v1 的客户端，网关的 v2 文档同时保留扁平 `hostId`/`fingerprint`（同值，旧字段）。
+- **服务**：节点在数据目录持久保存节点身份公钥（`node-identity.json`，`0600`、临时文件 + `rename` 原子写、Ed25519），与任何主机身份无关；多台主机注册不改变节点指纹；服务节点的 v2 文档不得带扁平 `hostId`/`fingerprint`。
 - 服务节点在**启动时就有身份**，不再像 v1 那样在首台主机注册前返回占位身份。
 
 节点身份文件（服务节点）：
@@ -133,29 +133,28 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
   "version": 1,
   "algorithm": "ed25519",
   "publicKey": "<Ed25519 公钥 SPKI DER 的 base64url，无填充>",
-  "privateKey": "<Ed25519 私钥 PKCS#8 DER 的 base64url，无填充>",
   "createdAt": "2026-11-16T00:00:00.000Z"
 }
 ```
 
 - 路径：`<DATA_DIR>/node-identity.json`（`remote-server` 的 `DATA_DIR`；compose 部署时为数据卷内的 `/data/node-identity.json`）。不单独提供路径环境变量。
 - 首次启动时生成，之后只读；**文件损坏即启动失败**，不静默重建——重建会改变节点指纹，必须由运营者显式处理。
-- 私钥永不离开节点、永不出现在发现响应、日志或配置中；发现文档只返回 `publicKey` 与派生值。
-- 节点指纹展示统一格式：32 位小写十六进制分组为 8 组 4 位大写，用 `-` 连接（与主机指纹一致），如 `83B8-9F96-0DF6-86E6-4990-25E9-39E5-A52D`。
+- 节点身份文件只保存公钥，生成时的私钥不保留；发现文档返回公钥与派生值，身份核对不等于节点持有私钥的密码学证明。
+- 节点指纹展示统一格式：32 位小写十六进制分组为 8 组 4 位大写，用 `-` 连接（与主机指纹一致），如 `06E3-FD8F-DA29-BB60-AB59-557D-E61E-DB0A`。
 
 ## 3. v1 兼容规则
 
-新插件（0.6.2）的检测结果分三种：
+新插件（0.6.0）的检测结果分三种：
 
 | 文档 | 处理 |
 | --- | --- |
-| `protocol: 1` + `kind: gateway` | 沿用 v1 规则（必须有扁平 `hostId`/`fingerprint`），记录 `protocol: 1`、`node: null`。一切行为与 0.6.1 相同。 |
+| `protocol: 1` + `kind: gateway` | 沿用 v1 规则（必须有扁平 `hostId`/`fingerprint`），记录 `protocol: 1`、`node: null`。按 v1 字段校验。 |
 | `protocol: 1` + `kind: service` | v1 服务节点：单主机旧模式。`hostId`/`fingerprint` 是该节点首台主机的身份，只对这一台主机有意义；界面标注「旧版 v1（单主机）」。`protocol` 记 1。 |
 | `protocol: 2` | 按第 2、4 节校验 `node`；`node` 缺失或自校验失败即 `bad-identity`。 |
 
 其它版本（`0`、`3`…）→ `bad-protocol`。
 
-- v1 客户端（≤0.6.1）访问 v2 服务节点会因缺少扁平 `hostId` 被拒绝，这是接受的边界，写进文档；v2 网关保留扁平字段，因此旧客户端仍可添加网关节点。
+- 仅支持 v1 的客户端访问 v2 服务节点会因缺少扁平 `hostId` 被拒绝，这是接受的边界，写进文档；v2 网关保留扁平字段，因此旧客户端仍可添加网关节点。
 - 新插件不因为节点是 v1 就降低自身安全要求；v1 节点照旧走原配对流程。
 - 注册接口对 v1/v2 节点都是 `POST /v1/hosts`，请求体不变；节点身份不通过注册接口传递。
 
@@ -232,7 +231,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
       "url": "https://node.example.com",
       "kind": "service",
       "name": "我的节点",
-      "version": "0.6.2",
+      "version": "0.6.0",
       "protocol": 2,
       "capabilities": ["pairing", "cache", "official-ui"],
       "node": { "id": "…", "fingerprint": "…", "publicKey": "…" },
@@ -283,14 +282,14 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 1. 读取 `version: 1` 文件：逐条转换，`node` 补 `null`，其余字段原样保留（`current`、`pending`、检测结果、`addedAt` 都不丢），内存中按 v2 使用，下一次写入时落盘为 `version: 2`。
 2. 首次遇到 v2 发现文档、而记录 `node` 为 `null`：**静默采纳**节点身份（写入 `node`、`protocol: 2`），不算「身份变化」，不需要用户确认——v1 记录此前没有节点身份可比。
 3. 记录已有 `node`，检测到不同的 `node.id`：不覆盖旧身份；写 `identityChange`，`lastCheckOk: false`、`lastCheckError` =「节点身份已变化，需要重新确认。」；若该记录是 `current`，保持 `current` 但禁止连接，面板显示待确认。
-4. 用户确认（`manage` 动作 `confirmPublicNodeIdentity{id}`）：采纳 `identityChange.to`，清空 `identityChange`，重新检测一次；不删除设备授权、不删除服务凭据、不删除缓存索引，也不要求手机重新配对。
+4. 用户确认（`manage` 动作 `confirmPublicNodeIdentity{id}`）：采纳 `identityChange.to`，清空 `identityChange`，重新检测一次；不删除设备授权与服务凭据，也不要求手机重新配对。
 5. 已确认的 v2 记录若检测到 `protocol: 1`（节点降级）：不自动降级。保留 `node` 与 `protocol: 2`，置 `lastCheckOk: false`、`lastCheckError` =「节点已降级为旧版协议，需要重新检测。」，面板提示重新检测；不删除记录、不改 `current`。
-6. 删除节点：沿用 0.6.1（先尽力 `DELETE /v1/hosts/:hostId`，失败不阻断，删本地记录与缓存索引）。
+6. 删除节点：先尽力 `DELETE /v1/hosts/:hostId`，失败不阻断本地删除；随后删除本机节点记录和对应服务凭据。
 7. 切换节点：旧节点授权与缓存保留；新节点需扫码配对，不迁移设备授权（不变）。
 
 **损坏语义**：JSON 解析失败、`version` 不是 1/2、节点字段非法、`id` 重复 → 抛错（含文件路径），不自动修复。
 
-API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、`update(id, patch)`、`remove(id)`、`setCurrent(id | null)`。`remove` 返回 `{ origin, hostId }`（`hostId` 可能为 `null`），调用方据此清理该节点的缓存索引；删除当前节点会把 `current` 置 `null`。身份确认通过 `manage` 动作 `confirmPublicNodeIdentity{id}` 暴露给面板。
+API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、`update(id, patch)`、`remove(id)`、`setCurrent(id | null)`。`remove` 返回 `{ origin, hostId }`（`hostId` 可能为 `null`），调用方据此清理对应服务凭据；删除当前节点会把 `current` 置 `null`。身份确认通过 `manage` 动作 `confirmPublicNodeIdentity{id}` 暴露给面板。
 
 ## 7. 配对
 
@@ -347,14 +346,12 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 10. 5 秒内必须响应；发现请求不跟随重定向，服务端也不要依赖重定向。
 11. 未配对设备访问发现路径必须成功；访问其他路径仍按原规则拒绝。
 
-## 11. 缓存键规则
+## 11. 缓存边界
 
-- **浏览器缓存按 origin 天然隔离**：不同 origin 的响应不会互相命中，插件无需为此做任何事。
-- **同一 origin 多 Host**（一个 service 前置多个 Host）靠 `hid=hostId` 区分：资源 URL 必须带当前 Host 的 `hostId`。
-- **同一 Host 的版本**靠 `rev` 区分：`rev` 为 1–64 位 `[A-Za-z0-9_-]` 的构建/清单版本。
-- 规范形状：`https://origin/path?hid=<hostId>&rev=<rev>`；纯函数 `cacheScope({ origin, hostId, rev })` 返回 `{ origin, hid, rev, query: "hid=<hostId>&rev=<rev>", key: "<origin>?<query>" }`。
-- 宿主生成的资源 URL 已自带 `rev`（如 `.../client.js?rev=batch`）；插件不重写资源 URL，只在需要构造缓存键时调用 `cacheScope`。仓库内不存在跨 Host 复用同一缓存键的代码路径。
-- 不引入 Service Worker，不预下载前端，不改宿主模块加载器的重试/去重/回退职责；本协议只提供**分区规则**，缓存由浏览器与宿主负责。
+- 浏览器按 origin 隔离响应；固定域名网关透传宿主资源 URL 与缓存头，`/rc/boot.js` 使用内容 ETag 重新验证。
+- 服务节点接收 Host 上传的资源，数据库与 `/assets/:hostId/:revision/*` 路径同时按主机、revision 和资源路径隔离；HTML 不缓存，普通资源可用 immutable 与 ETag。
+- 普通手机 HTTP/SSE/WebSocket 请求通过 Host 反向隧道转发；不得把模拟缓存键辅助函数的单元测试当作真实缓存命中证据。
+- 不引入 Service Worker，不预下载另一份前端，不改宿主模块加载器的重试、去重与回退职责。
 
 ## 12. 面板与文案
 
@@ -376,7 +373,7 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 
 ## 14. 兼容性
 
-- `protocol` 升级 = 破坏性变更；客户端遇到非 `1`/`2` 直接失败，不做降级猜测。v1 客户端（≤0.6.1）无法添加 v2 服务节点；v2 网关保留扁平字段，旧客户端仍可添加网关节点。
+- `protocol` 升级 = 破坏性变更；客户端遇到非 `1`/`2` 直接失败，不做降级猜测。仅支持 v1 的客户端无法添加 v2 服务节点；v2 网关保留扁平字段，旧客户端仍可添加网关节点。
 - 响应中**多出的字段被忽略**，服务端可先行添加新字段（但新能力必须等待 protocol 升级）。
 - 未知 `capabilities` 项导致客户端拒绝，因此能力白名单只能随 protocol 升版扩展。
-- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.3 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.3`。
+- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.0 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.0`。

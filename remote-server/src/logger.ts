@@ -48,11 +48,3 @@ export function createLogger(level: LogLevel = 'info'): Logger {
     error: fields => write('error', fields),
   }
 }
-
-/** Logger that discards everything; useful in tests. */
-export const nullLogger: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-}

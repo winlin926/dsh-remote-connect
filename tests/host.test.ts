@@ -130,7 +130,7 @@ it('confirms the public node on both ends before issuing a device cookie', async
     protocol: 2, kind: 'gateway', name: 'DeepSeek Harness',
     node: { id: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), fingerprint: state.node.fingerprint, publicKey: expect.stringMatching(/^[A-Za-z0-9_-]{40,120}$/) },
   })
-  // The flat fields stay as compatibility aliases for clients up to 0.6.1; they repeat the node identity.
+  // The flat fields stay as compatibility aliases for clients up to 0.5.0; they repeat the node identity.
   expect(discovery.body.hostId).toBe(discovery.body.node.id)
   expect(discovery.body.fingerprint).toBe(state.node.fingerprint)
   const token = new URL(state.links[0].url).hash.slice(6)

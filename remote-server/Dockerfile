@@ -9,7 +9,9 @@ COPY remote-server/package.json remote-server/package-lock.json ./remote-server/
 RUN cd remote-server && npm ci --no-audit --no-fund
 
 # Shared protocol sources and the server itself (node_modules/dist are rebuilt).
-COPY src ./src
+# NodeNext needs the root package's ESM scope for the shared source.
+COPY package.json ./package.json
+COPY src/remote/tunnel-protocol.ts ./src/remote/tunnel-protocol.ts
 COPY remote-server/tsconfig.json ./remote-server/tsconfig.json
 COPY remote-server/src ./remote-server/src
 COPY remote-server/web ./remote-server/web

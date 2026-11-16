@@ -96,8 +96,6 @@ interface StoredNode {
   lastConnectedAt: number | null
 }
 
-interface NodesFile { version: 1; nodes: Record<string, StoredNode> }
-
 interface HttpCall {
   request: ClientRequest
   response?: IncomingMessage

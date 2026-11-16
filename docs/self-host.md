@@ -52,7 +52,7 @@ Caddy 首次启动会向 Let's Encrypt 申请证书（需要 DNS 已生效、80/
 
 **节点身份**：首次启动时，节点在数据目录生成 Ed25519 节点身份并持久保存到
 `/data/node-identity.json`（`DATA_DIR` 即 compose 数据卷内的 `/data`；文件权限 `0600`，原子写）。
-节点在启动时就有身份，不依赖是否已有 Host 注册。**这个文件就是节点的身份私钥**：不要删除、
+节点在启动时就有身份，不依赖是否已有 Host 注册。**该文件只保存节点身份公钥，生成时的私钥不保留**：不要删除、
 不要覆盖、不要提交到 Git 或放进公开备份。丢失或更换它会让节点指纹变化，所有已添加该节点的
 客户端都需要重新确认（见第 5 节）。
 
@@ -64,7 +64,7 @@ curl.exe -sS https://relay.example.com/v1/config
 curl.exe -sS https://relay.example.com/.well-known/dsh-remote
 ```
 
-`/healthz` 返回 `{"ok":true,"version":"0.6.2"}`。
+`/healthz` 返回 `{"ok":true,"version":"0.6.0"}`。
 
 `/.well-known/dsh-remote` 是 v2 统一节点契约，返回形如：
 
@@ -73,7 +73,7 @@ curl.exe -sS https://relay.example.com/.well-known/dsh-remote
   "protocol": 2,
   "kind": "service",
   "name": "My Public Node",
-  "version": "0.6.2",
+  "version": "0.6.0",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "<43 字符 base64url>",
@@ -104,28 +104,17 @@ curl.exe -sS https://relay.example.com/.well-known/dsh-remote
 
 ## 5. 备份与恢复
 
-数据卷里有两个必须一起备份的文件（compose 卷 `data` → 容器 `/data`）：
+`data` 卷保存 `node-identity.json`（节点身份公钥）和 `remote-server.sqlite`（注册、授权、会话与资源）。丢失公钥文件会改变节点指纹，已信任该节点的客户端需重新确认；丢失数据库会丢失注册与配对记录。
 
-| 文件 | 内容 | 丢失后果 |
-| --- | --- | --- |
-| `/data/node-identity.json` | 节点身份私钥与公钥（`0600`） | 节点指纹变化；所有已添加该节点的客户端都需要重新确认，设备可能需要重新配对 |
-| `/data/remote-server.sqlite` | Host 注册、配对关系、设备会话、票据、静态资源元数据 | 所有注册与配对失效，需重新注册/配对 |
+快照前停止服务端，完整保存数据卷；运行中的 SQLite 不能只复制主数据库文件而遗漏 WAL。
 
 ```powershell
-# 备份（在线一致性由 SQLite WAL 保证，建议低峰期）
-docker compose cp remote-server:/data/node-identity.json .\backup-node-identity.json
-docker compose cp remote-server:/data/remote-server.sqlite .\backup-remote-server.sqlite
-# 或整卷快照（同时包含两者）
-docker run --rm -v dsh-remote-server_data:/data -v ${PWD}:/backup alpine tar czf /backup/data.tgz -C /data .
+docker compose stop remote-server
+docker run --rm -v dsh-remote-server_data:/data:ro -v ${PWD}:/backup alpine tar czf /backup/data.tgz -C /data .
+docker compose start remote-server
 ```
 
-恢复：停服务 → 把两个文件放回卷内 `/data`（同时删除 SQLite 的 `-wal`/`-shm`）→ 启服务。
-**两个文件必须成对恢复**：只恢复数据库会让节点身份与已注册数据不匹配，只恢复身份文件会丢掉
-注册与配对数据。
-
-数据库里的凭证与配对票据只有 SHA-256 哈希，泄露备份不等于泄露可用凭证；但
-`node-identity.json` 里的私钥泄露等于节点身份可被冒用，需按安全事件处理：更换身份（删除该文件
-后重启会生成新身份）并让所有客户端重新确认。备份文件不要放进公开仓库或公开对象存储。
+恢复时停止服务端，在空数据卷中还原完整快照，再启动。数据库中的凭证和票据是哈希，但设备关系与静态资源仍属于私有运行数据；快照和运行目录不提交公开仓库。
 
 ## 6. 升级
 
@@ -154,7 +143,7 @@ docker compose up -d --build
   可能看到转发给本机的请求与内容；不提供端到端加密。不要把节点运营者视为不可见内容的保护者。
 - 服务端**不持有** Host/手机的私钥，**不落盘**聊天或审批内容，**不记录**聊天/审批内容；
   日志对 token、ticket、cookie、authorization、identityKey、ciphertext 等字段一律打码。
-- 持久化的只有：节点身份私钥（`node-identity.json`，仅本机）、Host 公钥及其派生
+- 持久化内容包括：节点身份公钥（`node-identity.json`）、Host 公钥及其派生
   `hostId`/`fingerprint`、Host 凭证哈希、配对票据哈希、设备身份公钥、设备会话哈希、配对关系、
   静态资源内容。
 - 传输安全由 Caddy 终止 TLS；服务端只在 `TRUST_PROXY=1` 时信任 `X-Forwarded-*`。
@@ -167,7 +156,7 @@ docker compose up -d --build
 
 - **单实例**：在线状态与转发成员表在进程内存，SQLite 为单写者；多实例需要 PostgreSQL 与共享在线协调，
   当前不支持水平扩展。
-- 本节点不做 WebRTC：设备流量一律经 Host 反向隧道（`/v1/tunnel`）转发；LAN/P2P 由 Host 与手机直接协商，与本节点无关。
+- 设备公网流量经 Host 反向隧道（`/v1/tunnel`）转发；局域网入口直接访问 Host 网关，不实现 WebRTC/P2P。
 - 本仓库交付环境未实测真实 TLS 证书签发；上线前请按第 3 节验收。
 - 设备身份统一用 Base64URL(SPKI DER)（与 `src/host-identity.ts` 一致）：Host 与手机提交的都是 SPKI DER 公钥，
   节点只做 DER 合法性校验与 sha256 推导，不持有、不上传任何私钥。

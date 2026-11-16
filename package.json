@@ -1,6 +1,6 @@
 {
   "name": "@winlin926/dsh-remote-connect",
-  "version": "0.6.3",
+  "version": "0.6.0",
   "description": "用手机浏览器继续电脑上的 DeepSeek Harness 会话：同一 Wi-Fi 扫码配对、处理工具审批、预览文件；支持隧道网关或自托管公网节点。",
   "type": "module",
   "license": "MIT",
@@ -28,8 +28,7 @@
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "THIRD-PARTY-LICENSES.md"
+    "LICENSE"
   ],
   "engines": {
     "node": ">=24.9.0"

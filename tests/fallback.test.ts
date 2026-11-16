@@ -19,11 +19,11 @@ const SELF = identity()
 const OTHER = identity()
 const HOST = { hostId: SELF.id, fingerprint: SELF.fingerprint }
 const node = (value: PublicNodeIdentity): PublicNodeDiscovery => ({
-  protocol: PUBLIC_NODE_PROTOCOL_V2, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', capabilities: ['pairing', 'official-ui'],
+  protocol: PUBLIC_NODE_PROTOCOL_V2, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', capabilities: ['pairing', 'official-ui'],
   node: value, hostId: value.id, fingerprint: value.fingerprint,
 })
 const legacyNode = (value: PublicNodeIdentity): PublicNodeDiscovery => ({
-  protocol: PUBLIC_NODE_PROTOCOL_V1, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', capabilities: ['pairing', 'official-ui'],
+  protocol: PUBLIC_NODE_PROTOCOL_V1, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', capabilities: ['pairing', 'official-ui'],
   node: null, hostId: value.id, fingerprint: value.fingerprint,
 })
 

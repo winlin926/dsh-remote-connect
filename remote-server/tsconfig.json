@@ -10,6 +10,8 @@
       "zod": ["./node_modules/zod/index.d.ts"]
     },
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": false,
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,

@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HOST_IDENTITY_FILE, fingerprintGroupsOf, identityOfPublicKey, loadHostIdentity } from '../src/host-identity.js'
 import {
-  PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL_V1, PUBLIC_NODE_PROTOCOL_V2, cacheScope, detectPublicNode, nodeIdentityOf,
+  PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL_V1, PUBLIC_NODE_PROTOCOL_V2, detectPublicNode, nodeIdentityOf,
   normalizeNodeOrigin, parsePublicNodeIdentity,
   type PublicNodeDiscovery, type PublicNodeFetch, type PublicNodeIdentity,
 } from '../src/public-node.js'
@@ -34,9 +34,9 @@ function nodeIdentity(): PublicNodeIdentity {
 const NODE_IDENTITY = nodeIdentity()
 const OTHER_IDENTITY = nodeIdentity()
 
-const V1_NODE: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL_V1, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', capabilities: ['pairing', 'official-ui'], node: null, hostId: HOST_ID, fingerprint: FINGERPRINT }
-const V2_NODE: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL_V2, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', capabilities: ['pairing', 'cache', 'official-ui'], node: NODE_IDENTITY, hostId: null, fingerprint: null }
-/** What the gateway actually puts on the wire: the `node` identity plus the flat aliases ≤0.6.1 reads. */
+const V1_NODE: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL_V1, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', capabilities: ['pairing', 'official-ui'], node: null, hostId: HOST_ID, fingerprint: FINGERPRINT }
+const V2_NODE: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL_V2, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', capabilities: ['pairing', 'cache', 'official-ui'], node: NODE_IDENTITY, hostId: null, fingerprint: null }
+/** What the gateway actually puts on the wire: the `node` identity plus the flat aliases ≤0.5.0 reads. */
 const V2_WIRE: Record<string, unknown> = { ...V2_NODE, hostId: NODE_IDENTITY.id, fingerprint: NODE_IDENTITY.fingerprint }
 
 function payload(overrides: Record<string, unknown> = {}): Record<string, unknown> { return { ...V1_NODE, ...overrides } }
@@ -253,24 +253,6 @@ describe('public node detection', () => {
   })
 })
 
-describe('cache scope', () => {
-  it('never shares a key across origin, Host identity or revision', () => {
-    const base = cacheScope({ origin: 'https://node.example.com', hostId: HOST_ID, rev: 'build-1' })
-    const otherOrigin = cacheScope({ origin: 'https://other.example.com', hostId: HOST_ID, rev: 'build-1' })
-    const otherHost = cacheScope({ origin: 'https://node.example.com', hostId: 'A'.repeat(43), rev: 'build-1' })
-    const otherRev = cacheScope({ origin: 'https://node.example.com', hostId: HOST_ID, rev: 'build-2' })
-    expect(new Set([base.key, otherOrigin.key, otherHost.key, otherRev.key]).size).toBe(4)
-    expect(base.query).toBe(`hid=${HOST_ID}&rev=build-1`)
-    expect(base.key).toBe(`https://node.example.com?hid=${HOST_ID}&rev=build-1`)
-  })
-  it('normalizes the origin and rejects inputs that cannot partition a cache', () => {
-    expect(cacheScope({ origin: 'https://Node.Example.com/', hostId: HOST_ID, rev: 'r1' }).origin).toBe('https://node.example.com')
-    expect(() => cacheScope({ origin: 'http://node.example.com', hostId: HOST_ID, rev: 'r1' })).toThrow()
-    expect(() => cacheScope({ origin: 'https://node.example.com', hostId: 'short', rev: 'r1' })).toThrow()
-    expect(() => cacheScope({ origin: 'https://node.example.com', hostId: HOST_ID, rev: 'bad rev' })).toThrow()
-  })
-})
-
 describe('public node config', () => {
   const NOW = 1_763_300_000_000
   function store(file: string, legacyFile?: string): PublicNodeConfig { return new PublicNodeConfig({ file, legacyFile, now: () => NOW }) }
@@ -292,7 +274,7 @@ describe('public node config', () => {
   it('persists a probed protocol-2 node without copying the identity into the flat fields', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
-    const record = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing', 'cache'], node: NODE_IDENTITY })
+    const record = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing', 'cache'], node: NODE_IDENTITY })
     expect(record.pending).toBe(false)
     expect(record.lastCheckOk).toBe(true)
     expect(record.lastCheckAt).toBe(NOW)
@@ -343,7 +325,7 @@ describe('public node config', () => {
   it('records an identity change, blocks the node, then adopts it on confirmation', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
-    const record = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
+    const record = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
     expect(config.blocked(record.id)).toBe(false)
     const changed = config.markIdentityChange(record.id, OTHER_IDENTITY)
     expect(changed.node).toEqual(NODE_IDENTITY)
@@ -362,7 +344,7 @@ describe('public node config', () => {
     const v1 = config.add({ url: 'https://old.example.com', kind: 'gateway', name: 'Old', version: '0.5.1', protocol: 1, capabilities: ['pairing'], hostId: HOST_ID, fingerprint: FINGERPRINT })
     expect(() => config.markIdentityChange(v1.id, NODE_IDENTITY)).toThrow(/还没有节点身份/)
     expect(() => config.confirmIdentity(v1.id)).toThrow(/没有待确认/)
-    const v2 = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
+    const v2 = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
     expect(() => config.markIdentityChange(v2.id, NODE_IDENTITY)).toThrow(/没有变化/)
     expect(() => config.markIdentityChange(v2.id, { ...OTHER_IDENTITY, id: HOST_ID })).toThrow(/身份无效/)
     expect(() => config.markIdentityChange('missing', OTHER_IDENTITY)).toThrow(/不存在/)
@@ -370,7 +352,7 @@ describe('public node config', () => {
   it('requires exactly one identity encoding per record', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
-    config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
+    config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
     const flatCopy = readFile(file)
     flatCopy.nodes[0]!.hostId = NODE_IDENTITY.id
     writeFileSync(file, JSON.stringify(flatCopy))
@@ -396,7 +378,7 @@ describe('public node config', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
     const candidate = config.add({ url: 'https://node.example.com' })
-    const probed = config.update(candidate.id, { kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing', 'official-ui'], node: NODE_IDENTITY, pending: false, lastCheckAt: NOW, lastCheckOk: true, lastCheckError: null })
+    const probed = config.update(candidate.id, { kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing', 'official-ui'], node: NODE_IDENTITY, pending: false, lastCheckAt: NOW, lastCheckOk: true, lastCheckError: null })
     expect(probed.pending).toBe(false)
     expect(probed.node).toEqual(NODE_IDENTITY)
     config.setCurrent(candidate.id)
@@ -411,8 +393,8 @@ describe('public node config', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
     expect(() => config.add({ url: 'http://node.example.com' })).toThrow(/无效/)
-    expect(() => config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing'], hostId: HOST_ID, fingerprint: FINGERPRINT })).toThrow(/无效/)
-    expect(() => config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 1, capabilities: ['cache'], hostId: HOST_ID, fingerprint: FINGERPRINT })).toThrow(/无效/)
+    expect(() => config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing'], hostId: HOST_ID, fingerprint: FINGERPRINT })).toThrow(/无效/)
+    expect(() => config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 1, capabilities: ['cache'], hostId: HOST_ID, fingerprint: FINGERPRINT })).toThrow(/无效/)
     expect(config.list()).toEqual([])
     expect(() => config.update('missing', { pending: true })).toThrow(/不存在/)
     expect(() => config.setCurrent('missing')).toThrow(/不存在/)
@@ -421,7 +403,7 @@ describe('public node config', () => {
   it('rejects a v2 update that would add a flat identity copy', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
-    const record = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
+    const record = config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
     expect(() => config.update(record.id, { hostId: HOST_ID, fingerprint: FINGERPRINT })).toThrow(/无效/)
     expect(store(file).list()[0]!.hostId).toBeNull()
   })
@@ -434,7 +416,7 @@ describe('public node config', () => {
   it('rejects damaged nodes and duplicate ids', () => {
     const file = join(folder(), PUBLIC_NODES_FILE)
     const config = store(file)
-    config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
+    config.add({ url: 'https://node.example.com', kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.0', protocol: 2, capabilities: ['pairing'], node: NODE_IDENTITY })
     const value = readFile(file)
     value.nodes[0]!.kind = 'relay'
     writeFileSync(file, JSON.stringify(value))

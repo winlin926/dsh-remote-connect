@@ -32,8 +32,6 @@ export const nodePublicIdentitySchema = z.object({
   publicKey: identityKeySchema,
 }).strict()
 
-export type NodePublicIdentity = z.infer<typeof nodePublicIdentitySchema>
-
 /**
  * The unified v2 node descriptor returned by `/.well-known/dsh-remote`.
  * `kind` is fixed to `service` for this deployment, but the schema accepts both
@@ -70,8 +68,6 @@ export const nodeIdentitySchema = z.object({
   createdAt: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u),
 }).strict()
 
-export type NodeIdentityRecord = z.infer<typeof nodeIdentitySchema>
-
 export const DEVICE_ID_PATTERN = /^(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu
 
 const deviceIdSchema = z.string().regex(DEVICE_ID_PATTERN, 'Device ID must be a ULID or UUID.')
@@ -106,8 +102,6 @@ export const hostRegistrationSchema = z.object({
   clientVersion: clientVersionSchema,
 }).strict()
 
-export type HostRegistration = z.infer<typeof hostRegistrationSchema>
-
 /**
  * Body of `POST /v1/pairings`. The Host normally supplies the ticket (32 random
  * bytes, base64url); when omitted the node generates one and returns it.
@@ -125,14 +119,10 @@ export const pairingClientSchema = z.object({
   identityKey: identityKeySchema,
 }).strict()
 
-export type PairingClient = z.infer<typeof pairingClientSchema>
-
 export const claimPairingSchema = z.object({
   ticket: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
   client: pairingClientSchema,
 }).strict()
-
-export type ClaimPairing = z.infer<typeof claimPairingSchema>
 
 /** Names a Host may push to `/v1/assets` (path length is bounded separately). */
 export const ASSET_REVISION_PATTERN = /^[A-Za-z0-9._-]{1,64}$/u

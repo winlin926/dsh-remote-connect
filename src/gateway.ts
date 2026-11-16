@@ -148,7 +148,7 @@ export class Gateway {
   onlineIds(): string[] { return [...this.active.keys()] }
   revoke(id: string): void { this.previews.revoke(id); for (const cancel of [...this.active.get(id) ?? []]) cancel(); this.active.delete(id) }
   private device(req: IncomingMessage): Device | undefined { return this.options.pairing.authenticate(cookie(req)) }
-  private cookieHeader(req: IncomingMessage, credential: string, secure: boolean): string {
+  private cookieHeader(credential: string, secure: boolean): string {
     // Trust forwarded protocol only after fixed-domain Host admission; frpc targets this private port.
     // Lax, not Strict: a link opened from another app (a QR scanner, a chat, a home-screen shortcut) is a
     // cross-site navigation, and Strict would leave a paired device looking unpaired. Cross-site requests
@@ -265,7 +265,7 @@ export class Gateway {
           json(res, 200, this.options.pairing.request(String(input.token ?? ''), req.headers['user-agent'] ?? '', req.headers.host, typeof input.model === 'string' ? input.model : undefined, publicRequest ? 'public' : 'lan', publicRequest))
         } else {
           const result = this.options.pairing.claim(String(input.id ?? ''), String(input.key ?? ''))
-          if (result.credential) res.setHeader('set-cookie', this.cookieHeader(req, result.credential, !!this.lanTls || publicRequest))
+          if (result.credential) res.setHeader('set-cookie', this.cookieHeader(result.credential, !!this.lanTls || publicRequest))
           json(res, 200, { state: result.state })
         }
       } catch (error) {
@@ -326,7 +326,7 @@ export class Gateway {
       return
     }
     // Renew the browser expiry along with the durable 30-day idle authorization.
-    res.setHeader('set-cookie', this.cookieHeader(req, cookie(req)!, !!this.lanTls || publicRequest))
+    res.setHeader('set-cookie', this.cookieHeader(cookie(req)!, !!this.lanTls || publicRequest))
     const untrack = this.track(device.id, () => { req.destroy(); res.destroy() }); res.once('close', untrack)
     if (decodeURIComponent(url.pathname) === MANAGE_PATH) {
       if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return }
