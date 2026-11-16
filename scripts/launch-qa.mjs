@@ -39,7 +39,7 @@ if (lstatSync(qaRoot).isSymbolicLink() || realpathSync(qaRoot) !== join(realpath
 const runName = values['run-directory'] ?? 'smoke'
 if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(runName)) throw new Error('--run-directory must be a simple name within .qa')
 const run = join(qaRoot, runName), home = join(run, 'home'), profile = join(home, 'profiles', 'web')
-try { lstatSync(run); throw new Error('The isolated .qa/smoke directory already exists; stop its Host and remove only that directory before starting again.') } catch (error) { if (error.code !== 'ENOENT') throw error }
+try { lstatSync(run); throw new Error(`The isolated .qa/${runName} directory already exists; stop its Host and remove only that directory before starting again.`) } catch (error) { if (error.code !== 'ENOENT') throw error }
 const link = join(profile, 'node_modules', pkg.name)
 let created = false, linked = false
 function cleanup() {

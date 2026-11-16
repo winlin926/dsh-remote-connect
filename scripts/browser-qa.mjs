@@ -107,7 +107,14 @@ if (typeof taskSpace !== 'function') {
     if (bounds.windowState === 'minimized') await task.cdp('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } })
     await page.cdp('Page.bringToFront')
     await page.cdp('Emulation.setDeviceMetricsOverride', { width, height: width === 1280 ? 900 : 844, mobile: width < 560, deviceScaleFactor: 1 })
-    await page.waitForFunction(() => [...document.querySelectorAll('.dsrc-dialog[open]')].every(panel => panel.getAnimations({ subtree: true }).every(animation => animation.playState !== 'running' || !Number.isFinite(animation.effect.getComputedTiming().endTime))), undefined, { timeout: 5000 })
+    const settled = () => page.waitForFunction(() => [...document.querySelectorAll('.dsrc-dialog[open]')].every(panel => panel.getAnimations({ subtree: true }).every(animation => animation.playState !== 'running' || !Number.isFinite(animation.effect.getComputedTiming().endTime))), undefined, { timeout: 5000 })
+    for (let attempt = 0; ; attempt++) {
+      try { await settled(); break }
+      catch (error) {
+        if (attempt === 2) throw error
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    }
     const geometry = await page.evaluate(() => {
       const panel = document.querySelector('.dsrc-dialog[open]'), box = panel?.getBoundingClientRect()
       const close = panel?.querySelector('.dsrc-close'), style = close && getComputedStyle(close)
@@ -121,11 +128,17 @@ if (typeof taskSpace !== 'function') {
     assert.equal(geometry.entries, 1, name + ': duplicate entry')
     assert.ok(geometry.closeContrast >= 4.5, name + ': close button contrast')
     if (!captureWarnings.length) {
-      try { captures.push(await page.screenshot({ path: join(run, name + '.png'), raw: true })) }
-      catch (error) {
-        if (!/captureScreenshot|window is minimized/.test(error.message)) throw error
-        captureWarnings.push({ name, error: error.message })
-        console.warn('Screenshot capture unavailable; remaining captures skipped.')
+      for (let attempt = 0; ; attempt++) {
+        try { captures.push(await page.screenshot({ path: join(run, name + '.png'), raw: true })); break }
+        catch (error) {
+          if (!/captureScreenshot|window is minimized/.test(error.message)) throw error
+          if (attempt === 2) {
+            captureWarnings.push({ name, error: error.message })
+            console.warn('Screenshot capture unavailable; remaining captures skipped.')
+            break
+          }
+          await new Promise(resolve => setTimeout(resolve, 750))
+        }
       }
     }
     results.push(name)
@@ -167,6 +180,8 @@ if (typeof taskSpace !== 'function') {
     await layout(desktop, 'desktop-light')
     await desktop.cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] })
     await layout(desktop, 'desktop-dark')
+    await desktop.cdp('Network.clearBrowserCache')
+    await desktop.cdp('Network.setCacheDisabled', { cacheDisabled: false })
     phone = await task.newPage()
     await phone.cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, mobile: true, deviceScaleFactor: 1 })
     await phone.cdp('Emulation.setTouchEmulationEnabled', { enabled: true })
@@ -280,9 +295,43 @@ if (typeof taskSpace !== 'function') {
     assert.equal((await phone.fetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"action":"status"}' })).status, 403)
     assert.equal((await phone.fetch(new URL(capability).pathname)).status, 404)
     results.push('revocation blocks management and preview immediately')
+    await manage('stop')
+    await manage('preferences', { mode: 'public', publicUrl: 'https://smoke.example.com' })
+    await desktop.evaluate(() => {
+      const details = document.querySelector('.dsrc-preferences')
+      if (details) details.open = false
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    try { await desktop.waitForSelector('.dsrc-nodes', { state: 'visible', timeout: 20000 }) }
+    catch (error) {
+      console.error('NODES-DEBUG', await desktop.evaluate(() => document.querySelector('.dsrc-dialog[open]')?.innerText.slice(0, 600)))
+      throw error
+    }
+    const nodesUi = await desktop.evaluate(() => ({
+      heading: document.querySelector('.dsrc-nodes h3')?.textContent ?? '',
+      empty: document.querySelector('.dsrc-nodes .dsrc-empty')?.textContent ?? '',
+      count: document.querySelectorAll('.dsrc-node').length,
+      addLabel: document.querySelector('.dsrc-node-add .dsrc-field-label')?.textContent ?? '',
+    }))
+    assert.equal(nodesUi.heading, '公网节点', 'node section heading')
+    assert.equal(nodesUi.addLabel, '添加节点', 'node add field label')
+    assert.equal(nodesUi.count, 0, 'isolated run must start without public nodes')
+    assert.match(nodesUi.empty, /还没有公网节点/, 'empty node list hint')
+    await desktop.fill('#dsrc-node-url', 'http://127.0.0.1:1')
+    await desktop.click('.dsrc-node-add button[type="submit"]', { label: '添加非 https 节点' })
+    await desktop.waitForSelector('.dsrc-node-add .dsrc-error', { state: 'visible', timeout: 5000 })
+    assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-node-add .dsrc-error')?.textContent), '公网节点必须使用 https:// 地址。')
+    await desktop.fill('#dsrc-node-url', 'https://127.0.0.1:1')
+    await desktop.click('.dsrc-node-add button[type="submit"]', { label: '添加不可达节点' })
+    await desktop.waitForFunction(() => /无法连接公网节点|探测超时/.test(document.querySelector('.dsrc-panel-message')?.textContent ?? ''), undefined, { timeout: 25000 })
+    assert.equal(await desktop.evaluate(() => document.querySelectorAll('.dsrc-node').length), 0, 'failed detection must not save a node')
+    await desktop.cdp('Page.bringToFront')
+    await layout(desktop, 'desktop-nodes')
+    results.push('public node section rejects non-https and unreachable nodes without saving')
     passed = true
     console.log(JSON.stringify({ passed, results, cacheRuns, browserProcessRestart: 'manual', captureWarnings, screenshots: captures }, null, 2))
   } finally {
+    await manage('preferences', { mode: 'lan', publicUrl: '' }).catch(() => {})
     await manage('stop').catch(() => {})
     const current = (await desktop.cdp('Network.getCookies', { urls: [...managedOrigins] })).cookies
     for (const cookie of current) {
