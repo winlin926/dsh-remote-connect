@@ -1,10 +1,15 @@
 # 自托管公网中继节点（remote-server）
 
 `remote-server/` 是一个可自托管的公网中继节点：它让已配对的 Host（电脑上的 DSH）与手机在
-跨网络时仍能建立加密连接。节点只做三件事——配对登记、控制帧路由、静态资源与 TURN 凭据分发。
+跨网络时仍能建立连接。节点做四件事——公开自己的节点身份、配对登记、控制帧路由、静态资源与
+TURN 凭据分发。
 
-**安全边界一句话：本服务只是中继，不解密任何业务数据；不记录聊天/审批内容；私钥只在 Host
-和手机上，服务端只保存哈希与公钥指纹。**
+**信任边界（务必理解）：HTTPS/WSS 只保护「手机到节点」「主机到节点」这两段传输。节点会终止
+TLS 并代理 HTTP/SSE/WebSocket 转发，节点或隧道运营者可能看到转发的请求与内容；本服务不提供
+端到端加密。本仓库的发行方不托管任何节点。请只把节点交给你信任的运营者。**
+
+**数据边界**：服务端不持有 Host/手机的私钥，不落盘聊天或审批内容，日志对 token、ticket、
+cookie、authorization、identityKey、ciphertext 等字段打码；持久化内容见第 8 节。
 
 ## 1. 前置条件
 
@@ -16,7 +21,7 @@
 | --- | --- | --- |
 | 80 | TCP | ACME HTTP-01 校验与 HTTPS 跳转 |
 | 443 | TCP | HTTPS + WSS `/v1/control` |
-| 3478 | TCP/UDP | TURN（仅启用 relay 的 TURN 能力时需要） |
+| 3478 | TCP/UDP | TURN（0.6.2 不宣告该能力；仅为自建 coturn 实验预留） |
 | 49160-49200 | UDP | TURN 中继端口段 |
 
 - Docker Engine 24+ 与 Compose v2。
@@ -34,8 +39,6 @@ Copy-Item .env.example .env
 - `SITE_ADDRESS`：公网域名，如 `relay.example.com`
 - `PUBLIC_ORIGIN`：`https://` + 同一域名
 - `ACME_EMAIL`：证书通知邮箱
-- `HOST_REGISTRATION_TOKEN`：长随机值，保护 Host 注册接口（生成：
-  `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`）
 - 若启用 TURN：`TURN_URLS`、`TURN_SECRET`、`PUBLIC_IP`、`TURN_REALM`
 
 启动：
@@ -47,45 +50,86 @@ docker compose ps
 
 Caddy 首次启动会向 Let's Encrypt 申请证书（需要 DNS 已生效、80/443 可达），通常几十秒内完成。
 
+**注册默认开放**：`POST /v1/hosts` 不需要注册令牌。节点靠注册限流（同源/同 IP 的频率与并发上限）
+与双端授权保护——注册本身不授予跨主机访问权，只有「手机确认 + 电脑批准 + 指纹一致」才产生设备
+授权。不需要、也不要在 `.env` 里配置任何共享令牌。
+
+**节点身份**：首次启动时，节点在数据目录生成 Ed25519 节点身份并持久保存到
+`/data/node-identity.json`（`DATA_DIR` 即 compose 数据卷内的 `/data`；文件权限 `0600`，原子写）。
+节点在启动时就有身份，不依赖是否已有 Host 注册。**这个文件就是节点的身份私钥**：不要删除、
+不要覆盖、不要提交到 Git 或放进公开备份。丢失或更换它会让节点指纹变化，所有已添加该节点的
+客户端都需要重新确认（见第 5 节）。
+
 ## 3. 健康检查
 
 ```powershell
 curl.exe -sS https://relay.example.com/healthz
+curl.exe -sS https://relay.example.com/v1/config
 curl.exe -sS https://relay.example.com/.well-known/dsh-remote
 ```
 
-`/healthz` 返回 `{"ok":true,"version":"0.6.0"}`。
+`/healthz` 返回 `{"ok":true,"version":"0.6.2"}`。
 
-`/.well-known/dsh-remote` 是统一节点契约，返回形如：
+`/.well-known/dsh-remote` 是 v2 统一节点契约，返回形如：
 
 ```json
-{"protocol":1,"kind":"service","name":"My Public Node","version":"0.6.0","capabilities":["pairing","cache","official-ui","relay"],"hostId":"<43 字符 base64url>","fingerprint":"<32 位小写 hex>"}
+{
+  "protocol": 2,
+  "kind": "service",
+  "name": "My Public Node",
+  "version": "0.6.2",
+  "capabilities": ["pairing", "cache", "official-ui"],
+  "node": {
+    "id": "<43 字符 base64url>",
+    "fingerprint": "<32 位小写 hex>",
+    "publicKey": "<Ed25519 SPKI DER 的 base64url>"
+  }
+}
 ```
 
-尚未有 Host 注册时，`hostId` 为 `A`×43、`fingerprint` 为 `0`×32 的占位值（格式合法、明显为空）。
+服务节点**不会**返回扁平的 `hostId`/`fingerprint`：一个节点可以被多台 Host 共用，扁平字段无法
+如实表达。`node.id` = `base64url(sha256(SPKI DER))`，`node.fingerprint` = 同一摘要前 16 字节的
+小写十六进制；界面上展示为 8 组 4 位大写，如 `0E2E-A5C3-9BEC-BE17-4B29-8006-E0B1-4EA0`。
+`/v1/config` 返回公开配置（协议、类型、名称、版本、能力），不含任何密钥。
 
 ## 4. 接入 Host 与手机
 
-1. 在 Host（电脑上的 DSH）里把节点地址设为 `https://relay.example.com`，填入
-   `HOST_REGISTRATION_TOKEN`（若配置了）后注册；Host 会收到一次性凭证，只保存在本机。
-2. Host 生成配对二维码（`https://relay.example.com/pair#v=1&ticket=...&host=...&key=...`）。
-3. 手机扫码打开 `/pair` 落地页，页面展示 Host 名称与 8 位比较码；Host 端同时显示同一比较码。
-4. 手机点「确认」，Host 端本地点「批准」——**两个独立决定都完成**后才签发设备 cookie 并建立关系。
-   任一端拒绝、票据过期（≤5 分钟）或已被使用都会失败关闭。
+1. 在 Host（电脑上的 DSH）的公网节点列表里填 `https://relay.example.com` 并添加。插件会请求
+   发现文档，显示节点名称、类型（自托管服务）、协议版本（`v2`）与节点指纹（8 组 4 位大写）。
+   核对指纹与第 3 节一致后保存。
+2. Host 生成配对二维码（`https://relay.example.com/#v=1&ticket=...&key=...`）。
+3. 手机扫码打开 `/pair` 落地页，页面展示节点名称、节点类型与**目标主机指纹**（8 组 4 位大写）。
+   页面不再显示 8 位比较码。
+4. 手机点「确认」，Host 端本地点「批准」——**两个独立决定都完成、且两端显示的指纹一致**后才
+   签发设备 cookie 并建立关系。任一端拒绝、票据过期（≤5 分钟）或已被使用都会失败关闭。
+
+**多 Host 共用同一节点**：同一节点可以注册多台 Host，节点指纹不变；各 Host 的设备、配对关系、
+静态资产与隧道互相隔离，任何 Host 的凭据都不能读写其它 Host 的资源或隧道。
 
 ## 5. 备份与恢复
 
-数据都在 SQLite 单文件里（compose 卷 `data` → 容器 `/data/remote-server.sqlite`）。
+数据卷里有两个必须一起备份的文件（compose 卷 `data` → 容器 `/data`）：
+
+| 文件 | 内容 | 丢失后果 |
+| --- | --- | --- |
+| `/data/node-identity.json` | 节点身份私钥与公钥（`0600`） | 节点指纹变化；所有已添加该节点的客户端都需要重新确认，设备可能需要重新配对 |
+| `/data/remote-server.sqlite` | Host 注册、配对关系、设备会话、票据、静态资源元数据 | 所有注册与配对失效，需重新注册/配对 |
 
 ```powershell
 # 备份（在线一致性由 SQLite WAL 保证，建议低峰期）
+docker compose cp remote-server:/data/node-identity.json .\backup-node-identity.json
 docker compose cp remote-server:/data/remote-server.sqlite .\backup-remote-server.sqlite
-# 或整卷快照
+# 或整卷快照（同时包含两者）
 docker run --rm -v dsh-remote-server_data:/data -v ${PWD}:/backup alpine tar czf /backup/data.tgz -C /data .
 ```
 
-恢复：停服务 → 把备份文件放回卷内 `/data/remote-server.sqlite`（同时删除 `-wal`/`-shm`）→ 启服务。
-数据库里的凭证与配对票据只有 SHA-256 哈希，泄露备份不等于泄露可用凭证。
+恢复：停服务 → 把两个文件放回卷内 `/data`（同时删除 SQLite 的 `-wal`/`-shm`）→ 启服务。
+**两个文件必须成对恢复**：只恢复数据库会让节点身份与已注册数据不匹配，只恢复身份文件会丢掉
+注册与配对数据。
+
+数据库里的凭证与配对票据只有 SHA-256 哈希，泄露备份不等于泄露可用凭证；但
+`node-identity.json` 里的私钥泄露等于节点身份可被冒用，需按安全事件处理：更换身份（删除该文件
+后重启会生成新身份）并让所有客户端重新确认。备份文件不要放进公开仓库或公开对象存储。
 
 ## 6. 升级
 
@@ -95,7 +139,8 @@ cd remote-server
 docker compose up -d --build
 ```
 
-数据库迁移是版本表 + 幂等 `CREATE TABLE IF NOT EXISTS`，重启时自动执行，无需手工迁移脚本。
+数据卷保留 `node-identity.json`，**升级不改变节点指纹**。数据库迁移是版本表 + 幂等
+`CREATE TABLE IF NOT EXISTS`，重启时自动执行，无需手工迁移脚本。
 
 ## 7. 撤销设备 / 关闭节点
 
@@ -109,13 +154,18 @@ docker compose up -d --build
 
 ## 8. 安全说明（如实）
 
-- 服务端**不持有**任何私钥，**不解密** Noise/业务密文，**不落盘**中继数据，**不记录**聊天/审批内容；
+- **节点能看到转发内容**：节点终止 TLS 后以明文代理 HTTP/SSE/WebSocket 流量，节点或隧道运营者
+  可能看到转发给本机的请求与内容；不提供端到端加密。不要把节点运营者视为不可见内容的保护者。
+- 服务端**不持有** Host/手机的私钥，**不落盘**聊天或审批内容，**不记录**聊天/审批内容；
   日志对 token、ticket、cookie、authorization、identityKey、ciphertext 等字段一律打码。
-- 持久化的只有：Host 公钥及其派生 `hostId`/`fingerprint`、Host 凭证哈希、配对票据哈希、
-  设备身份公钥、设备会话哈希、配对关系、静态资源内容。
+- 持久化的只有：节点身份私钥（`node-identity.json`，仅本机）、Host 公钥及其派生
+  `hostId`/`fingerprint`、Host 凭证哈希、配对票据哈希、设备身份公钥、设备会话哈希、配对关系、
+  静态资源内容。
 - 传输安全由 Caddy 终止 TLS；服务端只在 `TRUST_PROXY=1` 时信任 `X-Forwarded-*`。
 - 所有写接口校验 Origin，设备 cookie 为 `Secure; HttpOnly; SameSite=Strict` 并绑定 HTTPS origin。
 - 有多层限流（HTTP、注册、配对、升级、控制帧），帧大小上限控制帧 64 KiB / 中继帧 1 MiB，另有背压与空闲超时。
+  注册默认开放由这些限流与双端授权共同兜底；若需要限制来源，请在 Caddy/反向代理层做 IP 白名单，
+  不要引入应用内共享令牌。
 
 ## 9. 已知限制
 
@@ -123,7 +173,8 @@ docker compose up -d --build
   当前不支持水平扩展。
 - 本节点不做 WebRTC：`hello.ack` 返回 `webrtcEnabled:false`，连接一律走 WSS 中继；LAN/P2P 由 Host 与手机协商，
   失败时回退中继。
-- 未配置 TURN 时 `/v1/turn-credentials` 返回 `501 TURN_NOT_CONFIGURED`，节点能力里也不含 `turn`。
+- TURN 保留给将来的协议版本，v2（0.6.2）的发现文档不宣告 `relay`/`turn`；未配置 TURN 时
+  `/v1/turn-credentials` 返回 `501 TURN_NOT_CONFIGURED`。
 - 本仓库交付环境未实测真实 TLS 证书签发与真实 coturn 连通性（仅单测覆盖凭据算法）；上线前请按第 3 节验收。
 - 设备身份统一用 Base64URL(SPKI DER)（与 `src/host-identity.ts` 一致）：Host 与手机提交的都是 SPKI DER 公钥，
   节点只做 DER 合法性校验与 sha256 推导，不持有、不上传任何私钥。

@@ -24,6 +24,9 @@ services:
       # Caddy terminates TLS and forwards the original origin/host.
       TRUST_PROXY: "1"
     volumes:
+      # /data holds remote-server.sqlite AND node-identity.json (mode 0600).
+      # Keep the whole volume together: losing the identity changes the node
+      # fingerprint and forces every paired client to confirm the node again.
       - data:/data
     expose:
       - "8787"
@@ -44,8 +47,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
-  # Optional TURN relay. Requires PUBLIC_IP and TURN_SECRET in .env; the server
-  # issues matching coturn REST credentials from /v1/turn-credentials.
+  # Optional TURN relay reserved for future versions. v2 (0.6.2) does not
+  # advertise relay/turn in the discovery document yet.
   coturn:
     image: coturn/coturn:4.6.3
     profiles:

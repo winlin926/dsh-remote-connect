@@ -33,6 +33,7 @@
 - 日常 54 插件三段缓存（桌面 Chromium，真实磁盘缓存）：冷启动 7373 ms / 90 请求 / 14,656,593 字节；同页重访 4236 ms / 47 请求 / 699,746 字节（4.8%，插件捆包全部命中、0 字节）；关页重开 4797 ms / 86 请求 / 3,243,349 字节（22.1%，7.8 MB 与 1.4 MB 捆包仍从磁盘缓存复用）；三次 `boot-reports` 均 `phase=ready result=ready errors=0 completed=3`。残余为 `dsh-genui` 两个 vendor 资源无缓存头（909,910 + 177,738 字节/次）与宿主动态接口 JSON；完整报告见 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.1\lan-cache-report.md`。
 - `package-manifest.json` 式的旧包清单未再生成；`scripts/check-package.mjs` 直接校验 `.tgz`，确认入口文件与本次构建逐字节相同、包内无 `.qa`、测试与开发文件。
 - 边界：自托管节点的端到端链路只在本机进程内假节点与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；Docker 镜像未在本机 `build`/`up`；Coturn 临时凭据与真实 TLS 未实测；隔离宿主的浏览器验收已用真实 Chromium 渲染，但截图因 CDP 超时未保存，视觉复核只有布局断言。
+- v2 本轮：公网节点契约并入 `docs/public-node.md`（`protocol: 2`，删除冻结备忘录）并同步 `docs/self-host.md`、`remote-server/README.md`、根 `README.md`、`.env.example`；本机无 Docker，Compose/Dockerfile/Caddyfile 只做静态核对；`scripts/verify-node-v2.mjs` 已在本工作树（未合并 B 的 v1 服务端）运行并按预期失败，浏览器 v2 断言需在 A 合并后执行。
 
 - `pnpm test`：10 个文件、129 个测试通过；`pnpm typecheck`、`pnpm build` 通过。
 - 局域网 TLS 覆盖证书到期/SAN/私钥、可信 WSS/SSE、Secure Cookie、规范 Host/origin、热重载原子性及不降级；browser transport 覆盖官方启动成功/失败状态、加载错误与凭据净化。
