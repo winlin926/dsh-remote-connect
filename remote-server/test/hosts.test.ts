@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import {
   api,
+  completePairing,
   hostIdentityFromKey,
   hostRegistration,
   randomDeviceId,
@@ -181,6 +182,106 @@ test('host registration is rate limited', async () => {
     }
     assert.ok(statuses.includes(429), `expected a 429 in ${statuses.join(',')}`)
     assert.ok(statuses.filter(status => status === 201).length <= 10)
+  } finally {
+    await node.stop()
+  }
+})
+
+test('DELETE /v1/hosts/:hostId unregisters the caller and purges its data', async () => {
+  const node = await startNode()
+  try {
+    const paired = await completePairing(node)
+    const hostId = paired.host.host.hostId
+    const asset = await api(node.baseUrl, 'PUT', `/v1/assets?rev=r1&path=${encodeURIComponent('/index.html')}`, {
+      token: paired.host.credential,
+      rawBody: '<!doctype html><title>t</title>',
+      contentType: 'text/html',
+    })
+    assert.equal(asset.status, 201)
+
+    const before: any = node.app.db
+      .prepare('SELECT (SELECT COUNT(*) FROM relationships) relationships, (SELECT COUNT(*) FROM device_sessions) sessions, (SELECT COUNT(*) FROM assets) assets')
+      .get()
+    assert.ok(Number(before.relationships) >= 1, 'pairing must leave a relationship behind')
+    assert.ok(Number(before.assets) >= 1, 'the asset must be stored before the deletion')
+
+    const removed = await api(node.baseUrl, 'DELETE', `/v1/hosts/${hostId}`, { token: paired.host.credential })
+    assert.equal(removed.status, 204)
+
+    const counts: any = node.app.db
+      .prepare(
+        `SELECT (SELECT COUNT(*) FROM hosts) hosts, (SELECT COUNT(*) FROM devices) devices,
+                (SELECT COUNT(*) FROM relationships) relationships, (SELECT COUNT(*) FROM device_sessions) sessions,
+                (SELECT COUNT(*) FROM pairing_tickets) tickets, (SELECT COUNT(*) FROM pairing_requests) requests,
+                (SELECT COUNT(*) FROM assets) assets`,
+      )
+      .get()
+    for (const table of ['hosts', 'devices', 'relationships', 'sessions', 'tickets', 'requests', 'assets'] as const) {
+      assert.equal(Number(counts[table]), 0, `${table} must be empty after the host unregisters`)
+    }
+  } finally {
+    await node.stop()
+  }
+})
+
+test('a host may only unregister itself', async () => {
+  const node = await startNode()
+  try {
+    const first = await registerHost(node, hostRegistration())
+    const second = await registerHost(node, hostRegistration())
+    const foreign = await api(node.baseUrl, 'DELETE', `/v1/hosts/${first.host.hostId}`, { token: second.credential })
+    assert.equal(foreign.status, 403)
+    assert.equal(foreign.json.error.code, 'FORBIDDEN')
+    assert.ok(node.app.db.prepare('SELECT 1 FROM hosts WHERE host_id = ?').get(first.host.hostId), 'the target host must survive')
+  } finally {
+    await node.stop()
+  }
+})
+
+test('unregistering an unknown host answers 404', async () => {
+  const node = await startNode()
+  try {
+    const host = await registerHost(node, hostRegistration())
+    const missing = await api(node.baseUrl, 'DELETE', `/v1/hosts/${'B'.repeat(43)}`, { token: host.credential })
+    assert.equal(missing.status, 404)
+    assert.equal(missing.json.error.code, 'HOST_NOT_FOUND')
+  } finally {
+    await node.stop()
+  }
+})
+
+test('unregistering requires a Host credential, not a device session', async () => {
+  const node = await startNode()
+  try {
+    const paired = await completePairing(node)
+    const path = `/v1/hosts/${paired.host.host.hostId}`
+    const anonymous = await api(node.baseUrl, 'DELETE', path)
+    assert.equal(anonymous.status, 401)
+    assert.equal(anonymous.json.error.code, 'AUTH_REQUIRED')
+
+    const cookieOnly = await api(node.baseUrl, 'DELETE', path, { cookie: paired.cookie })
+    assert.equal(cookieOnly.status, 401)
+    assert.equal(cookieOnly.json.error.code, 'AUTH_REQUIRED')
+  } finally {
+    await node.stop()
+  }
+})
+
+test('the same identity may register again after unregistering', async () => {
+  const node = await startNode()
+  try {
+    const identityKey = randomIdentityKey()
+    const registration = hostRegistration({ identityKey })
+    const first = await api(node.baseUrl, 'POST', '/v1/hosts', { body: registration })
+    assert.equal(first.status, 201)
+
+    const removed = await api(node.baseUrl, 'DELETE', `/v1/hosts/${first.json.host.hostId}`, { token: first.json.credential })
+    assert.equal(removed.status, 204)
+
+    const again = await api(node.baseUrl, 'POST', '/v1/hosts', { body: registration })
+    assert.equal(again.status, 201, 'a deleted registration must not block the same identity')
+    assert.equal(again.json.host.hostId, first.json.host.hostId)
+    assert.notEqual(again.json.credential, first.json.credential)
   } finally {
     await node.stop()
   }

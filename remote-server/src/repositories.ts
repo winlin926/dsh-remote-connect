@@ -40,6 +40,17 @@ export interface PairingRequestRow {
   cookie_issued_at: number | null
 }
 
+/** Rows removed when one Host is deleted; zero for tables that held nothing for it. */
+export interface HostDeletionCounts {
+  hosts: number
+  devices: number
+  relationships: number
+  sessions: number
+  tickets: number
+  requests: number
+  assets: number
+}
+
 export interface DeviceRow {
   device_id: string
   name: string
@@ -142,6 +153,41 @@ export class Repositories {
 
   touchHost(hostId: string, now: number): void {
     this.db.prepare('UPDATE hosts SET last_seen_at = ? WHERE host_id = ?').run(now, hostId)
+  }
+
+  /**
+   * Delete one Host and every row scoped to it: pairing material, assets and the authorizations it
+   * issued, plus the sessions of the devices that were paired with it. A device that still has a
+   * relationship with another Host is kept.
+   */
+  deleteHost(hostId: string): HostDeletionCounts {
+    return this.transaction(() => {
+      const devices = this.db
+        .prepare('SELECT client_device_id FROM relationships WHERE host_id = ?')
+        .all(hostId) as unknown as Array<{ client_device_id: string }>
+      let sessions = 0
+      for (const device of devices) {
+        sessions += Number(
+          this.db.prepare('DELETE FROM device_sessions WHERE device_id = ?').run(device.client_device_id).changes,
+        )
+      }
+      const relationships = Number(this.db.prepare('DELETE FROM relationships WHERE host_id = ?').run(hostId).changes)
+      let removedDevices = 0
+      for (const device of devices) {
+        removedDevices += Number(
+          this.db
+            .prepare(
+              'DELETE FROM devices WHERE device_id = ? AND NOT EXISTS (SELECT 1 FROM relationships WHERE client_device_id = ?)',
+            )
+            .run(device.client_device_id, device.client_device_id).changes,
+        )
+      }
+      const requests = Number(this.db.prepare('DELETE FROM pairing_requests WHERE host_id = ?').run(hostId).changes)
+      const tickets = Number(this.db.prepare('DELETE FROM pairing_tickets WHERE host_id = ?').run(hostId).changes)
+      const assets = Number(this.db.prepare('DELETE FROM assets WHERE host_id = ?').run(hostId).changes)
+      const hosts = Number(this.db.prepare('DELETE FROM hosts WHERE host_id = ?').run(hostId).changes)
+      return { hosts, devices: removedDevices, relationships, sessions, tickets, requests, assets }
+    })
   }
 
   // -------------------------------------------------------------- tickets

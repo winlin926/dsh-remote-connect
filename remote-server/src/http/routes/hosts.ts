@@ -9,7 +9,7 @@ import {
 } from '../../identity.js'
 import type { AppServices } from '../../services.js'
 import type { RouteContext, Router } from '../router.js'
-import { readJsonBody, sendJson } from '../util.js'
+import { baseHeaders, readJsonBody, sendJson } from '../util.js'
 
 const REGISTRATION_TOKEN_HEADER = 'x-host-registration-token'
 
@@ -114,5 +114,19 @@ export function registerHostRoutes(router: Router, services: AppServices): void 
     hub.closeClientSessions(deviceId)
     logger.info({ event: 'relationship.revoked', hostId, deviceId })
     sendJson(ctx.res, 200, { ok: true, hostId, deviceId }, { head: ctx.head })
+  })
+
+  // A Host may delete its own registration. This is the counterpart of "remove this computer" in the
+  // plugin: without it the node would keep the row and reject a later registration of the same host.
+  router.add('DELETE', '/v1/hosts/:hostId', async ctx => {
+    const caller = auth.authenticateHostRequest(ctx.req)
+    const hostId = ctx.params.hostId ?? ''
+    const target = repos.findHostById(hostId)
+    if (!target) throw ApiError.notFound('HOST_NOT_FOUND', 'The Host is not registered on this node.')
+    if (caller.host_id !== hostId) throw ApiError.forbidden('FORBIDDEN', 'A Host may only unregister itself.')
+    const deleted = repos.deleteHost(hostId)
+    logger.info({ event: 'host.unregistered', hostId, ...deleted })
+    ctx.res.writeHead(204, baseHeaders())
+    ctx.res.end()
   })
 }

@@ -72,6 +72,7 @@ Host ───HTTPS/WSS──▶                                              �
 | POST | `/v1/pairings/:requestId/reject` | `X-Pairing-Token` | 手机拒绝（`410 PAIRING_REJECTED` 处理后续操作） |
 | GET | `/v1/hosts` | Device cookie | 只列当前 cookie 授权过且未撤销的 Host |
 | DELETE | `/v1/hosts/:hostId/devices/:deviceId` | Device cookie | 撤销关系（仅限本设备），关闭该关系的活动连接，Host 收到 `device.revoked` |
+| DELETE | `/v1/hosts/:hostId` | Host Bearer | Host 注销自己的注册：级联删除该 Host 的设备授权、设备会话、配对票据/请求与静态资源，再删除 hosts 行，返回 `204`；`hostId` 不存在返回 `404 HOST_NOT_FOUND`，凭据与路径不一致返回 `403` |
 | PUT | `/v1/assets?path=...&rev=...` | Host Bearer | 推送/覆盖资源（body 为原始字节，≤`ASSET_MAX_BYTES`），返回 `201 {ok,path,revision,etag,size}` |
 | GET/HEAD | `/assets/:hid/:rev/*` | 无 | 按 `hid`+`rev` 隔离的静态资源；普通资源 `immutable`+`ETag`+304，HTML `no-store`、清单类 `no-cache` |
 | GET | `/v1/turn-credentials` | Device cookie | coturn REST HMAC 临时凭据；未配置 TURN 返回 `501 TURN_NOT_CONFIGURED` |
@@ -114,13 +115,17 @@ npm test
 node dist/remote-server/src/main.js   # 可用 PORT/DATA_DIR 临时指定
 ```
 
-`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 7 个文件 51 个用例。
+`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 8 个文件 71 个用例。
+
+## 故障排查
+
+- 本机凭据丢失、节点仍保留该 Host 注册（重新注册返回 `409 HOST_ALREADY_REGISTERED`）：在 `remote-server/` 目录运行 `npm run admin:reset -- <hostId>`（即 `node dist/remote-server/src/tools/reset-host.js <hostId>`），它会用同一 `DATA_DIR` 直接打开 SQLite 删除该 Host 及级联数据并打印删除行数。Host 正常运行时可改用 `DELETE /v1/hosts/:hostId`（Host Bearer）自助注销。
 
 ## 目录
 
 ```
 remote-server/
-  src/            服务端源码（app、http、wss、db、pairing、assets、turn、identity）
+  src/            服务端源码（app、http、wss、db、pairing、assets、turn、identity、tools/reset-host 运维工具）
   test/           node --test 集成测试（对编译产物运行）
   web/            最小落地页（配对入口 /pair）
   Dockerfile      多阶段构建（node:24-alpine）

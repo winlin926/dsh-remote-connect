@@ -14,7 +14,7 @@ import { Gateway, MANAGE_PATH, REMOTE_MARK } from './gateway.js'
 import { FRPC_CERTIFICATE_DIR, PUBLIC_PORT, PublicAccess } from './public-access.js'
 import { normalizePublicUrl } from './public-url-settings.js'
 import { PublicNodeConfig, type PublicNodeRecord } from './public-node-config.js'
-import { ServiceNode, forgetServiceNode } from './service-node.js'
+import { ServiceNode, forgetServiceNode, unregisterServiceNode } from './service-node.js'
 import { body, isLoopback, json, sameOrigin } from './http.js'
 import { bootScript } from './boot.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
@@ -249,6 +249,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // A service node's QR is a one-time ticket the node signs for this Host; it expires on its own.
     let serviceQr: { url: string; expiresAt: number } | undefined
     let serviceQrInflight: Promise<void> | undefined
+    // Set when removing a service node could not delete the Host registration on the node: the local
+    // record is gone, so the panel must still learn that the node may need a manual reset.
+    let serviceUnregisterNotice: { origin: string; message: string } | undefined
     const currentNode = (): PublicNodeRecord | undefined => {
       const current = publicNodes?.current
       return current ? publicNodes?.list().find(record => record.id === current) : undefined
@@ -296,7 +299,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       const node = new ServiceNode({
         origin: wanted, hostId: hostIdentity.hostId, identityKey: hostIdentity.publicKey, clientVersion: NODE_VERSION,
         upstreamPort, upstreamCookie: () => credential, storage, log: logServiceNode,
-        onConnected: () => { void ensureServiceQr() },
+        onConnected: () => { serviceUnregisterNotice = undefined; void ensureServiceQr() },
       })
       serviceNode = node
       // start() reports failures through status().lastError and keeps retrying; it never rejects.
@@ -316,9 +319,23 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       const active = new Set(gateway?.onlineIds() ?? [])
       const devices = pairing.list()
       const publicNodeList = publicNodes?.list() ?? []
+      const notice = serviceUnregisterNotice && serviceUnregisterNotice.origin === record?.url ? serviceUnregisterNotice : undefined
+      const serviceLastError = tunnel?.lastError ?? notice?.message
       const service = record?.kind === 'service'
-        ? { origin: record.url, connected: tunnel?.connected ?? false, ...(tunnel?.lastError ? { lastError: tunnel.lastError } : {}), pendingPairings: tunnel?.pendingPairings ?? [] }
-        : null
+        ? {
+            origin: record.url,
+            connected: tunnel?.connected ?? false,
+            ...(serviceLastError ? { lastError: serviceLastError } : {}),
+            pendingPairings: tunnel?.pendingPairings ?? [],
+          }
+        : record === undefined && serviceUnregisterNotice
+          ? {
+              origin: serviceUnregisterNotice.origin,
+              connected: false,
+              lastError: serviceUnregisterNotice.message,
+              pendingPairings: [],
+            }
+          : null
       // The tunnel is the public entry for a service node: report connecting until it is up, but never
       // let its failure become the plugin's error — LAN fallback and device access stay independent.
       const phase = enabled && activeMode === 'public' && record?.kind === 'service'
@@ -566,6 +583,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
             protocol: detected.node.protocol, capabilities: detected.node.capabilities, hostId: detected.node.hostId,
             fingerprint: detected.node.fingerprint, pending: false,
           })
+          if (serviceUnregisterNotice?.origin === record.url) serviceUnregisterNotice = undefined
           return { ok: true, node: record }
         }
         case 'checkPublicNode': {
@@ -608,17 +626,37 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         case 'removePublicNode': {
           const store = nodeStore()
           const id = String(input.id ?? '')
+          const record = store.list().find(item => item.id === id)
           const removed = store.remove(id)
           if (!removed) throw new Error('公网节点不存在。')
-          if (serviceNode?.status().origin === removed.origin) {
-            const current = serviceNode
-            serviceNode = undefined
-            await current.stop()
+          if (record?.kind === 'service') {
+            // The node keeps its Host row until the Host deletes it; doing that before dropping the
+            // local credential is what lets a later re-add register instead of hitting a 409.
+            serviceUnregisterNotice = undefined
+            const live = serviceNode?.status().origin === removed.origin ? serviceNode : undefined
+            if (live) { serviceNode = undefined; serviceQr = undefined; await live.stop() }
+            try {
+              if (live) await live.unregister()
+              else await unregisterServiceNode(storage, removed.origin, { hostId: hostIdentity.hostId })
+              logServiceNode('service-node-unregister', { origin: removed.origin, hostId: hostIdentity.hostId })
+            } catch (failure) {
+              const reason = failure instanceof Error && failure.message ? failure.message : '撤销节点注册失败。'
+              serviceUnregisterNotice = {
+                origin: removed.origin,
+                message: `节点上的主机注册可能仍在（${reason}）重新添加前需要在该节点上重置。`,
+              }
+              logServiceNode('service-node-unregister-failed', { origin: removed.origin, hostId: hostIdentity.hostId, message: reason })
+            }
+            // The local record is gone either way; the notice above explains a failed node cleanup.
+            if (live) await live.forget(removed.origin)
+            else await forgetServiceNode(storage, removed.origin)
+          } else if (serviceNode) {
+            // The live tunnel instance also holds the credentials in memory; purge it there so a later
+            // lastConnectedAt save cannot write the removed node back to disk.
+            await serviceNode.forget(removed.origin)
+          } else {
+            await forgetServiceNode(storage, removed.origin)
           }
-          // The live tunnel instance also holds the credentials in memory; purge it there so a later
-          // lastConnectedAt save cannot write the removed node back to disk.
-          if (serviceNode) await serviceNode.forget(removed.origin)
-          else await forgetServiceNode(storage, removed.origin)
           // Authorizations issued through this node are scoped to its host; every other entry stays.
           let hosts: string[] = []
           try { const origin = new URL(removed.origin); hosts = [origin.host.toLowerCase(), origin.hostname.toLowerCase()] } catch { hosts = [] }

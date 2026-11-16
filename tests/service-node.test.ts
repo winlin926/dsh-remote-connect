@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
 import { identityOfPublicKey } from '../src/host-identity.js'
-import { SERVICE_NODES_FILE, ServiceNode, type ServiceNodeOptions } from '../src/service-node.js'
+import { SERVICE_NODES_FILE, ServiceNode, unregisterServiceNode, type ServiceNodeOptions } from '../src/service-node.js'
 import { TUNNEL_FRAME_PAYLOAD_MAX, TUNNEL_PATH, decodeTunnelFrame, encodeTunnelFrame, type TunnelFrame } from '../src/remote/tunnel-protocol.js'
 
 const cleanups: Array<() => Promise<unknown> | void> = []
@@ -78,12 +78,15 @@ class TunnelPeer {
 interface Registration { authorization: string | undefined; body: Record<string, unknown> }
 interface RegistrationAnswer { status: number; json?: unknown }
 interface Pairing { authorization: string | undefined; body: Record<string, unknown> }
+interface Unregistration { authorization: string | undefined; method: string; path: string }
 
 interface FakeNodeOptions {
   /** Answer for `POST /v1/hosts`; the default echoes the requested deviceId back as the host id. */
   register?: (body: Record<string, unknown>, attempt: number) => RegistrationAnswer
   /** Answer for `POST /v1/pairings`; the default issues a fresh ticket for this Host. */
   pairing?: (body: Record<string, unknown>, attempt: number) => RegistrationAnswer
+  /** Answer for `DELETE /v1/hosts/:hostId`; the default forgets the Host with HTTP 204. */
+  unregister?: (attempt: number) => RegistrationAnswer
   /** Answer for `GET /v1/tunnel`; false refuses the credential with HTTP 401. */
   authorize?: (req: IncomingMessage) => boolean
   tunnel?: (peer: TunnelPeer, index: number) => void
@@ -92,10 +95,18 @@ interface FakeNodeOptions {
 async function startFakeNode(options: FakeNodeOptions = {}) {
   const registrations: Registration[] = []
   const pairings: Pairing[] = []
+  const unregistrations: Unregistration[] = []
   const tunnels: TunnelPeer[] = []
   let refusals = 0
   const sockets = new Set<WebSocket>()
   const server = createServer((req, res) => {
+    if (req.method === 'DELETE' && req.url?.startsWith('/v1/hosts/')) {
+      unregistrations.push({ authorization: req.headers.authorization, method: 'DELETE', path: req.url })
+      const answer = options.unregister?.(unregistrations.length) ?? { status: 204 }
+      if (answer.json === undefined) { res.writeHead(answer.status); res.end() }
+      else { res.writeHead(answer.status, { 'content-type': 'application/json' }); res.end(JSON.stringify(answer.json)) }
+      return
+    }
     if (req.method === 'POST' && req.url === '/v1/hosts') {
       const chunks: Buffer[] = []
       req.on('data', chunk => chunks.push(toBuffer(chunk)))
@@ -155,6 +166,7 @@ async function startFakeNode(options: FakeNodeOptions = {}) {
     origin: `http://127.0.0.1:${address.port}`,
     registrations,
     pairings,
+    unregistrations,
     tunnels,
     refusals: () => refusals,
     waitTunnel: (count = 1, timeoutMs = 4000) => waitFor(() => tunnels[count - 1], `第 ${count} 条隧道`, timeoutMs),
@@ -564,5 +576,59 @@ describe('service node tunnel', () => {
 
     await expect(fixture.node.issueTicket()).rejects.toThrow('节点返回的配对票据格式不正确。')
     expect(fixture.node.status().lastError).toBe('节点返回的配对票据格式不正确。')
+  })
+
+  it('deletes this Host registration on the node when unregistering', async () => {
+    const storage = await folder()
+    const fake = await startFakeNode()
+    const upstream = await startUpstream()
+    const fixture = serviceNode(fake.origin, storage, upstream.port)
+    await fixture.start()
+    await waitFor(() => fixture.node.status().connected, '隧道已连接')
+
+    await fixture.node.unregister()
+    expect(fake.unregistrations).toHaveLength(1)
+    expect(fake.unregistrations[0]?.method).toBe('DELETE')
+    expect(fake.unregistrations[0]?.authorization).toBe('Bearer credential-1')
+    expect(fake.unregistrations[0]?.path).toBe(`/v1/hosts/${fixture.identity.hostId}`)
+  })
+
+  it('treats 404 as already unregistered and reports every other refusal', async () => {
+    const upstream = await startUpstream()
+    const gone = await startFakeNode({ unregister: () => ({ status: 404 }) })
+    const goneFixture = serviceNode(gone.origin, await folder(), upstream.port)
+    await goneFixture.start()
+    await waitFor(() => goneFixture.node.status().connected, '隧道已连接')
+    await expect(goneFixture.node.unregister()).resolves.toBeUndefined()
+    expect(gone.unregistrations).toHaveLength(1)
+    await goneFixture.node.stop()
+
+    const refusing = await startFakeNode({ unregister: () => ({ status: 500 }) })
+    const refusingFixture = serviceNode(refusing.origin, await folder(), upstream.port)
+    await refusingFixture.start()
+    await waitFor(() => refusingFixture.node.status().connected, '隧道已连接')
+    await expect(refusingFixture.node.unregister()).rejects.toThrow('节点没有撤销主机注册（HTTP 500），节点上的注册可能仍在。')
+  })
+
+  it('unregisters a stored node without a running tunnel', async () => {
+    const storage = await folder()
+    const fake = await startFakeNode({ unregister: () => ({ status: 404 }) })
+    const file = join(storage, SERVICE_NODES_FILE)
+    writeFileSync(file, JSON.stringify({ version: 1, nodes: { [fake.origin]: { credential: 'stored-credential', hostId: 'A'.repeat(43), registeredAt: 1, lastConnectedAt: null } } }), { mode: 0o600 })
+
+    // A credential saved for another identity must not delete this Host's registration.
+    await unregisterServiceNode(storage, fake.origin, { hostId: 'B'.repeat(43) })
+    expect(fake.unregistrations).toHaveLength(0)
+    expect(JSON.parse(await readFile(file, 'utf8')).nodes[fake.origin]?.credential).toBe('stored-credential')
+
+    await unregisterServiceNode(storage, fake.origin, { hostId: 'A'.repeat(43) })
+    expect(fake.unregistrations).toHaveLength(1)
+    expect(fake.unregistrations[0]?.authorization).toBe('Bearer stored-credential')
+    expect(fake.unregistrations[0]?.path).toBe(`/v1/hosts/${'A'.repeat(43)}`)
+    expect(JSON.parse(await readFile(file, 'utf8')).nodes[fake.origin]).toBeUndefined()
+
+    // Nothing is saved any more, so a second call is a no-op.
+    await unregisterServiceNode(storage, fake.origin)
+    expect(fake.unregistrations).toHaveLength(1)
   })
 })

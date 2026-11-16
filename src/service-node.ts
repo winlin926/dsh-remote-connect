@@ -213,6 +213,55 @@ export async function forgetServiceNode(storage: string, origin: string): Promis
   await writeNodes(file, nodes)
 }
 
+/**
+ * Delete this Host's registration on the node. 204 means the node removed it and 404 means it was
+ * already gone; every other answer (or a network failure) leaves the registration behind and is
+ * reported to the caller so the panel can explain what is still there.
+ */
+async function deleteHostRegistration(origin: string, hostId: string, credential: string): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${origin}/v1/hosts/${encodeURIComponent(hostId)}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${credential}` },
+      signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
+    })
+  } catch (failure) {
+    const code = (failure as NodeJS.ErrnoException).code
+    throw new ServiceNodeError(code ? `无法连接服务节点以撤销主机注册（${code}）。` : '无法连接服务节点以撤销主机注册。')
+  }
+  if (response.status === 204 || response.status === 404) {
+    response.body?.cancel().catch(() => undefined)
+    return
+  }
+  response.body?.cancel().catch(() => undefined)
+  const message = response.status === 401 || response.status === 403
+    ? `节点拒绝了撤销主机注册（HTTP ${response.status}），节点上的注册可能仍在。`
+    : `节点没有撤销主机注册（HTTP ${response.status}），节点上的注册可能仍在。`
+  throw new ServiceNodeError(message)
+}
+
+/** Which Host identity a saved credential must belong to before it may delete that registration. */
+export interface ServiceNodeIdentity {
+  hostId: string
+}
+
+/**
+ * Delete one node's Host registration without a running tunnel, e.g. when the user removes a node
+ * that is not currently connected. A missing entry (or one saved for another identity) is a no-op;
+ * the local credential is dropped once the node confirms the deletion.
+ */
+export async function unregisterServiceNode(storage: string, origin: string, identity?: ServiceNodeIdentity): Promise<void> {
+  const file = join(storage, SERVICE_NODES_FILE)
+  const nodes = await readNodes(file)
+  const stored = nodes[origin]
+  if (!stored) return
+  if (identity && stored.hostId !== identity.hostId) return
+  await deleteHostRegistration(origin, stored.hostId, stored.credential)
+  delete nodes[origin]
+  await writeNodes(file, nodes)
+}
+
 export class ServiceNode {
   private readonly origin: string
   private readonly hostId: string
@@ -365,6 +414,16 @@ export class ServiceNode {
       return
     }
     await forgetServiceNode(this.storage, origin)
+  }
+
+  /**
+   * Delete this Host's registration on the node, so a later re-add can register again instead of
+   * being rejected with `HOST_ALREADY_REGISTERED`. The caller still owns forgetting the credential.
+   */
+  async unregister(): Promise<void> {
+    const stored = this.nodes[this.origin]
+    if (!stored || stored.hostId !== this.hostId) return
+    await deleteHostRegistration(this.origin, stored.hostId, stored.credential)
   }
 
   private takePairing(requestId: string): boolean {

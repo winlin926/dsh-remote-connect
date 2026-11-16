@@ -64,15 +64,17 @@ interface FakeServiceNode {
   origin: string
   pairings: Array<{ authorization: string | undefined; body: Record<string, unknown> }>
   tickets: string[]
+  unregistrations: Array<{ authorization: string | undefined; method: string; path: string }>
   close: () => Promise<void>
 }
 
 /** A real HTTPS node: the Host registers there, opens the tunnel and asks it for pairing tickets. */
-async function startFakeServiceNode(options: { pairing?: (attempt: number) => { status: number; json?: unknown } } = {}): Promise<FakeServiceNode> {
+async function startFakeServiceNode(options: { pairing?: (attempt: number) => { status: number; json?: unknown }; unregister?: (attempt: number) => { status: number; json?: unknown } } = {}): Promise<FakeServiceNode> {
   const key = readFileSync(new URL('./fixtures/lan-tls/key-1.pem', import.meta.url))
   const cert = readFileSync(new URL('./fixtures/lan-tls/server.pem', import.meta.url))
   const pairings: FakeServiceNode['pairings'] = []
   const tickets: string[] = []
+  const unregistrations: FakeServiceNode['unregistrations'] = []
   let registrations = 0
   const server = createHttpsServer({ key, cert }, (req, res) => {
     const chunks: Buffer[] = []
@@ -95,6 +97,13 @@ async function startFakeServiceNode(options: { pairing?: (attempt: number) => { 
         res.end(JSON.stringify(answer.json ?? {}))
         return
       }
+      if (req.method === 'DELETE' && req.url && req.url.startsWith('/v1/hosts/')) {
+        unregistrations.push({ authorization: req.headers.authorization, method: 'DELETE', path: req.url })
+        const answer = options.unregister?.(unregistrations.length) ?? { status: 204 }
+        if (answer.json === undefined) { res.writeHead(answer.status); res.end() }
+        else { res.writeHead(answer.status, { 'content-type': 'application/json' }); res.end(JSON.stringify(answer.json)) }
+        return
+      }
       res.writeHead(404); res.end()
     })
   })
@@ -112,6 +121,7 @@ async function startFakeServiceNode(options: { pairing?: (attempt: number) => { 
     origin: `https://127.0.0.1:${address.port}`,
     pairings,
     tickets,
+    unregistrations,
     close: async () => {
       for (const ws of sockets) { try { ws.terminate() } catch { /* already gone */ } }
       wss.close(); server.closeAllConnections()
@@ -324,6 +334,74 @@ it('keeps the tunnel ready when the node refuses to sign a pairing QR', async ()
         expect(state.links[0]?.url).toBeUndefined()
         expect(state.expiresAt).toBeUndefined()
         await command('stop')
+      } finally {
+        await command('stop').catch(() => undefined)
+        listen.mockRestore()
+      }
+    })
+  } finally {
+    restoreTls()
+    await fake.close()
+  }
+})
+
+it('unregisters the Host on the service node before forgetting it locally', async () => {
+  const restoreTls = allowSelfSignedTls()
+  const fake = await startFakeServiceNode()
+  try {
+    await withHost(async ({ command, storage }) => {
+      stubDiscoveryAndNetwork()
+      const added = await command('addPublicNode', { url: fake.origin })
+      await command('setCurrentPublicNode', { id: added.node.id })
+      await command('preferences', { mode: 'public' })
+      const listen = vi.spyOn(Gateway.prototype, 'listen').mockImplementation(async function (this: Gateway): Promise<number> { this.port = 45871; return 45871 })
+      try {
+        await command('start')
+        await vi.waitFor(async () => expect((await command('status')).serviceNode?.connected).toBe(true), { timeout: 8000 })
+        const removed = await command('removePublicNode', { id: added.node.id })
+        expect(removed.status).toBe(200)
+        expect(removed.publicNodes).toEqual({ current: null, list: [], pendingReview: false })
+        expect(removed.serviceNode).toBeNull()
+        expect(fake.unregistrations).toHaveLength(1)
+        expect(fake.unregistrations[0]?.authorization).toBe('Bearer node-credential-1')
+        expect(fake.unregistrations[0]?.path).toMatch(/^\/v1\/hosts\/[A-Za-z0-9_-]{43}$/u)
+        const stored = JSON.parse(readFileSync(join(storage, 'service-nodes.json'), 'utf8'))
+        expect(stored.nodes[fake.origin]).toBeUndefined()
+        expect((await command('status')).serviceNode).toBeNull()
+      } finally {
+        await command('stop').catch(() => undefined)
+        listen.mockRestore()
+      }
+    })
+  } finally {
+    restoreTls()
+    await fake.close()
+  }
+})
+
+it('reports a node registration that could not be revoked when removing the node', async () => {
+  const restoreTls = allowSelfSignedTls()
+  const fake = await startFakeServiceNode({ unregister: () => ({ status: 500, json: { error: 'busy' } }) })
+  try {
+    await withHost(async ({ command, storage }) => {
+      stubDiscoveryAndNetwork()
+      const added = await command('addPublicNode', { url: fake.origin })
+      await command('setCurrentPublicNode', { id: added.node.id })
+      await command('preferences', { mode: 'public' })
+      const listen = vi.spyOn(Gateway.prototype, 'listen').mockImplementation(async function (this: Gateway): Promise<number> { this.port = 45871; return 45871 })
+      try {
+        await command('start')
+        await vi.waitFor(async () => expect((await command('status')).serviceNode?.connected).toBe(true), { timeout: 8000 })
+        const removed = await command('removePublicNode', { id: added.node.id })
+        // The local record must go even when the node refuses to delete its Host row.
+        expect(removed.status).toBe(200)
+        expect(removed.publicNodes.list).toEqual([])
+        expect(fake.unregistrations).toHaveLength(1)
+        expect(removed.serviceNode?.lastError).toMatch(/节点上的主机注册可能仍在/u)
+        expect(removed.serviceNode?.lastError).toContain('重新添加前需要在该节点上重置')
+        const stored = JSON.parse(readFileSync(join(storage, 'service-nodes.json'), 'utf8'))
+        expect(stored.nodes[fake.origin]).toBeUndefined()
+        expect((await command('status')).serviceNode?.lastError).toContain('重新添加前需要在该节点上重置')
       } finally {
         await command('stop').catch(() => undefined)
         listen.mockRestore()
