@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { readPublicUrl, normalizePublicUrl, writePublicUrl } from './public-url-settings.js'
 import { createCertificateManager, migrateLegacyAccountKey, type CertificateManager, type CertificateStatus } from './acme-certificate.js'
 import { createOutboundProxy, type OutboundProxy } from './outbound-proxy.js'
-import { PUBLIC_NODE_PROTOCOL, detectPublicNode, type PublicNodeDetection } from './public-node.js'
+import { isPublicNodeProtocol, nodeIdentityOf, detectPublicNode, type PublicNodeDetection } from './public-node.js'
 
 /** frpc forwards the public domain to this fixed port; a test run may point it elsewhere. */
 export const PUBLIC_PORT = (() => {
@@ -96,7 +96,9 @@ export class PublicAccess {
     const at = this.now()
     if (detection.ok) {
       const node = detection.node
-      const same = node.kind === 'gateway' && node.protocol === PUBLIC_NODE_PROTOCOL && node.hostId === this.options.identity.hostId && node.fingerprint === this.options.identity.fingerprint
+      // Protocol 2 carries the identity in `node`, protocol 1 keeps the same id in the flat `hostId`.
+      const identity = nodeIdentityOf(node)
+      const same = node.kind === 'gateway' && isPublicNodeProtocol(node.protocol) && identity !== null && identity.id === this.options.identity.hostId && identity.fingerprint === this.options.identity.fingerprint
       return same
         ? { at, reachable: true, status: 200, failure: null, error: null }
         : { at, reachable: false, status: 200, failure: 'identity', error: PUBLIC_IDENTITY_MESSAGE }

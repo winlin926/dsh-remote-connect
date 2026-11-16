@@ -2,7 +2,14 @@
 import { localFilePath } from './local-file.js'
 
 /** The same computer's LAN entry, injected only into a paired device's public page. */
-export interface LanFallback { hostId: string; fingerprint: string; url: string }
+export interface LanFallback {
+  /** Protocol-2 node identity the page must see in the answer; null when only flat aliases were known. */
+  node: { id: string; fingerprint: string } | null
+  /** Protocol-1 aliases, kept for an answer that only names the old flat fields. */
+  hostId: string | null
+  fingerprint: string | null
+  url: string
+}
 export interface BootContext { fallback: LanFallback }
 
 function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null): void {
@@ -234,12 +241,18 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     fallbackTried = true
     try {
       const response = await originalFetch('/rc/fallback', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-      const data = await response.json().catch(() => null) as { sameHost?: unknown; url?: unknown; hostId?: unknown; fingerprint?: unknown } | null
+      const data = await response.json().catch(() => null) as { sameHost?: unknown; url?: unknown; node?: unknown; hostId?: unknown; fingerprint?: unknown } | null
       const target = typeof data?.url === 'string' ? data.url : ''
+      // Protocol 2 names the node identity; protocol 1 names the same identity as two flat fields.
+      const answerNode = data?.node && typeof data.node === 'object' && !Array.isArray(data.node) ? data.node as Record<string, unknown> : null
+      const answer = answerNode && typeof answerNode.id === 'string' && typeof answerNode.fingerprint === 'string'
+        ? { id: answerNode.id, fingerprint: answerNode.fingerprint }
+        : typeof data?.hostId === 'string' && typeof data?.fingerprint === 'string' ? { id: data.hostId, fingerprint: data.fingerprint } : null
+      const expected = lanFallback.node ?? (lanFallback.hostId !== null && lanFallback.fingerprint !== null ? { id: lanFallback.hostId, fingerprint: lanFallback.fingerprint } : null)
       let same = false
       try {
         const wanted = new URL(lanFallback.url), found = new URL(target)
-        same = data?.sameHost === true && data.hostId === lanFallback.hostId && data.fingerprint === lanFallback.fingerprint && found.origin === wanted.origin && found.protocol === wanted.protocol
+        same = data?.sameHost === true && expected !== null && answer !== null && answer.id === expected.id && answer.fingerprint === expected.fingerprint && found.origin === wanted.origin && found.protocol === wanted.protocol
       } catch { same = false }
       if (!same) { rescan(); return }
       notice('已切换到局域网')

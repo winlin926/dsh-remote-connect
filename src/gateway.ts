@@ -18,7 +18,7 @@ import { BOOT_PATH, injectBoot, type BootContext } from './boot.js'
 import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from './workspace-preview.js'
 import type { LanTlsMaterial } from './lan-tls.js'
 import { fingerprintGroupsOf } from './host-identity.js'
-import { PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL, type PublicNodeDiscovery } from './public-node.js'
+import { PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL_V2, isPublicNodeProtocol, nodeIdentityOf, type PublicNodeDiscovery, type PublicNodeIdentityFields } from './public-node.js'
 
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** The paired browser asks this same-host route whether the LAN entry is the same computer. */
@@ -177,11 +177,22 @@ export class Gateway {
     // HEAD reports the bytes a GET would return without sending them.
     res.end(req.method === 'HEAD' ? undefined : payload)
   }
+  /** This computer's own identity as the discovery document names it: protocol-2 `node`, protocol-1 flat fields. */
+  private hostIdentity(): PublicNodeIdentityFields | undefined {
+    const discovery = this.options.discovery
+    if (!discovery) return undefined
+    if (discovery.protocol === PUBLIC_NODE_PROTOCOL_V2) {
+      const node = discovery.node
+      return node ? { id: node.id, fingerprint: node.fingerprint } : undefined
+    }
+    return discovery.hostId && discovery.fingerprint ? { id: discovery.hostId, fingerprint: discovery.fingerprint } : undefined
+  }
   /** The public pairing page shows the node before anything is sent; LAN pages stay as they were. */
   private pairingNode(): PairingNode | undefined {
     const discovery = this.options.discovery
-    if (!discovery || this.lanTls) return undefined
-    return { name: discovery.name, kind: discovery.kind, fingerprint: discovery.fingerprint, fingerprintGroups: fingerprintGroupsOf(discovery.fingerprint), protocol: discovery.protocol }
+    const identity = this.hostIdentity()
+    if (!discovery || !identity || this.lanTls) return undefined
+    return { name: discovery.name, kind: discovery.kind, fingerprint: identity.fingerprint, fingerprintGroups: fingerprintGroupsOf(identity.fingerprint), publicKey: discovery.node?.publicKey ?? null, protocol: discovery.protocol }
   }
   /** The LAN origin of this same computer while the public entry runs; nothing else may be a fallback target. */
   private lanFallback(): string | undefined {
@@ -189,12 +200,13 @@ export class Gateway {
     return this.options.lanFallback?.()
   }
   /**
-   * The LAN node's own discovery document must name this same computer: kind, protocol and both
-   * identity fields. A LAN address belonging to another computer or another Host never passes.
+   * The LAN node's own discovery document must name this same computer: kind, protocol and the node
+   * identity. A LAN address belonging to another computer or another Host never passes. Protocol 1
+   * documents are compared by their flat fields, protocol 2 documents by `node`.
    */
   private async sameLanNode(origin: string): Promise<boolean> {
-    const discovery = this.options.discovery
-    if (!discovery) return false
+    const expected = this.hostIdentity()
+    if (!expected) return false
     try {
       const response = await globalThis.fetch(origin + PUBLIC_NODE_PATH, {
         method: 'GET', redirect: 'manual', credentials: 'omit', cache: 'no-store',
@@ -204,13 +216,15 @@ export class Gateway {
       const body: unknown = await response.json()
       if (!body || typeof body !== 'object' || Array.isArray(body)) return false
       const node = body as Record<string, unknown>
-      return node.protocol === PUBLIC_NODE_PROTOCOL && node.kind === 'gateway' && node.hostId === discovery.hostId && node.fingerprint === discovery.fingerprint
+      if (!isPublicNodeProtocol(node.protocol) || node.kind !== 'gateway') return false
+      const actual = nodeIdentityOf(node)
+      return actual !== null && actual.id === expected.id && actual.fingerprint === expected.fingerprint
     } catch { return false }
   }
   private bootContext(): BootContext | undefined {
-    const discovery = this.options.discovery, lan = this.lanFallback()
-    if (!discovery || !lan) return undefined
-    return { fallback: { hostId: discovery.hostId, fingerprint: discovery.fingerprint, url: lan } }
+    const identity = this.hostIdentity(), lan = this.lanFallback()
+    if (!identity || !lan) return undefined
+    return { fallback: { node: identity, hostId: identity.id, fingerprint: identity.fingerprint, url: lan } }
   }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!safePath(req.url ?? '/') || !this.validHost(req)) { json(res, 403, { error: '不受信任的访问地址。' }); return }
@@ -241,7 +255,7 @@ export class Gateway {
           // cannot show the same fingerprint as this gateway (a proxy, a stale copy) is refused, and
           // the panel learns why instead of waiting for a pairing that will never be approved.
           if (publicRequest) {
-            const expected = this.options.discovery?.fingerprint
+            const expected = this.hostIdentity()?.fingerprint
             if (!expected || String(input.fingerprint ?? '') !== expected) {
               const reason = '配对页面的主机指纹与这台电脑不一致，请重新打开配对页。'
               this.options.pairing.reportFailure('', reason)
@@ -303,11 +317,12 @@ export class Gateway {
     if (url.pathname === FALLBACK_PATH) {
       if (req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
       if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
-      const lan = this.lanFallback(), discovery = this.options.discovery
+      const lan = this.lanFallback(), identity = this.hostIdentity()
       if (!lan) { json(res, 200, { sameHost: false, reason: 'no-lan-entry' }); return }
-      if (!discovery) { json(res, 200, { sameHost: false, reason: 'no-identity' }); return }
+      if (!identity) { json(res, 200, { sameHost: false, reason: 'no-identity' }); return }
       if (!(await this.sameLanNode(lan))) { json(res, 200, { sameHost: false, reason: 'identity' }); return }
-      json(res, 200, { sameHost: true, url: lan, hostId: discovery.hostId, fingerprint: discovery.fingerprint })
+      // Protocol 2 identity plus the flat aliases an older boot script may still compare.
+      json(res, 200, { sameHost: true, url: lan, node: identity, hostId: identity.id, fingerprint: identity.fingerprint })
       return
     }
     // Renew the browser expiry along with the durable 30-day idle authorization.
