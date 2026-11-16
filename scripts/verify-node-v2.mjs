@@ -241,7 +241,7 @@ async function verifyDiscovery(baseUrl, dataDir) {
     assert(identity.version === 1, `node-identity.json 的 version 为 ${JSON.stringify(identity.version)}。`)
     assert(identity.algorithm === 'ed25519', `algorithm 为 ${JSON.stringify(identity.algorithm)}。`)
     assert(typeof identity.publicKey === 'string' && identity.publicKey === node.publicKey, 'node-identity.json 的 publicKey 与发现文档不一致。')
-    assert(typeof identity.privateKey === 'string' && identity.privateKey.length > 0, 'node-identity.json 缺少 privateKey。')
+    assert(!('privateKey' in identity), 'node-identity.json 不应包含私钥（只存公钥）。')
     if (process.platform !== 'win32') {
       const mode = (await stat(identityPath)).mode & 0o777
       assert(mode === 0o600, `node-identity.json 权限为 0o${mode.toString(8)}，期望 0o600。`)
@@ -268,7 +268,7 @@ async function verifyHttp(baseUrl) {
     assert(body && typeof body === 'object', '/v1/config 不是 JSON 对象。')
     assert(body.protocol === 2, `/v1/config 的 protocol 为 ${JSON.stringify(body.protocol)}，期望 2。`)
     const text = JSON.stringify(body)
-    for (const key of ['privateKey', 'publicKey', 'secret', 'token']) {
+    for (const key of ['privateKey', 'secret', 'token', 'credential']) {
       assert(!text.includes(`"${key}"`), `/v1/config 泄露了 ${key} 字段。`)
     }
     return { protocol: body.protocol, kind: body.kind, capabilities: body.capabilities }

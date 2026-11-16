@@ -251,7 +251,7 @@ test('invalid configuration fails fast instead of silently degrading', async () 
   )
   await assert.rejects(
     () => startNode({ CAPABILITIES: 'pairing,turn' }),
-    (error: any) => error?.name === 'ConfigError' && /TURN/u.test(error.message),
+    (error: any) => error?.name === 'ConfigError' && /reserved for a future protocol version/u.test(error.message),
   )
   await assert.rejects(
     () => startNode({ PAIRING_TICKET_TTL_SECONDS: '600' }),

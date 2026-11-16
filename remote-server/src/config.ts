@@ -148,14 +148,15 @@ function readTurn(env: NodeJS.ProcessEnv): TurnConfig | null {
   return { urls, secret, ttlSeconds }
 }
 
-function readCapabilities(env: NodeJS.ProcessEnv, turn: TurnConfig | null): Capability[] {
+const ADVERTISED_CAPABILITIES: readonly Capability[] = ['pairing', 'cache', 'official-ui']
+
+/**
+ * 0.6.2 只宣告产品路径真正使用的能力：HTTPS/WSS 隧道转发。`relay`/`turn` 仍在
+ * schema 白名单里，供将来协议版本使用，本轮不允许任何节点宣告。
+ */
+function readCapabilities(env: NodeJS.ProcessEnv): Capability[] {
   const raw = readString(env, 'CAPABILITIES')
-  if (raw === null) {
-    // 0.6.2 advertises only what the product path actually uses (HTTPS/WSS tunnel
-    // forwarding). relay/turn stay in the schema for a future version and must be
-    // opted into explicitly through CAPABILITIES.
-    return ['pairing', 'cache', 'official-ui']
-  }
+  if (raw === null) return [...ADVERTISED_CAPABILITIES]
   const values: Capability[] = []
   for (const entry of raw.split(',')) {
     const trimmed = entry.trim()
@@ -164,12 +165,14 @@ function readCapabilities(env: NodeJS.ProcessEnv, turn: TurnConfig | null): Capa
       throw new ConfigError(`CAPABILITIES entry "${trimmed}" is not one of ${CAPABILITY_VALUES.join(', ')}.`)
     }
     const capability = trimmed as Capability
+    if (!ADVERTISED_CAPABILITIES.includes(capability)) {
+      throw new ConfigError(
+        `CAPABILITIES entry "${capability}" is reserved for a future protocol version; 0.6.2 only advertises ${ADVERTISED_CAPABILITIES.join(', ')}.`,
+      )
+    }
     if (!values.includes(capability)) values.push(capability)
   }
   if (!values.includes('pairing')) throw new ConfigError('CAPABILITIES must include "pairing".')
-  if (values.includes('turn') && !turn) {
-    throw new ConfigError('CAPABILITIES includes "turn" but TURN_URLS/TURN_SECRET are not configured.')
-  }
   return values
 }
 
@@ -212,7 +215,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: readBoolean(env, 'TRUST_PROXY', false),
     nodeName: readName(env),
     nodeVersion: readVersion(env),
-    capabilities: readCapabilities(env, turn),
+    capabilities: readCapabilities(env),
     pairingTicketTtlMs,
     sessionTtlMs: readInt(env, 'SESSION_TTL_DAYS', 30, 1, 365) * 86_400_000,
     assetMaxBytes: readInt(env, 'ASSET_MAX_BYTES', 16 * 1024 * 1024, 1024, 64 * 1024 * 1024),

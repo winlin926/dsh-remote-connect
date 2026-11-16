@@ -75,9 +75,12 @@ test('invalid TURN configuration fails closed at startup', () => {
     () => loadConfig({ ...base, CAPABILITIES: 'pairing,turn' }),
     (error: unknown) => error instanceof ConfigError,
   )
-  const valid = loadConfig({ ...base, TURN_URLS: 'turn:127.0.0.1:3478', TURN_SECRET, CAPABILITIES: 'pairing,relay' })
+  const valid = loadConfig({ ...base, TURN_URLS: 'turn:127.0.0.1:3478', TURN_SECRET })
   assert.deepEqual(valid.turn?.urls, ['turn:127.0.0.1:3478'])
-  assert.ok(!valid.capabilities.includes('turn'), 'TURN config never auto-advertises')
-  const optedIn = loadConfig({ ...base, TURN_URLS: 'turn:127.0.0.1:3478', TURN_SECRET, CAPABILITIES: 'pairing,turn' })
-  assert.deepEqual(optedIn.capabilities, ['pairing', 'turn'])
+  assert.deepEqual(valid.capabilities, ['pairing', 'cache', 'official-ui'], 'TURN config never changes the advertised set')
+  assert.throws(
+    () => loadConfig({ ...base, TURN_URLS: 'turn:127.0.0.1:3478', TURN_SECRET, CAPABILITIES: 'pairing,turn' }),
+    (error: unknown) => error instanceof ConfigError,
+    '0.6.2 refuses to advertise turn even when TURN is configured',
+  )
 })
