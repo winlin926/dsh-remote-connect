@@ -14,11 +14,11 @@
 `GET /.well-known/dsh-remote`（`application/json; charset=utf-8`、`cache-control: no-store`、不返回 3xx）：
 
 ```json
-{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.2","capabilities":["pairing","cache","official-ui","relay"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
+{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.2","capabilities":["pairing","cache","official-ui"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
 ```
 
 - `kind` 固定 `"service"`；`protocol` 为数字 `2`，客户端必须拒绝其他值。
-- `capabilities` 只能是 `pairing`、`cache`、`official-ui`、`relay`、`turn` 的子集，且必须含 `pairing`。0.6.2 的默认值就是 `pairing`、`cache`、`official-ui`：产品路径只走 HTTPS/WSS 隧道转发，不宣告尚未接入的 TURN/WebRTC；`relay`/`turn` 保留给将来版本，需要显式配置 `CAPABILITIES` 才会出现，且声明 `turn` 时 `TURN_URLS`/`TURN_SECRET` 必须已配置。
+- `capabilities` 只能是 `pairing`、`cache`、`official-ui`、`relay`、`turn` 的子集，且必须含 `pairing`。0.6.2 **只允许宣告** `pairing`、`cache`、`official-ui`：产品路径只走 HTTPS/WSS 隧道转发，不宣告尚未接入的 TURN/WebRTC；`relay`/`turn` 保留在 schema 白名单里供将来协议版本使用，写进 `CAPABILITIES` 会直接启动失败（失败关闭）。
 - `node.id` = base64url(sha256(节点公钥的 SPKI DER))，43 字符；`node.fingerprint` = 同一 sha256 前 16 字节的小写十六进制（32 字符）；`node.publicKey` = base64url(SPKI DER)。客户端必须自行解码并复核摘要，不得信任节点返回的 `id`/`fingerprint`。
 - **服务节点不返回扁平的 `hostId`/`fingerprint`**：一个服务节点可以承载多台 Host，扁平字段属于 `kind: "gateway"` 的旧式网关，不应出现在 service 文档里。
 - `name`、`version` 可由 `NODE_NAME`、`NODE_VERSION` 覆盖。
