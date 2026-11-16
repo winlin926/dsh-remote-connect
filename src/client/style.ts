@@ -208,6 +208,14 @@ export const CSS = `
 .dsrc-node>.dsrc-actions{margin-left:auto}
 .dsrc-node-add{margin-top:10px;padding-top:11px;border-top:1px solid var(--rc-line);min-width:0}
 .dsrc-node-add .dsrc-input{margin-top:5px}
+.dsrc-node-protocol[data-protocol=v2]{background:var(--rc-teal-soft);color:var(--rc-teal)}
+.dsrc-node-protocol[data-protocol=v1]{background:var(--rc-fill);color:var(--rc-muted)}
+.dsrc-node-protocol[data-protocol=unknown]{background:var(--rc-warm-soft);color:var(--rc-warm)}
+.dsrc-node-identity{margin-top:8px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--rc-danger) 28%,var(--rc-line));border-radius:10px;background:color-mix(in srgb,var(--rc-danger) 5%,var(--rc-paper));min-width:0}
+.dsrc-node-identity .dsrc-node-error{margin-top:0}
+.dsrc-node-identity .dsrc-node-fingerprints{margin-top:4px;color:var(--rc-muted);font:11px/18px ui-monospace,Consolas,monospace;overflow-wrap:anywhere;word-break:break-word}
+.dsrc-node-identity .dsrc-button{margin-top:8px}
+.dsrc-node-trust{color:var(--rc-muted)}
 
 .dsrc-entry{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;color:inherit;background:transparent;border-radius:8px;padding:8px;min-width:36px;min-height:36px;font:inherit;cursor:pointer;position:relative;flex:none}
 .dsrc-entry:hover{background:#77736c15}

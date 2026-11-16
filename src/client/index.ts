@@ -4,11 +4,16 @@ import { PhoneIcon } from './nav-icon.js'
 const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
 export type PublicNodeKind = 'gateway' | 'service'
+/** One node identity: protocol 2 carries it, protocol 1 records only keep the flat host pair. */
+export interface PublicNodeIdentity { id: string; fingerprint: string; publicKey: string }
+/** A protocol 2 node that came back with a different identity; nothing connects until the Host confirms it. */
+export interface PublicNodeIdentityChange { from: { id: string; fingerprint: string }; to: { id: string; fingerprint: string }; detectedAt: number }
 /** One Host entry the panel can add, probe, choose or remove. */
 export interface PublicNode {
   id: string; url: string; kind: PublicNodeKind | null; name: string | null; version: string | null
-  protocol: number | null; capabilities: string[] | null; hostId: string | null; fingerprint: string | null
+  protocol: number | null; capabilities: string[] | null; node: PublicNodeIdentity | null; hostId: string | null; fingerprint: string | null
   addedAt: number; lastCheckAt: number | null; lastCheckOk: boolean; lastCheckError: string | null; pending: boolean
+  identityChange: PublicNodeIdentityChange | null
 }
 export interface ServicePairing { requestId: string; deviceName: string; expiresAt: number }
 export interface ServiceNodeState { origin: string; connected: boolean; lastError?: string; pendingPairings: ServicePairing[] }
@@ -124,6 +129,14 @@ export function nodeFingerprintGroups(fingerprint: string | null): string {
   return digits.match(/.{4}/g)!.join('-')
 }
 export type NodeTone = 'ok' | 'warn' | 'danger' | 'neutral'
+/** Protocol 2 names the node identity; protocol 1 only knows the flat host pair. */
+export function publicNodeFingerprint(node: Pick<PublicNode, 'node' | 'fingerprint'>): string | null {
+  return node.node?.fingerprint ?? node.fingerprint
+}
+/** The protocol tag tells a v2 node apart from a v1 single-host gateway without opening the row. */
+export function publicNodeProtocolLabel(protocol: number | null): string {
+  return protocol === 2 ? 'v2' : protocol === 1 ? '旧版 v1（单主机）' : '协议待确认'
+}
 export function nodeCheckStatus(node: Pick<PublicNode, 'pending' | 'lastCheckAt' | 'lastCheckOk'>): { label: string; tone: NodeTone } {
   if (node.pending) return { label: '待检测确认', tone: 'warn' }
   if (node.lastCheckAt === null) return { label: '尚未检测', tone: 'neutral' }
@@ -261,6 +274,7 @@ export function RemoteControlPanel(): React.ReactElement {
       else if (action === 'addPublicNode') { setNotice('公网节点已添加并通过检测。'); setTimeout(() => { void refresh() }, 200) }
       else if (action === 'checkPublicNode') setTimeout(() => { void refresh() }, 200)
       else if (action === 'setCurrentPublicNode') setNotice('已切换当前使用的公网节点。')
+      else if (action === 'confirmPublicNodeIdentity') { setNotice('节点身份已确认，正在重新检测。'); setTimeout(() => { void refresh() }, 200) }
       else if (action === 'removePublicNode') setNotice('公网节点已删除，通过它的设备授权已撤销。')
       else if (action === 'approveServicePairing') setNotice('设备已确认，可以通过该节点继续连接。')
       else if (action === 'rejectServicePairing') setNotice('已拒绝该设备的配对请求。')
@@ -321,6 +335,8 @@ export function RemoteControlPanel(): React.ReactElement {
     }, 60)
   }, [])
   const shown = state?.enabled ? state.activeMode : state?.mode
+  const currentNode = state?.publicNodes?.list.find(entry => entry.id === state?.publicNodes?.current) ?? null
+  const identityChangePending = currentNode?.identityChange ?? null
   const domainBlocked = shown === 'public' && !publicUrl
   React.useEffect(() => { if (domainBlocked) setSettingsOpen(true) }, [domainBlocked])
   const choose = (mode: Way) => {
@@ -387,31 +403,47 @@ export function RemoteControlPanel(): React.ReactElement {
       const check = nodeCheckStatus(node)
       const host = nodeHost(node.url)
       const busy = workingNode === node.id
+      const change = node.identityChange
       return block('div', 'dsrc-node dsrc-row', [
         block('div', 'dsrc-node-main', [
           block('div', 'dsrc-node-title', [
             h('span', { className: 'dsrc-node-name' }, node.name?.trim() || host),
             h('span', { className: 'dsrc-tag dsrc-node-kind', 'data-kind': node.kind ?? 'unknown' }, nodeKindLabel(node.kind)),
+            h('span', { className: 'dsrc-tag dsrc-node-protocol', 'data-protocol': node.protocol === 2 ? 'v2' : node.protocol === 1 ? 'v1' : 'unknown' }, publicNodeProtocolLabel(node.protocol)),
             current ? h('span', { className: 'dsrc-tag dsrc-online' }, '当前使用') : null,
             node.pending ? h('span', { className: 'dsrc-tag dsrc-pending' }, '待确认') : null,
+            change ? h('span', { className: 'dsrc-tag dsrc-pending' }, '身份待确认') : null,
           ]),
           h('code', { className: 'dsrc-node-url', title: node.url }, address(node.url)),
           block('div', 'dsrc-node-meta', [
             h('span', { className: 'dsrc-node-check', role: 'status', 'data-tone': check.tone }, check.label),
             h('span', null, `最近检测 ${checkedAtLabel(node.lastCheckAt)}`),
-            h('span', null, node.protocol === null ? '协议待确认' : `协议 v${node.protocol}`),
-            h('span', { className: 'dsrc-node-fingerprint' }, `Host 指纹 ${nodeFingerprintGroups(node.fingerprint)}`),
+            // A v2 node names its own identity; a v1 record is a single-host gateway and keeps the old label.
+            node.protocol === 2
+              ? h('span', { className: 'dsrc-node-fingerprint' }, `节点指纹 ${nodeFingerprintGroups(publicNodeFingerprint(node))}`)
+              : node.protocol === 1
+                ? h('span', { className: 'dsrc-node-fingerprint' }, `Host 指纹 ${nodeFingerprintGroups(node.fingerprint)}`)
+                : null,
           ]),
           !node.pending && !node.lastCheckOk && node.lastCheckError ? h('p', { className: 'dsrc-node-error', role: 'alert' }, node.lastCheckError) : null,
+          change ? block('div', 'dsrc-node-identity', [
+            h('p', { className: 'dsrc-node-error', role: 'alert' }, '节点身份已变化，需要重新确认。'),
+            h('p', { className: 'dsrc-node-fingerprints' }, `原节点指纹 ${nodeFingerprintGroups(change.from.fingerprint)}`),
+            h('p', { className: 'dsrc-node-fingerprints' }, `新节点指纹 ${nodeFingerprintGroups(change.to.fingerprint)}`),
+            h('button', {
+              type: 'button', className: 'dsrc-button dsrc-primary', disabled: manageDisabled, 'aria-label': `重新确认节点 ${host} 的身份`,
+              onClick: () => { if (confirm(`确认 ${host} 的新节点指纹？确认前不会通过该节点连接。`)) void act('confirmPublicNodeIdentity', { id: node.id }) },
+            }, busy ? '正在确认…' : '重新确认'),
+          ]) : null,
         ]),
         node.pending
           ? block('div', 'dsrc-actions dsrc-node-actions', [
-              h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: manageDisabled, 'aria-label': `确认使用节点 ${host}`, onClick: () => { void act('setCurrentPublicNode', { id: node.id }) } }, busy ? '正在确认…' : '确认使用'),
+              h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: manageDisabled || !!change, 'aria-label': `确认使用节点 ${host}`, onClick: () => { void act('setCurrentPublicNode', { id: node.id }) } }, busy ? '正在确认…' : '确认使用'),
               h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: manageDisabled, 'aria-label': `忽略节点 ${host}`, onClick: () => { void act('removePublicNode', { id: node.id }) } }, busy ? '正在忽略…' : '忽略'),
             ])
           : block('div', 'dsrc-actions dsrc-node-actions', [
               h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: manageDisabled, 'aria-label': `检测节点 ${host}`, onClick: () => { void act('checkPublicNode', { id: node.id }) } }, busy ? '正在检测…' : '检测'),
-              h('button', { type: 'button', className: 'dsrc-button', disabled: manageDisabled || current, 'aria-label': `将节点 ${host} 设为当前`, onClick: () => { void act('setCurrentPublicNode', { id: node.id }) } }, current ? '当前使用' : busy ? '正在切换…' : '设为当前'),
+              h('button', { type: 'button', className: 'dsrc-button', disabled: manageDisabled || current || !!change, 'aria-label': `将节点 ${host} 设为当前`, onClick: () => { void act('setCurrentPublicNode', { id: node.id }) } }, current ? '当前使用' : change ? '需先确认身份' : busy ? '正在切换…' : '设为当前'),
               h('button', { type: 'button', className: 'dsrc-button dsrc-danger', disabled: manageDisabled, 'aria-label': `删除节点 ${host}`, onClick: () => { if (confirm(`删除公网节点 ${address(node.url)}？通过该节点授权的设备会被撤销。`)) void act('removePublicNode', { id: node.id }) } }, busy ? '正在删除…' : '删除'),
             ]),
       ], { key: node.id, role: 'listitem' })
@@ -446,8 +478,9 @@ export function RemoteControlPanel(): React.ReactElement {
         ]),
         nodeError ? h('p', { className: 'dsrc-error', role: 'alert' }, nodeError) : null,
         h('p', { className: 'dsrc-note' }, state.local
-          ? '只填写 https:// 域名（可带端口），不能包含路径、查询参数或账号密码；添加后会先检测节点，确认 Host 指纹再使用。'
+          ? '只填写 https:// 域名（可带端口），不能包含路径、查询参数或账号密码。'
           : '公网节点只能在本机面板添加、检测或切换。'),
+        h('p', { className: 'dsrc-note dsrc-node-trust' }, '通过 HTTPS 连接该节点。节点或隧道运营者可能看到转发给本机的请求与内容，本插件不提供端到端加密。请只添加你信任的节点。'),
       ]),
     ], { 'aria-label': '公网节点', 'data-section': 'nodes' })
   }
@@ -477,9 +510,10 @@ export function RemoteControlPanel(): React.ReactElement {
         h('p', null, state.enabled ? online ? `${online} 台设备在线；也可以继续配对其他手机。` : '已授权设备可直接使用，新手机请扫码。' : domainBlocked ? '域名通常只需配置一次，保存后回到这里开启。' : shown === 'public' ? `将通过 ${address(publicUrl)} 连接。` : '同一 Wi‑Fi 即可直连，授权设备可重复使用。'),
       ]),
       domainBlocked ? h(InlineNotice, { tone: 'warn', action: { label: '配置域名', onClick: () => openSettings(true) } }, '“公网连接”需要固定公网域名，请在“连接设置”里填写。') : null,
+      identityChangePending && currentNode ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, `当前公网节点「${currentNode.name?.trim() || nodeHost(currentNode.url)}」的身份已变化，请在下方“公网节点”中重新确认；确认前不会通过该节点连接。`)]) : null,
       shown === 'lan' && lanCertificate ? h(InlineNotice, { tone: lanCertificate.error || lanCertificateDue ? 'warn' : 'info' },
         lanCertificate.error || (lanCertificateDue ? '局域网证书即将到期，请在外部续期后，在本机连接设置中重载。' : '使用局域网 HTTPS。请将域名解析到电脑的局域网地址，并使用手机信任的证书。')) : null,
-      state.error ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
+      state.error && !identityChangePending ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
       state.pairingFailure ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, `配对被拒绝${state.pairingFailure.name ? `（${state.pairingFailure.name}）` : ''}：${state.pairingFailure.reason}`)]) : null,
       shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, state.publicUrlCheck.error ?? '公网节点不可达，请确认隧道客户端正在运行，或检查域名配置。')]) : null,
       block('div', 'dsrc-connection-actions', [state.enabled ? h('button', { type: 'button', className: 'dsrc-button dsrc-stop', disabled, onClick: stopConnection }, workingAction === 'stop' ? '正在关闭…' : '关闭远程连接')

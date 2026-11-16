@@ -18,18 +18,33 @@ const healthCheck = `const health=await fetch('/api/dsh-remote-connect/manage',{
     if(health&&health.ok){location.replace('/');return true}return false`
 
 /** What a public pairing page shows before anything is sent: the node the browser is talking to. */
-export interface PairingNode { name: string; kind: PublicNodeKind; fingerprint: string; fingerprintGroups: string; protocol: number }
+export interface PairingNode {
+  name: string
+  kind: PublicNodeKind
+  fingerprint: string
+  fingerprintGroups: string
+  /** Protocol 2 public key: the page derives the target fingerprint locally instead of trusting the label. */
+  publicKey?: string | null
+  protocol: number
+}
 
 const nodeRow = (label: string, value: string, mono = false): string => `<dt style="color:var(--rc-faint);font-size:12px;margin:0 0 2px">${label}</dt><dd style="margin:0 0 12px;color:var(--rc-ink);font-size:14px;line-height:1.6;word-break:break-word${mono ? ';font-family:ui-monospace,SFMono-Regular,Menlo,monospace' : ''}">${value}</dd>`
 
 export function pairingPage(node?: PairingNode): string {
   const progress = `<div id="progress" ${node ? 'hidden' : ''}><div class="status"><span class="dot"></span><span id="state">正在发送配对请求…</span></div><small>授权后，这台设备与本机拥有相同的操作权限。你可以随时在远程控制面板撤销设备。</small><button id="enter" hidden>进入 DeepSeek Harness</button></div>`
   if (node) {
-    const identity = `<p>先核对这台电脑的身份，确认是本机后再继续。随后还需要在电脑上的远程控制面板再确认一次，两次确认都完成才会授权。</p><dl style="margin:0 0 16px;padding:14px 16px;border:1px solid var(--rc-line);border-radius:10px;background:var(--rc-fill)">${nodeRow('节点名称', escapeHTML(node.name))}${nodeRow('类型', node.kind === 'gateway' ? '隧道网关' : '自托管服务')}${nodeRow('主机指纹', escapeHTML(node.fingerprintGroups), true)}${nodeRow('协议版本', `v${node.protocol}`)}</dl><p id="error" role="alert"></p><button id="confirm">确认是本机</button>`
+    const identity = `<p>先核对这台电脑的身份，确认是本机后再继续。随后还需要在电脑上的远程控制面板再确认一次，两次确认都完成才会授权。</p><dl style="margin:0 0 16px;padding:14px 16px;border:1px solid var(--rc-line);border-radius:10px;background:var(--rc-fill)">${nodeRow('节点名称', escapeHTML(node.name))}${nodeRow('类型', node.kind === 'gateway' ? '隧道网关' : '自托管服务')}${nodeRow('目标主机指纹', `<span id="target-fingerprint">${escapeHTML(node.fingerprintGroups)}</span>`, true)}${nodeRow('协议版本', `v${node.protocol}`)}</dl><p id="error" role="alert"></p><button id="confirm">确认是本机</button>`
     return head('连接 DeepSeek Harness') + `<body><main class="card"><span class="eyebrow">DSH · 远程</span><h1>连接你的电脑</h1>${identity}${progress}</main><script>
-  (async()=>{const state=document.getElementById('state'),enter=document.getElementById('enter'),confirm=document.getElementById('confirm'),progress=document.getElementById('progress'),error=document.getElementById('error');
+  (async()=>{const state=document.getElementById('state'),enter=document.getElementById('enter'),confirm=document.getElementById('confirm'),progress=document.getElementById('progress'),error=document.getElementById('error'),target=document.getElementById('target-fingerprint');
   const nodeFingerprint=${JSON.stringify(node.fingerprint)};
-  const token=new URLSearchParams(location.hash.slice(1)).get('pair');history.replaceState(null,'','/pair');let claim;
+  const nodePublicKey=${JSON.stringify(node.publicKey ?? null)};
+  const params=new URLSearchParams(location.hash.slice(1));const token=params.get('pair');const key=params.get('key');
+  // The target fingerprint is derived here from the Ed25519 public key in the QR/link, never printed from
+  // the response alone: a page served by another computer cannot make the QR key name a different host.
+  const fingerprintOf=async(encoded)=>{if(!crypto?.subtle)throw Error('当前浏览器无法校验主机指纹，请使用最新版浏览器打开。');const binary=atob(encoded.replace(/-/g,'+').replace(/_/g,'/'));const der=Uint8Array.from(binary,character=>character.charCodeAt(0));const digest=await crypto.subtle.digest('SHA-256',der);return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('').slice(0,32)};
+  const groups=fingerprint=>fingerprint.toUpperCase().match(/.{4}/g).join('-');
+  try{const pinned=key||nodePublicKey;if(pinned){const derived=await fingerprintOf(pinned);if(derived!==nodeFingerprint)throw Error('二维码中的主机指纹与这台电脑不一致，请重新扫码。');target.textContent=groups(derived)}}catch(failure){error.textContent=failure.message;state.textContent='无法确认这台电脑的身份。';confirm.disabled=true}
+  history.replaceState(null,'','/pair');let claim;
   const connect=async()=>{enter.hidden=true;state.textContent='正在检查连接…';error.textContent='';try{
     if(await (async()=>{${healthCheck}})()){state.textContent='这台设备已经配对过，正在打开…'}
     else{
