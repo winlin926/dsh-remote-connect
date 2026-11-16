@@ -13,12 +13,14 @@ import { PairingService } from './pairing.js'
 import { Gateway, MANAGE_PATH, REMOTE_MARK } from './gateway.js'
 import { FRPC_CERTIFICATE_DIR, PUBLIC_PORT, PublicAccess } from './public-access.js'
 import { normalizePublicUrl } from './public-url-settings.js'
+import { PublicNodeConfig, type PublicNodeRecord } from './public-node-config.js'
+import { ServiceNode, forgetServiceNode } from './service-node.js'
 import { body, isLoopback, json, sameOrigin } from './http.js'
 import { bootScript } from './boot.js'
 import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 import { readLanTls, type LanTlsConfig, type LanTlsMaterial } from './lan-tls.js'
 import { loadHostIdentity, fingerprintGroupsOf } from './host-identity.js'
-import { PUBLIC_NODE_PROTOCOL, type PublicNodeDiscovery } from './public-node.js'
+import { PUBLIC_NODE_PROTOCOL, detectPublicNode, type PublicNodeDiscovery } from './public-node.js'
 
 /** Advertised by discovery; read from the installed package so it always matches the running build. */
 const NODE_VERSION = (() => {
@@ -116,11 +118,12 @@ function appendBootReport(file: string, report: Record<string, unknown>, device:
 export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const profile = ctx.get('profileContext') as { name?: string } | undefined
   const storage = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-remote-connect', String(profile?.name || process.env.DSH_PROFILE || 'default').replace(/[^a-zA-Z0-9_-]/g, '_'))
+  const legacyStorage = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-roam')
   mkdirSync(storage, { recursive: true })
   // One identity per profile: the gateway advertises it now, and any future local service reuses the
   // same file, so the Host keeps one hostId across restarts and never shares a pairing/cache scope.
   const hostIdentity = await loadHostIdentity(join(storage, 'host-identity.json'))
-  const discovery: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL, kind: 'gateway', name: 'DeepSeek Harness', version: NODE_VERSION, capabilities: ['pairing', 'official-ui'], hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }
+  const discovery: PublicNodeDiscovery = { protocol: PUBLIC_NODE_PROTOCOL, kind: 'gateway', name: 'DeepSeek Harness', version: NODE_VERSION, capabilities: ['pairing', 'official-ui', 'cache'], hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }
   const prefsFile = join(storage, 'preferences.json')
   let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off' }
   let error: string | undefined
@@ -138,6 +141,17 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   function savePreferences(): void {
     const temporary = `${prefsFile}.${randomUUID()}.tmp`
     writeFileSync(temporary, JSON.stringify(preferences), { mode: 0o600 }); renameSync(temporary, prefsFile)
+  }
+  // The list is optional: a damaged file must not keep the plugin from loading. Its reason stays on the
+  // panel, the node actions refuse to run, and the migration from the old public-url.json is preserved
+  // by the module itself.
+  let publicNodes: PublicNodeConfig | undefined
+  let publicNodesError: string | undefined
+  try {
+    publicNodes = new PublicNodeConfig({ file: join(storage, 'public-nodes.json'), legacyFile: join(storage, 'public-url.json') })
+  } catch (failure) {
+    publicNodesError = failure instanceof Error ? failure.message : '公网节点配置文件读取失败。'
+    error = publicNodesError
   }
   let gateway: Gateway | undefined
   let lanTls: LanTlsMaterial | undefined
@@ -195,7 +209,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       if (fresh || !detected || Date.now() - detected.at > 15_000) detected = { at: Date.now(), value: await detectSystemProxy().catch(() => null) }
       return detected.value
     }
-    access = new PublicAccess({ certificateDir: config.certificateDir || process.env.DSH_RC_CERTIFICATE_DIR || FRPC_CERTIFICATE_DIR, storage, legacyStorage: join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-roam'), identity: { hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }, proxy: async () => {
+    access = new PublicAccess({ certificateDir: config.certificateDir || process.env.DSH_RC_CERTIFICATE_DIR || FRPC_CERTIFICATE_DIR, storage, legacyStorage, identity: { hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint }, proxy: async () => {
       if (preferences.proxyMode === 'manual') return preferences.proxy
       if (preferences.proxyMode === 'system') return (await systemProxy(true))?.url
       return undefined
@@ -218,10 +232,54 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       if (drawn?.url !== url) drawn = { url, image: await (await import('qrcode')).default.toDataURL(url, { width: 260, margin: 2, errorCorrectionLevel: 'M' }) }
       return drawn.image
     }
+    // ── self-hosted service node ────────────────────────────────────────────────────────────────
+    // The node record owns more than the old public domain: a `service` node is reached through an
+    // outbound tunnel this computer starts, so one instance follows the current record and every
+    // lifecycle change (start, stop, switch, remove) reconciles through this function.
+    let serviceNode: ServiceNode | undefined
+    const currentNode = (): PublicNodeRecord | undefined => {
+      const current = publicNodes?.current
+      return current ? publicNodes?.list().find(record => record.id === current) : undefined
+    }
+    const nodeStore = (): PublicNodeConfig => {
+      if (!publicNodes) throw new Error(publicNodesError ?? '公网节点配置不可用。')
+      return publicNodes
+    }
+    const logServiceNode = (event: string, fields: Record<string, unknown>): void => {
+      try { ready.logger?.warn?.(`[${event}] ${JSON.stringify(fields)}`) } catch { /* logging must never break the tunnel */ }
+    }
+    const reconcileServiceNode = async (): Promise<void> => {
+      const record = currentNode()
+      const wanted = enabled && activeMode === 'public' && preferences.mode === 'public' && record?.kind === 'service' ? record.url : undefined
+      if (serviceNode && serviceNode.status().origin !== wanted) {
+        const previous = serviceNode
+        serviceNode = undefined
+        await previous.stop()
+      }
+      if (!wanted || serviceNode || disposed) return
+      const node = new ServiceNode({
+        origin: wanted, hostId: hostIdentity.hostId, identityKey: hostIdentity.publicKey, clientVersion: NODE_VERSION,
+        upstreamPort, upstreamCookie: () => credential, storage, log: logServiceNode,
+      })
+      serviceNode = node
+      // start() reports failures through status().lastError and keeps retrying; it never rejects.
+      await node.start()
+    }
     const status = async (local: boolean) => {
       const links = baseURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
       const active = new Set(gateway?.onlineIds() ?? [])
       const devices = pairing.list()
+      const record = currentNode()
+      const tunnel = serviceNode?.status()
+      const publicNodeList = publicNodes?.list() ?? []
+      const service = record?.kind === 'service'
+        ? { origin: record.url, connected: tunnel?.connected ?? false, ...(tunnel?.lastError ? { lastError: tunnel.lastError } : {}), pendingPairings: tunnel?.pendingPairings ?? [] }
+        : null
+      // The tunnel is the public entry for a service node: report connecting until it is up, but never
+      // let its failure become the plugin's error — LAN fallback and device access stay independent.
+      const phase = enabled && activeMode === 'public' && record?.kind === 'service'
+        ? (tunnel?.connected ? 'ready' : 'connecting')
+        : enabled ? 'ready' : error ? 'error' : 'off'
       return {
         enabled, busy, mode: preferences.mode, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
@@ -234,7 +292,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         repairRequired: devices.filter(device => device.requiresRepair).length,
         publicUrlCheck: local ? access?.lastCheck : undefined, certificate: local && access?.domain ? await access.certificateStatus() : undefined,
         lanTls: config.lanTls ? { origin: lanTls?.origin, expiresAt: lanTls?.expiresAt, error: lanTlsError } : undefined,
-        phase: enabled ? 'ready' : error ? 'error' : 'off', error, gatewayPort: gateway?.port ?? 0, local,
+        publicNodes: { current: publicNodes?.current ?? null, list: publicNodeList, pendingReview: publicNodeList.some(item => item.pending) },
+        serviceNode: service,
+        phase, error, gatewayPort: gateway?.port ?? 0, local,
         expiresAt: qr?.expiresAt, links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
         devices: devices.map(({ host, via: pairedVia, ...device }) => ({
@@ -260,11 +320,14 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       stopMonitor()
       const current = gateway; gateway = undefined
       await current?.close()
+      await reconcileServiceNode()
     }
     shutdown = stop
     const start = async () => {
       if (busy) throw new Error('连接操作正在进行，请稍后再试。')
-      if (preferences.mode === 'public' && !access?.domain) throw new Error('请先填写固定公网域名，再开启“任意网络”。')
+      // A service node is reached through its own tunnel origin, so it needs no stored public domain.
+      const serviceNodeMode = currentNode()?.kind === 'service'
+      if (preferences.mode === 'public' && !serviceNodeMode && !access?.domain) throw new Error('请先填写固定公网域名，再开启“任意网络”。')
       busy = true; error = undefined
       let ticket = generation
       let next: Gateway | undefined
@@ -316,6 +379,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         if (tls) lanTls = tls
         enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = pairing.issue()
         if (mode === 'public') startMonitor(); else stopMonitor()
+        // The tunnel is an extra outbound connection on top of the gateway; its failure is reported in
+        // status().serviceNode.lastError and retried by the instance, never as a plugin error.
+        try { await reconcileServiceNode() }
+        catch (failure) { logServiceNode('service-node-error', { origin: currentNode()?.url ?? '', message: failure instanceof Error ? failure.message : '自托管节点启动失败。' }) }
       } catch (failure) {
         await next?.close()
         if (ticket === generation && !disposed) { error = failure instanceof Error ? failure.message : '启动失败。'; if (stopped) await stop() }
@@ -414,6 +481,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
             throw failure
           }
           if (previous.proxy !== next.proxy || previous.proxyMode !== next.proxyMode) await access?.resetOutbound()
+          if (previous.mode !== next.mode) await reconcileServiceNode()
           if (input.publicUrl !== undefined) migrateDevices()
           return status(local)
         }
@@ -427,6 +495,94 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           if (!enabled || activeMode !== 'public') throw new Error('请先开启“任意网络”，再申请证书。')
           if (gateway?.port !== PUBLIC_PORT) throw new Error('公网监听端口与固定域名转发目标不一致，请先修复端口配置。')
           void access.certificates.ensure(true).catch(() => undefined)
+          return status(local)
+        }
+        case 'addPublicNode': {
+          const store = nodeStore()
+          const url = typeof input.url === 'string' ? input.url.trim() : ''
+          if (!url) throw new Error('请填写公网节点地址。')
+          const detected = await detectPublicNode(url)
+          if (!detected.ok) return { ok: false, message: detected.message }
+          // A service node may advertise a placeholder identity until this Host registers there, so only
+          // its structure is judged here; ServiceNode asserts the real hostId during registration.
+          if (store.list().some(record => record.url === detected.node.url)) return { ok: false, message: '该公网节点已存在。' }
+          const record = store.add({
+            url: detected.node.url, kind: detected.node.kind, name: detected.node.name, version: detected.node.version,
+            protocol: detected.node.protocol, capabilities: detected.node.capabilities, hostId: detected.node.hostId,
+            fingerprint: detected.node.fingerprint, pending: false,
+          })
+          return { ok: true, node: record }
+        }
+        case 'checkPublicNode': {
+          const store = nodeStore()
+          const id = String(input.id ?? '')
+          const record = store.list().find(item => item.id === id)
+          if (!record) throw new Error('公网节点不存在。')
+          const detected = await detectPublicNode(record.url)
+          if (!detected.ok) {
+            store.update(id, { lastCheckAt: Date.now(), lastCheckOk: false, lastCheckError: detected.message })
+            return { ok: false, message: detected.message }
+          }
+          return {
+            ok: true,
+            node: store.update(id, {
+              url: detected.node.url, kind: detected.node.kind, name: detected.node.name, version: detected.node.version,
+              protocol: detected.node.protocol, capabilities: detected.node.capabilities, hostId: detected.node.hostId,
+              fingerprint: detected.node.fingerprint, lastCheckAt: Date.now(), lastCheckOk: true, lastCheckError: null, pending: false,
+            }),
+          }
+        }
+        case 'setCurrentPublicNode': {
+          const store = nodeStore()
+          const id = String(input.id ?? '')
+          const record = store.list().find(item => item.id === id)
+          if (!record) throw new Error('公网节点不存在。')
+          if (enabled && preferences.mode === 'public' && busy) throw new Error('请等待当前连接操作完成。')
+          // A gateway node's public entry still rides on the saved domain; a service node's entry is the
+          // tunnel itself and leaves PublicAccess alone.
+          if (record.kind === 'gateway') await access?.saveDomain(record.url)
+          store.setCurrent(id)
+          if (enabled && preferences.mode === 'public') {
+            if (record.kind === 'service') await reconcileServiceNode()
+            else { await stop(); await start() }
+          } else await reconcileServiceNode()
+          return status(local)
+        }
+        case 'removePublicNode': {
+          const store = nodeStore()
+          const id = String(input.id ?? '')
+          const removed = store.remove(id)
+          if (!removed) throw new Error('公网节点不存在。')
+          if (serviceNode?.status().origin === removed.origin) {
+            const current = serviceNode
+            serviceNode = undefined
+            await current.stop()
+          }
+          // The live tunnel instance also holds the credentials in memory; purge it there so a later
+          // lastConnectedAt save cannot write the removed node back to disk.
+          if (serviceNode) await serviceNode.forget(removed.origin)
+          else await forgetServiceNode(storage, removed.origin)
+          // Authorizations issued through this node are scoped to its host; every other entry stays.
+          let hosts: string[] = []
+          try { const origin = new URL(removed.origin); hosts = [origin.host.toLowerCase(), origin.hostname.toLowerCase()] } catch { hosts = [] }
+          if (hosts.length) pairing.prune(device => !!device.host && hosts.includes(device.host.toLowerCase()))
+          await reconcileServiceNode()
+          return status(local)
+        }
+        case 'approveServicePairing': {
+          if (!local) throw new Error('首次配对必须在本机确认。')
+          if (!serviceNode) throw new Error('当前没有连接自托管公网节点。')
+          const id = String(input.id ?? '')
+          if (!id) throw new Error('缺少要处理的配对请求。')
+          serviceNode.approvePairing(id)
+          return status(local)
+        }
+        case 'rejectServicePairing': {
+          if (!local) throw new Error('配对请求由本机处理。')
+          if (!serviceNode) throw new Error('当前没有连接自托管公网节点。')
+          const id = String(input.id ?? '')
+          if (!id) throw new Error('缺少要处理的配对请求。')
+          serviceNode.rejectPairing(id)
           return status(local)
         }
         default: throw new Error('未知的远程控制操作。')

@@ -23,8 +23,9 @@ import { PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL, type PublicNodeDiscovery } from
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** The paired browser asks this same-host route whether the LAN entry is the same computer. */
 export const FALLBACK_PATH = '/rc/fallback'
-/** Set by the gateway on every request it forwards; the Host's local-only handlers refuse it. */
-export const REMOTE_MARK = 'x-dsh-rc-remote'
+// One header translation is shared with the service-node tunnel; the constant lives with it.
+export { REMOTE_MARK } from './upstream-http.js'
+import { upstreamRequestHeaders } from './upstream-http.js'
 /** Accept absolute Windows/Unix paths only; relative segments and UNC hosts stay out. */
 function validLocalPath(value: string): boolean {
   if (/[\r\n]/.test(value) || value.startsWith('//')) return false
@@ -379,16 +380,13 @@ export class Gateway {
     }
     this.proxy(req, res, device.id)
   }
-  private headers(req: IncomingMessage): Record<string, string | string[]> {
-    const headers: Record<string, string | string[]> = {}
-    const blocked = new Set(['host', 'cookie', 'authorization', 'origin', 'referer', 'connection', 'upgrade', 'accept-encoding', 'forwarded', 'sec-fetch-site', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol'])
-    for (const [name, value] of Object.entries(req.headers)) if (value !== undefined && !blocked.has(name) && !name.startsWith('x-forwarded') && !name.startsWith('x-dsh')) headers[name] = value
-    const host = `127.0.0.1:${this.options.upstreamPort}`
-    return { ...headers, host, cookie: this.options.upstreamCookie(), [REMOTE_MARK]: '1', origin: `http://${host}`, 'sec-fetch-site': 'same-origin', 'accept-encoding': 'identity' }
+  /** The loopback headers for one remote request; shared with the service-node tunnel. */
+  private upstreamHeaders(req: IncomingMessage): Record<string, string | string[]> {
+    return upstreamRequestHeaders(req, { upstreamPort: this.options.upstreamPort, cookie: this.options.upstreamCookie() })
   }
   private proxy(req: IncomingMessage, res: ServerResponse, deviceId: string): void {
     let upstream: ClientRequest
-    upstream = httpRequest({ hostname: '127.0.0.1', port: this.options.upstreamPort, path: req.url, method: req.method, headers: this.headers(req) }, incoming => {
+    upstream = httpRequest({ hostname: '127.0.0.1', port: this.options.upstreamPort, path: req.url, method: req.method, headers: this.upstreamHeaders(req) }, incoming => {
       const headers = { ...incoming.headers }
       delete headers['set-cookie']; delete headers['connection']; delete headers['transfer-encoding']
       if (headers.location) {
@@ -431,7 +429,7 @@ export class Gateway {
       this.wss.handleUpgrade(req, socket, head, ws => this.sse(req, ws, target, url.searchParams.get('lastEventId') ?? '', device.id)); return
     }
     // Only registered Host WS routes are reachable; no port or destination supplied by clients.
-    const headers = this.headers(req); delete headers['sec-websocket-protocol']
+    const headers = this.upstreamHeaders(req); delete headers['sec-websocket-protocol']
     const protocols = req.headers['sec-websocket-protocol']?.split(',').map(p => p.trim()) ?? []
     const upstream = new this.ws.WebSocket(`ws://127.0.0.1:${this.options.upstreamPort}${url.pathname}${url.search}`, protocols, { headers, maxPayload: 32 * 1024 * 1024, perMessageDeflate: this.deflate })
     const release = this.track(device.id, () => { upstream.terminate(); socket.destroy() })
@@ -461,7 +459,7 @@ export class Gateway {
     })
   }
   private sse(req: IncomingMessage, ws: WebSocket, path: string, lastId: string, deviceId: string): void {
-    const headers = this.headers(req); headers.accept = 'text/event-stream'
+    const headers = this.upstreamHeaders(req); headers.accept = 'text/event-stream'
     if (lastId && lastId.length < 4096 && !/[\r\n]/.test(lastId)) headers['last-event-id'] = lastId
     const decoder = new StringDecoder('utf8')
     const upstream = httpRequest({ hostname: '127.0.0.1', port: this.options.upstreamPort, path, headers }, response => {
