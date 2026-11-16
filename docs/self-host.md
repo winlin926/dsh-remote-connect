@@ -102,6 +102,9 @@ docker compose up -d --build
 - 撤销某台手机：手机端「删除此 Host」会调 `DELETE /v1/hosts/:hostId/devices/:deviceId`；
   服务端立即删除该设备会话、关闭其 WebSocket（关闭码 4004），并通知 Host。
 - Host 自己也能通过 `device.revoked` 控制帧撤销设备。
+- 在电脑面板删除某个自托管节点时，插件会先调用 `DELETE /v1/hosts/:hostId`（Host Bearer，只允许删除自己）
+  撤销该 Host 在节点上的注册并级联清理设备、关系、会话、票据与资源；撤销失败不阻断本地删除，面板会提示
+  「节点上的主机注册可能仍在…」，此时在节点上执行 `npm run admin:reset -- <hostId>` 直接删库再重试添加。
 - 彻底下线：`docker compose down`（保留数据卷）或 `docker compose down -v`（同时删除数据，不可恢复）。
 
 ## 8. 安全说明（如实）
