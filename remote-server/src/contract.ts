@@ -34,10 +34,20 @@ export function parseNodeDescriptor(value: unknown): NodeDescriptor {
 }
 
 export const DEVICE_ID_PATTERN = /^(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu
+/** A Host id is the 43-character Base64URL S256 fingerprint of the Host SPKI key. */
+export const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/u
 /** Base64URL alphabet and length only; the DER structure is validated by identity.ts. */
 export const IDENTITY_KEY_PATTERN = /^[A-Za-z0-9_-]{40,120}$/u
 
 const deviceIdSchema = z.string().regex(DEVICE_ID_PATTERN, 'Device ID must be a ULID or UUID.')
+/**
+ * A Host registers with `deviceId === hostId`, so its device id is either a
+ * regular ULID/UUID (older clients) or the 43-character Base64URL Host id.
+ */
+const hostDeviceIdSchema = z.string().refine(
+  value => DEVICE_ID_PATTERN.test(value) || HOST_ID_PATTERN.test(value),
+  'Device ID must be a ULID, a UUID, or the 43-character Base64URL Host id.',
+)
 const identityKeySchema = z.string().regex(
   IDENTITY_KEY_PATTERN,
   'Identity key must be a Base64URL-encoded SPKI DER public key.',
@@ -59,7 +69,7 @@ const clientVersionSchema = z.string().refine(value => {
  * plugin (Ed25519 SPKI DER, 44 bytes / 59 characters).
  */
 export const hostRegistrationSchema = z.object({
-  deviceId: deviceIdSchema,
+  deviceId: hostDeviceIdSchema,
   name: deviceNameSchema,
   identityKey: identityKeySchema,
   clientVersion: clientVersionSchema,

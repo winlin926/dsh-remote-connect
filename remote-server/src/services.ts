@@ -7,6 +7,8 @@ import type { PairingService } from './pairing.js'
 import type { RateLimiter } from './rate-limit.js'
 import type { Repositories } from './repositories.js'
 import type { SessionService } from './sessions.js'
+import type { TunnelHub } from './tunnel/hub.js'
+import type { TunnelProxy } from './tunnel/proxy.js'
 import type { TurnService } from './turn.js'
 import type { ControlHub } from './wss/hub.js'
 
@@ -23,4 +25,6 @@ export interface AppServices {
   turn: TurnService
   limiter: RateLimiter
   hub: ControlHub
+  tunnel: TunnelHub
+  tunnelProxy: TunnelProxy
 }

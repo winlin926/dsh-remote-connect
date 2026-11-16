@@ -17,7 +17,7 @@ function ifNoneMatchFrom(ctx: RouteContext): string | null {
  * collide in an intermediate cache.
  */
 export function registerAssetRoutes(router: Router, services: AppServices): void {
-  const { config, auth, assets, limiter } = services
+  const { config, auth, assets, limiter, tunnelProxy } = services
 
   router.add('PUT', '/v1/assets', async ctx => {
     const host = auth.authenticateHostRequest(ctx.req)
@@ -47,7 +47,7 @@ export function registerAssetRoutes(router: Router, services: AppServices): void
     )
   })
 
-  const serveAsset = (ctx: RouteContext): void => {
+  const serveAsset = async (ctx: RouteContext): Promise<void> => {
     const hostId = ctx.params.hid ?? ''
     const revision = ctx.params.rev ?? ''
     if (!HOST_ID_PATTERN.test(hostId)) {
@@ -58,7 +58,16 @@ export function registerAssetRoutes(router: Router, services: AppServices): void
     }
     const assetPath = `/${ctx.params['*'] ?? ''}`
     const asset = assets.get(hostId, revision, assetPath, ifNoneMatchFrom(ctx))
-    if (!asset) throw ApiError.notFound('ASSET_NOT_FOUND', 'The asset is not available on this node.')
+    if (!asset) {
+      // A paired device may ask for a fresh build revision the node has not
+      // cached yet; streams the Host serves must be proxied, not rejected.
+      const session = auth.sessionFromRequest(ctx.req)
+      if (session) {
+        await tunnelProxy.handleRequest(ctx.req, ctx.res, ctx.url, session)
+        return
+      }
+      throw ApiError.notFound('ASSET_NOT_FOUND', 'The asset is not available on this node.')
+    }
     if (asset.notModified) {
       ctx.res.writeHead(304, {
         ...baseHeaders(),

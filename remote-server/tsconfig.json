@@ -20,7 +20,11 @@
     "declaration": false,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "../src/remote/vendor/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "../src/remote/tunnel-protocol.ts",
+    "../src/remote/vendor/**/*.ts"
+  ],
   "exclude": [
     "node_modules",
     "dist",

@@ -201,7 +201,7 @@ test('damaged cookies and hostile headers never produce 500s', async () => {
     assert.equal(wrongMethod.status, 405)
     assert.equal(wrongMethod.json.error.code, 'METHOD_NOT_ALLOWED')
 
-    const notFound = await api(node.baseUrl, 'GET', '/definitely-not-here')
+    const notFound = await api(node.baseUrl, 'GET', '/v1/definitely-not-here')
     assert.equal(notFound.status, 404)
     assert.equal(notFound.json.error.code, 'NOT_FOUND')
 

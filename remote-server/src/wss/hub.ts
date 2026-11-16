@@ -563,6 +563,11 @@ export class ControlHub {
     connection.relayCounters.clear()
   }
 
+  /** Whether a Host currently holds a live control connection. */
+  isHostOnline(hostId: string): boolean {
+    return this.hosts.has(hostId)
+  }
+
   /** Close the live control connection of a device (device revocation). */
   closeClientSessions(deviceId: string, code = CLOSE_REVOKED, reason = 'device revoked'): void {
     const connection = this.clients.get(deviceId)
