@@ -165,6 +165,17 @@ export class TunnelProxy implements TunnelFrameHandler {
     })
   }
 
+  /**
+   * Close every live WebSocket this device holds through the tunnel. Called when
+   * its relationship is revoked so the phone cannot keep streaming on a dead grant.
+   */
+  closeDevice(deviceId: string): void {
+    for (const exchange of this.wsExchanges.values()) {
+      if (exchange.deviceId !== deviceId || !exchange.client) continue
+      exchange.client.close(4004, 'relationship revoked')
+    }
+  }
+
   /** Proxy one HTTP request for an already-authenticated paired device. */
   async handleRequest(req: IncomingMessage, res: ServerResponse, url: URL, session: SessionContext): Promise<void> {
     const deviceId = session.device.device_id

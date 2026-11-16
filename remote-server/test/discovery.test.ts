@@ -167,7 +167,7 @@ test('node schema rejects a wrong protocol, flat Host fields or a malformed node
     kind: 'service',
     name: '我的公网节点',
     version: '0.6.2',
-    capabilities: ['pairing', 'relay'],
+    capabilities: ['pairing', 'cache'],
     node: { id: 'A'.repeat(43), fingerprint: '0'.repeat(32), publicKey: randomIdentityKey() },
   }
   assert.equal(nodeDescriptorSchema.safeParse(valid).success, true)
@@ -177,7 +177,7 @@ test('node schema rejects a wrong protocol, flat Host fields or a malformed node
   assert.equal(nodeDescriptorSchema.safeParse({ ...valid, kind: 'gateway' }).success, true, 'gateway is a valid contract kind')
   assert.equal(nodeDescriptorSchema.safeParse({ ...valid, kind: 'peer' }).success, false)
   assert.equal(nodeDescriptorSchema.safeParse({ ...valid, capabilities: ['cache'] }).success, false, 'pairing is required')
-  assert.equal(nodeDescriptorSchema.safeParse({ ...valid, capabilities: ['pairing', 'relay', 'telepathy'] }).success, false)
+  assert.equal(nodeDescriptorSchema.safeParse({ ...valid, capabilities: ['pairing', 'cache', 'telepathy'] }).success, false)
   assert.equal(nodeDescriptorSchema.safeParse({ ...valid, capabilities: ['pairing', 'pairing'] }).success, false)
   assert.equal(nodeDescriptorSchema.safeParse({ ...valid, hostId: 'A'.repeat(43) }).success, false, 'service descriptors carry no flat Host id')
   assert.equal(nodeDescriptorSchema.safeParse({ ...valid, fingerprint: '0'.repeat(32) }).success, false)
@@ -251,7 +251,7 @@ test('invalid configuration fails fast instead of silently degrading', async () 
   )
   await assert.rejects(
     () => startNode({ CAPABILITIES: 'pairing,turn' }),
-    (error: any) => error?.name === 'ConfigError' && /reserved for a future protocol version/u.test(error.message),
+    (error: any) => error?.name === 'ConfigError' && /is not one of/u.test(error.message),
   )
   await assert.rejects(
     () => startNode({ PAIRING_TICKET_TTL_SECONDS: '600' }),

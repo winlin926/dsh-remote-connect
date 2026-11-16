@@ -11,17 +11,14 @@ import {
 import {
   constantTimeStringEqual,
 } from './identity.js'
-import type { ControlFrame, ControlFrameType } from './protocol.js'
+import type { TunnelFrame } from '../../src/remote/tunnel-protocol.js'
 import type { HostRow, PairingRequestRow, Repositories } from './repositories.js'
 import type { SessionService } from './sessions.js'
 
-/** Events pushed to live control connections; implemented by the WSS hub. */
-export interface ControlNotifier {
+/** Events pushed to the live tunnel; implemented by the tunnel hub. */
+export interface PairingNotifier {
   isHostOnline(hostId: string): boolean
-  sendToHost(hostId: string, frame: ControlFrame): boolean
-  sendToDevice(deviceId: string, frame: ControlFrame): boolean
-  closeDeviceSessions(deviceId: string, code: number, reason: string): void
-  closeHostConnections(hostId: string, code: number, reason: string): void
+  sendToHost(hostId: string, frame: TunnelFrame): boolean
 }
 
 export interface PairingHostView {
@@ -60,7 +57,7 @@ const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/u
  * authorizes at most one pairing attempt and is consumed atomically.
  */
 export class PairingService {
-  private registry: ControlNotifier | null = null
+  private registry: PairingNotifier | null = null
 
   constructor(
     private readonly repos: Repositories,
@@ -69,12 +66,12 @@ export class PairingService {
     private readonly clock: () => number = Date.now,
   ) {}
 
-  attach(registry: ControlNotifier): void {
+  attach(registry: PairingNotifier): void {
     this.registry = registry
   }
 
-  private notifier(): ControlNotifier {
-    if (!this.registry) throw new Error('PairingService is not attached to the control hub')
+  private notifier(): PairingNotifier {
+    if (!this.registry) throw new Error('PairingService is not attached to the tunnel hub')
     return this.registry
   }
 
@@ -158,7 +155,8 @@ export class PairingService {
     })
     if (!consumed) throw ApiError.conflict('TICKET_USED', 'The pairing ticket was already used.')
 
-    this.push(host.host_id, 'pair.request', {
+    this.push(host.host_id, {
+      t: 'pair.request',
       requestId,
       clientDeviceId: input.client.deviceId,
       clientName: input.client.name,
@@ -203,7 +201,7 @@ export class PairingService {
     if (request.state === 'rejected') throw ApiError.conflict('PAIRING_REJECTED', 'The pairing request was rejected.')
     if (!approve) {
       if (request.state !== 'complete') this.repos.setPairingRejected(requestId)
-      this.push(host.host_id, 'pair.reject', { requestId })
+      this.push(host.host_id, { t: 'pair.reject', requestId })
       return this.status(requestId)
     }
     this.assertOpen(request, now)
@@ -211,7 +209,8 @@ export class PairingService {
       this.repos.advancePairing(requestId, ['pending'], 'host_approved', 'host_confirmed_at', now)
     } else if (request.state === 'client_approved') {
       this.complete(request, now)
-      this.push(host.host_id, 'pair.complete', {
+      this.push(host.host_id, {
+        t: 'pair.complete',
         requestId,
         clientDeviceId: request.client_device_id,
         clientIdentityKey: request.client_identity_key,
@@ -301,14 +300,8 @@ export class PairingService {
     }
   }
 
-  private push(hostId: string, type: ControlFrameType, payload: unknown): void {
-    this.notifier().sendToHost(hostId, {
-      v: 1,
-      id: newRequestId(),
-      type,
-      timestamp: this.clock(),
-      payload,
-    } as ControlFrame)
+  private push(hostId: string, frame: TunnelFrame): void {
+    this.notifier().sendToHost(hostId, frame)
   }
 
   /** Delete long-expired pairing material. */

@@ -9,14 +9,6 @@ export class ConfigError extends Error {
   }
 }
 
-export interface TurnConfig {
-  /** `turn:`/`turns:` URLs advertised to clients. */
-  urls: string[]
-  /** Shared secret used for coturn REST HMAC credentials. Never logged. */
-  secret: string
-  ttlSeconds: number
-}
-
 export interface RateLimitRule {
   /** Sustained requests per second. */
   ratePerSecond: number
@@ -39,12 +31,6 @@ export interface Config {
   pairingTicketTtlMs: number
   sessionTtlMs: number
   assetMaxBytes: number
-  turn: TurnConfig | null
-  helloTimeoutMs: number
-  heartbeatIntervalMs: number
-  heartbeatTimeoutMs: number
-  maxConnectionsPerClient: number
-  maxConnections: number
   logLevel: LogLevel
   limits: {
     http: RateLimitRule
@@ -53,7 +39,6 @@ export interface Config {
     pairingClaim: RateLimitRule
     pairingDecision: RateLimitRule
     upgrade: RateLimitRule
-    frames: RateLimitRule
   }
 }
 
@@ -129,31 +114,8 @@ function readAllowedOrigins(env: NodeJS.ProcessEnv): string[] {
   return origins
 }
 
-function readTurn(env: NodeJS.ProcessEnv): TurnConfig | null {
-  const urlsRaw = readString(env, 'TURN_URLS')
-  const secret = readString(env, 'TURN_SECRET')
-  if (urlsRaw === null && secret === null) return null
-  if (urlsRaw === null || secret === null) {
-    throw new ConfigError('TURN_URLS and TURN_SECRET must be configured together.')
-  }
-  const urls = urlsRaw.split(',').map(entry => entry.trim()).filter(entry => entry.length > 0)
-  if (urls.length === 0) throw new ConfigError('TURN_URLS must contain at least one TURN URL.')
-  for (const url of urls) {
-    if (!/^turns?:[A-Za-z0-9.-]+(?::\d{1,5})?(?:\?.*)?$/u.test(url)) {
-      throw new ConfigError(`TURN_URLS entry "${url}" must be a turn: or turns: URL.`)
-    }
-  }
-  if (secret.length < 16) throw new ConfigError('TURN_SECRET must be at least 16 characters.')
-  const ttlSeconds = readInt(env, 'TURN_TTL_SECONDS', 3600, 60, 86_400)
-  return { urls, secret, ttlSeconds }
-}
-
 const ADVERTISED_CAPABILITIES: readonly Capability[] = ['pairing', 'cache', 'official-ui']
 
-/**
- * 0.6.2 只宣告产品路径真正使用的能力：HTTPS/WSS 隧道转发。`relay`/`turn` 仍在
- * schema 白名单里，供将来协议版本使用，本轮不允许任何节点宣告。
- */
 function readCapabilities(env: NodeJS.ProcessEnv): Capability[] {
   const raw = readString(env, 'CAPABILITIES')
   if (raw === null) return [...ADVERTISED_CAPABILITIES]
@@ -165,11 +127,6 @@ function readCapabilities(env: NodeJS.ProcessEnv): Capability[] {
       throw new ConfigError(`CAPABILITIES entry "${trimmed}" is not one of ${CAPABILITY_VALUES.join(', ')}.`)
     }
     const capability = trimmed as Capability
-    if (!ADVERTISED_CAPABILITIES.includes(capability)) {
-      throw new ConfigError(
-        `CAPABILITIES entry "${capability}" is reserved for a future protocol version; 0.6.2 only advertises ${ADVERTISED_CAPABILITIES.join(', ')}.`,
-      )
-    }
     if (!values.includes(capability)) values.push(capability)
   }
   if (!values.includes('pairing')) throw new ConfigError('CAPABILITIES must include "pairing".')
@@ -199,7 +156,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const publicOrigin = readOrigin(env)
   const allowedOrigins = readAllowedOrigins(env)
   if (publicOrigin && !allowedOrigins.includes(publicOrigin)) allowedOrigins.unshift(publicOrigin)
-  const turn = readTurn(env)
   const pairingTicketTtlMs = readInt(env, 'PAIRING_TICKET_TTL_SECONDS', 300, 30, 300) * 1_000
   if (pairingTicketTtlMs > MAX_PAIRING_TTL_MS) {
     throw new ConfigError('PAIRING_TICKET_TTL_SECONDS must not exceed 300.')
@@ -219,12 +175,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pairingTicketTtlMs,
     sessionTtlMs: readInt(env, 'SESSION_TTL_DAYS', 30, 1, 365) * 86_400_000,
     assetMaxBytes: readInt(env, 'ASSET_MAX_BYTES', 16 * 1024 * 1024, 1024, 64 * 1024 * 1024),
-    turn,
-    helloTimeoutMs: readInt(env, 'HELLO_TIMEOUT_MS', 5_000, 100, 60_000),
-    heartbeatIntervalMs: 25_000,
-    heartbeatTimeoutMs: 75_000,
-    maxConnectionsPerClient: readInt(env, 'MAX_CONNECTIONS_PER_CLIENT', 8, 1, 64),
-    maxConnections: readInt(env, 'MAX_CONNECTIONS', 256, 1, 4096),
     logLevel: readLevel(env),
     limits: {
       http: { ratePerSecond: 20, burst: 200 },
@@ -233,7 +183,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       pairingClaim: { ratePerSecond: 0.5, burst: 30 },
       pairingDecision: { ratePerSecond: 1, burst: 60 },
       upgrade: { ratePerSecond: 0.5, burst: 30 },
-      frames: { ratePerSecond: 500, burst: 1_500 },
     },
   }
 }

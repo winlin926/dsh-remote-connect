@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
-import WebSocket from 'ws'
 import {
   api,
-  connectControl,
-  hostHello,
   hostRegistration,
   rawRequest,
   registerHost,
@@ -73,9 +70,6 @@ test('PUBLIC_ORIGIN pins the canonical origin and the device cookie origin', asy
     service.attach({
       isHostOnline: () => true,
       sendToHost: () => true,
-      sendToDevice: () => true,
-      closeDeviceSessions: () => undefined,
-      closeHostConnections: () => undefined,
     })
     const hostRow = node.app.services.repos.findHostByDeviceId(host.registration.deviceId)
     const client = {
@@ -135,37 +129,6 @@ test('X-Forwarded-* is trusted only when TRUST_PROXY is enabled', async () => {
     assert.equal(forwarded.status, 201, 'the canonical origin must come from X-Forwarded-* when trusted')
   } finally {
     await proxied.stop()
-  }
-})
-
-test('WebSocket upgrades from a foreign origin are refused', async () => {
-  const node = await startNode()
-  const host = await registerHost(node, hostRegistration())
-  try {
-    await assert.rejects(
-      connectControl(node, hostHello(node, host), { origin: 'https://evil.example' }),
-      (error: any) => error.statusCode === 403,
-    )
-  } finally {
-    await node.stop()
-  }
-})
-
-test('upgrades to the wrong path are refused', async () => {
-  const node = await startNode()
-  try {
-    const port = node.app.server.address().port
-    const status = await new Promise<number>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/controlx`, { origin: node.baseUrl })
-      ws.on('unexpected-response', (_request, response) => resolve(response.statusCode ?? 0))
-      ws.on('open', () => reject(new Error('upgrade unexpectedly succeeded')))
-      ws.on('error', () => {
-        // The unexpected-response handler resolves first.
-      })
-    })
-    assert.equal(status, 404)
-  } finally {
-    await node.stop()
   }
 })
 

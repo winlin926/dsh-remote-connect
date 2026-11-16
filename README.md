@@ -6,7 +6,7 @@
 
 **同一 Wi-Fi → 手机扫码 → 电脑确认 → 手机继续会话。** 局域网支持普通 HTTP 或可信域名 HTTPS；外网访问可另外配置固定 HTTPS 域名与转发通道。
 
-当前版本 **0.6.2**，适配 **DSH 0.2.2 系列**，验证基线为 **0.2.2-rc.3**。这是基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 维护的非官方插件，保留原作者署名和 MIT 许可证。
+当前版本 **0.6.3**，适配 **DSH 0.2.2 系列**，验证基线为 **0.2.2-rc.3**。这是基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 维护的非官方插件，保留原作者署名和 MIT 许可证。
 
 [安装与扫码](#安装与扫码) · [界面预览](#界面预览) · [公网连接](#进阶公网节点连接) · [从 dsh-roam 迁移](#从-dsh-roam-迁移)
 

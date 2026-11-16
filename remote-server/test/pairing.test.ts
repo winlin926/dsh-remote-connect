@@ -6,9 +6,6 @@ import { ApiError } from '../dist/remote-server/src/errors.js'
 import {
   api,
   completePairing,
-  connectClient,
-  connectHost,
-  delay,
   hostRegistration,
   parseSetCookie,
   randomDeviceId,
@@ -16,6 +13,7 @@ import {
   randomToken,
   registerHost,
   startNode,
+  TestHost,
   verificationCodeFor,
 } from './helpers.ts'
 
@@ -26,7 +24,7 @@ function sha256Hex(value: string): string {
 test('pairing needs the phone decision and the desktop decision before a cookie is issued', async () => {
   const node = await startNode()
   const host = await registerHost(node, hostRegistration())
-  const hostClient = await connectHost(node, host)
+  const hostClient = await TestHost.connect(node, host)
   try {
     const ticketResponse = await api(node.baseUrl, 'POST', '/v1/pairings', { token: host.credential })
     assert.equal(ticketResponse.status, 201)
@@ -52,12 +50,12 @@ test('pairing needs the phone decision and the desktop decision before a cookie 
     const expectedCode = verificationCodeFor(ticket, host.registration.identityKey, client.identityKey)
     assert.equal(claim.json.verificationCode, expectedCode)
 
-    const pairRequest = await hostClient.next('pair.request')
-    assert.equal(pairRequest.payload.requestId, claim.json.requestId)
-    assert.equal(pairRequest.payload.verificationCode, expectedCode)
-    assert.match(pairRequest.payload.verificationCode, /^\d{8}$/u)
-    assert.equal(pairRequest.payload.clientDeviceId, client.deviceId)
-    assert.equal(pairRequest.payload.clientIdentityKey, client.identityKey)
+    const pairRequest = await hostClient.nextOfType('pair.request')
+    assert.equal(pairRequest.frame.requestId, claim.json.requestId)
+    assert.equal(pairRequest.frame.verificationCode, expectedCode)
+    assert.match(pairRequest.frame.verificationCode, /^\d{8}$/u)
+    assert.equal(pairRequest.frame.clientDeviceId, client.deviceId)
+    assert.equal(pairRequest.frame.clientIdentityKey, client.identityKey)
 
     const phoneDecision = await api(node.baseUrl, 'POST', `/v1/pairings/${claim.json.requestId}/confirm`, {
       headers: { 'x-pairing-token': claim.json.pairingToken },
@@ -73,11 +71,11 @@ test('pairing needs the phone decision and the desktop decision before a cookie 
     assert.equal(beforeDesktop.json.state, 'client_approved')
     assert.equal(beforeDesktop.setCookies.length, 0)
 
-    hostClient.send('pair.approve', { requestId: claim.json.requestId })
-    const completeFrame = await hostClient.next('pair.complete')
-    assert.equal(completeFrame.payload.requestId, claim.json.requestId)
-    assert.equal(completeFrame.payload.clientDeviceId, client.deviceId)
-    assert.equal(completeFrame.payload.clientIdentityKey, client.identityKey)
+    hostClient.send({ t: 'pair.approve', requestId: claim.json.requestId })
+    const completeFrame = await hostClient.nextOfType('pair.complete')
+    assert.equal(completeFrame.frame.requestId, claim.json.requestId)
+    assert.equal(completeFrame.frame.clientDeviceId, client.deviceId)
+    assert.equal(completeFrame.frame.clientIdentityKey, client.identityKey)
 
     const done = await api(node.baseUrl, 'GET', `/v1/pairings/${claim.json.requestId}`, {
       headers: { 'x-pairing-token': claim.json.pairingToken },
@@ -128,16 +126,16 @@ test('pairing needs the phone decision and the desktop decision before a cookie 
 test('desktop approval first still waits for the phone decision', async () => {
   const node = await startNode()
   const host = await registerHost(node, hostRegistration())
-  const hostClient = await connectHost(node, host)
+  const hostClient = await TestHost.connect(node, host)
   try {
     const ticketResponse = await api(node.baseUrl, 'POST', '/v1/pairings', { token: host.credential })
     const client = { deviceId: randomDeviceId(), name: '手机', platform: 'android', identityKey: randomIdentityKey() }
     const claim = await api(node.baseUrl, 'POST', '/v1/pairings/claim', {
       body: { ticket: ticketResponse.json.ticket, client },
     })
-    await hostClient.next('pair.request')
+    await hostClient.nextOfType('pair.request')
 
-    hostClient.send('pair.approve', { requestId: claim.json.requestId })
+    hostClient.send({ t: 'pair.approve', requestId: claim.json.requestId })
     const waiting = await api(node.baseUrl, 'GET', `/v1/pairings/${claim.json.requestId}`, {
       headers: { 'x-pairing-token': claim.json.pairingToken },
     })
@@ -161,7 +159,7 @@ test('desktop approval first still waits for the phone decision', async () => {
 test('pairing tickets are single use and pairing tokens are enforced', async () => {
   const node = await startNode()
   const host = await registerHost(node, hostRegistration())
-  const hostClient = await connectHost(node, host)
+  const hostClient = await TestHost.connect(node, host)
   try {
     const ticketResponse = await api(node.baseUrl, 'POST', '/v1/pairings', { token: host.credential })
     const client = { deviceId: randomDeviceId(), name: '手机', platform: 'ios', identityKey: randomIdentityKey() }
@@ -169,7 +167,7 @@ test('pairing tickets are single use and pairing tokens are enforced', async () 
       body: { ticket: ticketResponse.json.ticket, client },
     })
     assert.equal(claim.status, 201)
-    await hostClient.next('pair.request')
+    await hostClient.nextOfType('pair.request')
 
     const replayClaim = await api(node.baseUrl, 'POST', '/v1/pairings/claim', {
       body: { ticket: ticketResponse.json.ticket, client },
@@ -208,9 +206,6 @@ test('expired tickets and expired pairing requests are rejected', async () => {
     service.attach({
       isHostOnline: () => true,
       sendToHost: () => true,
-      sendToDevice: () => true,
-      closeDeviceSessions: () => undefined,
-      closeHostConnections: () => undefined,
     })
     const hostRow = node.app.services.repos.findHostByDeviceId(host.registration.deviceId)
     const client = { deviceId: randomDeviceId(), name: '手机', platform: 'ios', identityKey: randomIdentityKey() }
@@ -288,16 +283,16 @@ test('a ticket cannot be claimed while the Host is offline', async () => {
 test('rejections issue no cookie and are visible to both sides', async () => {
   const node = await startNode()
   const host = await registerHost(node, hostRegistration())
-  const hostClient = await connectHost(node, host)
+  const hostClient = await TestHost.connect(node, host)
   try {
     const ticketA = await api(node.baseUrl, 'POST', '/v1/pairings', { token: host.credential })
     const clientA = { deviceId: randomDeviceId(), name: '手机A', platform: 'ios', identityKey: randomIdentityKey() }
     const claimA = await api(node.baseUrl, 'POST', '/v1/pairings/claim', {
       body: { ticket: ticketA.json.ticket, client: clientA },
     })
-    await hostClient.next('pair.request')
-    hostClient.send('pair.reject', { requestId: claimA.json.requestId })
-    await hostClient.next('pair.reject')
+    await hostClient.nextOfType('pair.request')
+    hostClient.send({ t: 'pair.reject', requestId: claimA.json.requestId })
+    await hostClient.nextOfType('pair.reject')
     const rejected = await api(node.baseUrl, 'GET', `/v1/pairings/${claimA.json.requestId}`, {
       headers: { 'x-pairing-token': claimA.json.pairingToken },
     })
@@ -314,15 +309,18 @@ test('rejections issue no cookie and are visible to both sides', async () => {
     const claimB = await api(node.baseUrl, 'POST', '/v1/pairings/claim', {
       body: { ticket: ticketB.json.ticket, client: clientB },
     })
-    await hostClient.next('pair.request')
+    await hostClient.nextOfType('pair.request')
     const phoneReject = await api(node.baseUrl, 'POST', `/v1/pairings/${claimB.json.requestId}/reject`, {
       headers: { 'x-pairing-token': claimB.json.pairingToken },
     })
     assert.equal(phoneReject.status, 200)
     assert.equal(phoneReject.json.state, 'rejected')
-    hostClient.send('pair.approve', { requestId: claimB.json.requestId })
-    const errorFrame = await hostClient.next('error')
-    assert.equal(errorFrame.payload.code, 'PAIRING_REJECTED')
+    hostClient.send({ t: 'pair.approve', requestId: claimB.json.requestId })
+    const stillRejected = await api(node.baseUrl, 'GET', `/v1/pairings/${claimB.json.requestId}`, {
+      headers: { 'x-pairing-token': claimB.json.pairingToken },
+    })
+    assert.equal(stillRejected.json.state, 'rejected')
+    assert.equal(stillRejected.setCookies.length, 0)
   } finally {
     hostClient.close()
     await node.stop()
@@ -349,104 +347,6 @@ test('reusing a paired device id with another identity key fails closed', async 
   } finally {
     paired.hostClient.close()
     await node.stop()
-  }
-})
-
-test('revoking a device closes its control connection and invalidates the cookie', async () => {
-  const node = await startNode()
-  const paired = await completePairing(node)
-  let client: Awaited<ReturnType<typeof connectClient>> | null = null
-  try {
-    client = await connectClient(node, paired.client.deviceId, paired.sessionToken)
-    client.send('connect.request', { hostDeviceId: paired.hostDeviceId, preferredTransports: ['relay'] })
-    const accepted = await client.next('connect.accepted')
-    assert.ok(accepted.payload.connectionId)
-
-    const revoked = await api(
-      node.baseUrl,
-      'DELETE',
-      `/v1/hosts/${paired.hostId}/devices/${paired.client.deviceId}`,
-      { cookie: paired.cookieParts.name + '=' + paired.cookieParts.value },
-    )
-    assert.equal(revoked.status, 200)
-    assert.deepEqual(revoked.json, { ok: true, hostId: paired.hostId, deviceId: paired.client.deviceId })
-
-    const closeInfo = await client.waitClose()
-    assert.equal(closeInfo.code, 4004, 'the revoked device control connection must be closed with 4004')
-
-    const notification = await paired.hostClient.next('device.revoked')
-    assert.equal(notification.payload.deviceId, paired.client.deviceId)
-
-    const list = await api(node.baseUrl, 'GET', '/v1/hosts', {
-      cookie: paired.cookieParts.name + '=' + paired.cookieParts.value,
-    })
-    assert.equal(list.status, 401, 'the revoked device cookie must stop working')
-    assert.equal(list.json.error.code, 'AUTH_REQUIRED')
-
-    const again = await api(
-      node.baseUrl,
-      'DELETE',
-      `/v1/hosts/${paired.hostId}/devices/${paired.client.deviceId}`,
-      { headers: { authorization: 'Bearer ' + 'A'.repeat(43) } },
-    )
-    assert.equal(again.status, 401)
-
-    const mismatch = await api(node.baseUrl, 'DELETE', `/v1/hosts/${paired.hostId}/devices/${randomDeviceId()}`)
-    assert.equal(mismatch.status, 401)
-  } finally {
-    client?.close()
-    paired.hostClient.close()
-    await node.stop()
-  }
-})
-
-test('a host-side device.revoked frame closes the client connection too', async () => {
-  const node = await startNode()
-  const paired = await completePairing(node)
-  let client: Awaited<ReturnType<typeof connectClient>> | null = null
-  try {
-    client = await connectClient(node, paired.client.deviceId, paired.sessionToken)
-    paired.hostClient.send('device.revoked', { deviceId: paired.client.deviceId })
-    const notification = await paired.hostClient.next('device.revoked')
-    assert.equal(notification.payload.deviceId, paired.client.deviceId)
-    const closeInfo = await client.waitClose()
-    assert.equal(closeInfo.code, 4004)
-    await delay(10)
-    const deviceRow = node.app.db.prepare('SELECT * FROM devices WHERE device_id = ?').get(paired.client.deviceId)
-    assert.ok(deviceRow, 'the device directory entry survives revocation; only the relationship is revoked')
-    const relationship: any = node.app.db
-      .prepare('SELECT * FROM relationships WHERE client_device_id = ?')
-      .get(paired.client.deviceId)
-    assert.notEqual(relationship.revoked_at, null)
-  } finally {
-    client?.close()
-    paired.hostClient.close()
-    await node.stop()
-  }
-})
-
-test('the shared codec accepts an eight-digit pairing comparison code and nothing else', async () => {
-  const protocol = await import('../dist/remote-server/src/protocol.js')
-  const payload = {
-    requestId: randomDeviceId(),
-    clientDeviceId: randomDeviceId(),
-    clientName: '手机',
-    clientIdentityKey: randomIdentityKey(),
-    verificationCode: '01234567',
-    expiresAt: Date.now() + 300_000,
-  }
-  const encoded = protocol.encodeControlFrame(protocol.createControlFrame('pair.request', payload))
-  assert.equal(typeof encoded, 'string')
-  const decoded: any = protocol.decodeControlFrame(encoded)
-  assert.equal(decoded.type, 'pair.request')
-  assert.equal(decoded.payload.verificationCode, '01234567')
-
-  for (const verificationCode of ['012345678', '0123456a', 'abcdefgh']) {
-    assert.throws(
-      () => protocol.encodeControlFrame(protocol.createControlFrame('pair.request', { ...payload, verificationCode })),
-      undefined,
-      `verificationCode ${verificationCode} must be rejected`,
-    )
   }
 })
 

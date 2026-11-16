@@ -27,10 +27,10 @@ export const PUBLIC_NODE_TIMEOUT = 5000
 export const NODE_NAME_MAX = 64
 
 export type PublicNodeKind = 'gateway' | 'service'
-export type PublicNodeCapability = 'pairing' | 'cache' | 'official-ui' | 'relay' | 'turn'
+export type PublicNodeCapability = 'pairing' | 'cache' | 'official-ui'
 export const PUBLIC_NODE_KINDS: readonly PublicNodeKind[] = ['gateway', 'service']
 /** Exact lowercase spellings; an unknown capability fails detection so a new one needs a protocol bump. */
-export const PUBLIC_NODE_CAPABILITIES: readonly PublicNodeCapability[] = ['pairing', 'cache', 'official-ui', 'relay', 'turn']
+export const PUBLIC_NODE_CAPABILITIES: readonly PublicNodeCapability[] = ['pairing', 'cache', 'official-ui']
 
 /** Host identity encodings; see `host-identity.ts` for how a node derives them. */
 export const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/

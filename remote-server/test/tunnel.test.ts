@@ -4,13 +4,9 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { test } from 'node:test'
 import WebSocket from 'ws'
 import {
-  TUNNEL_PROTOCOL_VERSION,
-  decodeTunnelFrame,
-  encodeTunnelFrame,
   splitTunnelPayload,
   type TunnelFrame,
   type TunnelHeaders,
-  type TunnelHelloFrame,
   type TunnelHttpRequestFrame,
 } from '../dist/src/remote/tunnel-protocol.js'
 import {
@@ -21,150 +17,12 @@ import {
   hostIdentityFromKey,
   hostRegistration,
   startNode,
+  TestHost,
+  type HostFrame,
   type PairedDevice,
   type RegisteredHost,
   type TestNode,
 } from './helpers.ts'
-
-interface HostFrame {
-  frame: TunnelFrame
-  payload: Buffer
-}
-
-interface Waiter {
-  match: (frame: TunnelFrame) => boolean
-  resolve: (value: HostFrame) => void
-  timer: NodeJS.Timeout
-}
-
-/** A stand-in for the desktop Host process speaking the binary tunnel protocol. */
-class FakeHost {
-  readonly received: HostFrame[] = []
-  readonly ws: WebSocket
-  private readonly waiters: Waiter[] = []
-  private closeInfo: { code: number; reason: string } | null = null
-  readonly closed: Promise<{ code: number; reason: string }>
-
-  constructor(ws: WebSocket) {
-    this.ws = ws
-    this.closed = new Promise(resolve => {
-      ws.on('close', (code, reason) => {
-        this.closeInfo = { code, reason: reason.toString() }
-        resolve(this.closeInfo)
-      })
-    })
-    ws.on('message', (data, isBinary) => {
-      if (!isBinary) return
-      const buffer = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
-      let decoded: ReturnType<typeof decodeTunnelFrame>
-      try {
-        decoded = decodeTunnelFrame(buffer)
-      } catch {
-        return
-      }
-      const entry: HostFrame = { frame: decoded.frame, payload: Buffer.from(decoded.payload) }
-      if (entry.frame.t === 'ping') {
-        void this.send({ t: 'pong', at: entry.frame.at })
-        return
-      }
-      const waiter = this.waiters.find(candidate => candidate.match(entry.frame))
-      if (waiter) {
-        clearTimeout(waiter.timer)
-        this.waiters.splice(this.waiters.indexOf(waiter), 1)
-        waiter.resolve(entry)
-        return
-      }
-      this.received.push(entry)
-    })
-    ws.on('error', () => {
-      // A socket error is always followed by close.
-    })
-  }
-
-  static async connect(node: TestNode, host: RegisteredHost): Promise<FakeHost> {
-    const ws = new WebSocket(`${node.baseUrl.replace(/^http/u, 'ws')}/v1/tunnel`, {
-      headers: { authorization: `Bearer ${host.credential}` },
-    })
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve())
-      ws.once('error', (error: Error) => reject(error))
-    })
-    const fake = new FakeHost(ws)
-    const hello: TunnelHelloFrame = {
-      t: 'hello',
-      hostId: host.host.hostId,
-      version: TUNNEL_PROTOCOL_VERSION,
-      capabilities: ['http', 'ws', 'assets'],
-    }
-    fake.send(hello)
-    const deadline = Date.now() + 5_000
-    while (!node.app.services.tunnel.isHostOnline(host.host.hostId)) {
-      if (Date.now() > deadline) throw new Error('the tunnel hello handshake did not complete')
-      await delay(5)
-    }
-    return fake
-  }
-
-  send(frame: TunnelFrame, payload?: Uint8Array): void {
-    this.ws.send(encodeTunnelFrame(frame, payload))
-  }
-
-  count(type: string): number {
-    return this.received.filter(entry => entry.frame.t === type).length
-  }
-
-  next(match: (frame: TunnelFrame) => boolean, timeoutMs = 5_000): Promise<HostFrame> {
-    const index = this.received.findIndex(entry => match(entry.frame))
-    if (index >= 0) {
-      const [entry] = this.received.splice(index, 1)
-      return Promise.resolve(entry)
-    }
-    return new Promise((resolve, reject) => {
-      const waiter: Waiter = {
-        match,
-        resolve,
-        timer: setTimeout(() => {
-          const pending = this.waiters.indexOf(waiter)
-          if (pending >= 0) this.waiters.splice(pending, 1)
-          const seen = [...new Set(this.received.map(entry => entry.frame.t))].join(',')
-          reject(new Error(`timed out waiting for a tunnel frame (received: ${seen || 'none'})`))
-        }, timeoutMs),
-      }
-      this.waiters.push(waiter)
-    })
-  }
-
-  nextOfType(type: string, timeoutMs = 5_000): Promise<HostFrame> {
-    return this.next(frame => frame.t === type, timeoutMs)
-  }
-
-  waitClose(timeoutMs = 5_000): Promise<{ code: number; reason: string }> {
-    if (this.closeInfo) return Promise.resolve(this.closeInfo)
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('timed out waiting for the tunnel to close')), timeoutMs)
-      void this.closed.then(info => {
-        clearTimeout(timer)
-        resolve(info)
-      })
-    })
-  }
-
-  close(): void {
-    try {
-      this.ws.close()
-    } catch {
-      // Already closed.
-    }
-  }
-
-  terminate(): void {
-    try {
-      this.ws.terminate()
-    } catch {
-      // Already closed.
-    }
-  }
-}
 
 function requestFrame(entry: HostFrame): TunnelHttpRequestFrame {
   assert.equal(entry.frame.t, 'http.request')
@@ -172,7 +30,7 @@ function requestFrame(entry: HostFrame): TunnelHttpRequestFrame {
 }
 
 function sendResponse(
-  host: FakeHost,
+  host: TestHost,
   id: string,
   options: { status?: number; headers?: TunnelHeaders; body?: string | Buffer },
 ): void {
@@ -182,7 +40,7 @@ function sendResponse(
   host.send({ t: 'http.end', id })
 }
 
-function sendJson(host: FakeHost, id: string, status: number, value: unknown): void {
+function sendJson(host: TestHost, id: string, status: number, value: unknown): void {
   const body = JSON.stringify(value)
   sendResponse(host, id, {
     status,
@@ -191,7 +49,7 @@ function sendJson(host: FakeHost, id: string, status: number, value: unknown): v
   })
 }
 
-async function collectBody(host: FakeHost, id: string, timeoutMs = 5_000): Promise<{ body: Buffer; frames: number }> {
+async function collectBody(host: TestHost, id: string, timeoutMs = 5_000): Promise<{ body: Buffer; frames: number }> {
   const chunks: Buffer[] = []
   for (;;) {
     const entry = await host.next(
@@ -233,11 +91,11 @@ function nodePort(node: TestNode): number {
 }
 
 /** Pair a phone, then replace the control Host with a tunnel-only Host. */
-async function pairAndConnect(node: TestNode): Promise<{ paired: PairedDevice; host: FakeHost }> {
+async function pairAndConnect(node: TestNode): Promise<{ paired: PairedDevice; host: TestHost }> {
   const paired = await completePairing(node)
   paired.hostClient.close()
-  await paired.hostClient.waitClose()
-  const host = await FakeHost.connect(node, paired.host)
+  await paired.hostClient.waitOffline()
+  const host = await TestHost.connect(node, paired.host)
   return { paired, host }
 }
 
@@ -446,7 +304,7 @@ test('an offline Host produces the exact "no local response" 503', async () => {
   try {
     const paired = await completePairing(node)
     paired.hostClient.close()
-    await paired.hostClient.waitClose()
+    await paired.hostClient.waitOffline()
     assert.deepEqual(node.app.services.tunnel.onlineHostIds(), [])
 
     const response = await api(node.baseUrl, 'GET', '/api/hello', { cookie: paired.cookie })
@@ -593,7 +451,7 @@ test('an oversized tunnel frame closes the Host tunnel without killing the node'
     assert.equal(node.app.services.tunnel.isHostOnline(paired.hostId), false)
 
     // The node still accepts a fresh tunnel after dropping the oversized frame.
-    const replacement = await FakeHost.connect(node, paired.host)
+    const replacement = await TestHost.connect(node, paired.host)
     assert.equal(node.app.services.tunnel.isHostOnline(paired.hostId), true)
     replacement.close()
   } finally {
@@ -636,7 +494,7 @@ test('a newer tunnel connection replaces the previous one with close code 4001',
   const node = await startNode()
   try {
     const { paired, host: first } = await pairAndConnect(node)
-    const second = await FakeHost.connect(node, paired.host)
+    const second = await TestHost.connect(node, paired.host)
     const closed = await first.waitClose()
     assert.equal(closed.code, 4001)
     assert.equal(node.app.services.tunnel.isHostOnline(paired.host.host.hostId), true)

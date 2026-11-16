@@ -102,7 +102,7 @@
 | `kind` | string | 精确小写 `"gateway"` 或 `"service"` | 节点类型。大小写敏感，不接受其他拼写。 |
 | `name` | string | 1–64 个 **Unicode 码点**；不得含 C0 控制符（U+0000–U+001F）或 DEL（U+007F） | 人类可读名称，仅用于展示，**不参与身份判断**。gateway 固定用 `DeepSeek Harness`（不暴露计算机名）。 |
 | `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.6.2`、`1.2.0-rc.3`。 |
-| `capabilities` | string[] | 非空数组；每项精确小写、取值必须属于 `pairing` `cache` `official-ui` `relay` `turn`；元素唯一；**必须包含 `"pairing"`** | 节点能力广告；未知能力即失败（新增能力必须升 protocol）。见 2.3。 |
+| `capabilities` | string[] | 非空数组；每项精确小写、取值必须属于 `pairing` `cache` `official-ui`；元素唯一；**必须包含 `"pairing"`** | 节点能力广告；未知能力即失败（新增能力必须升 protocol）。见 2.3。 |
 | `node` | object | v2 必填；`node` 缺失或任一子字段非法即 `bad-identity` | 节点身份，见 2.4。 |
 | `node.id` | string | 正则 `^[A-Za-z0-9_-]{43}$`，**恰好 43 个字符** | `base64url(sha256(SPKI DER))`，无 `=` 填充。 |
 | `node.fingerprint` | string | 正则 `^[a-f0-9]{32}$`，**恰好 32 个字符** | 同一摘要**前 16 字节**的小写十六进制，给用户人工核对。 |
@@ -117,10 +117,8 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 | `pairing` | **是** | 节点支持设备配对/授权。缺少它的节点不可用。 |
 | `cache` | 否 | 节点提供带 `rev` 的可缓存静态资源，并按 `hid`/`rev` 正确分区。 |
 | `official-ui` | 否 | 节点提供官方 DSH 界面外壳（gateway 通常有）。 |
-| `relay` | 否 | 节点能中继设备流量（自托管 service 常见）。 |
-| `turn` | 否 | 节点提供 TURN 服务用于 WebRTC 中继。 |
 
-节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.2 的两类节点**只允许宣告** `pairing`、`cache`、`official-ui`；`relay`/`turn` 保留在白名单里供将来使用，本轮不得宣告。
+节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.2 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
 
 ### 2.4 身份来源
 

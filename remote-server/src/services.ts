@@ -10,10 +10,8 @@ import type { Repositories } from './repositories.js'
 import type { SessionService } from './sessions.js'
 import type { TunnelHub } from './tunnel/hub.js'
 import type { TunnelProxy } from './tunnel/proxy.js'
-import type { TurnService } from './turn.js'
-import type { ControlHub } from './wss/hub.js'
 
-/** Everything an HTTP route or the WSS hub needs, assembled once in `app.ts`. */
+/** Everything an HTTP route or the tunnel hub needs, assembled once in `app.ts`. */
 export interface AppServices {
   config: Config
   logger: Logger
@@ -25,9 +23,7 @@ export interface AppServices {
   auth: AuthService
   pairing: PairingService
   assets: AssetService
-  turn: TurnService
   limiter: RateLimiter
-  hub: ControlHub
   tunnel: TunnelHub
   tunnelProxy: TunnelProxy
 }

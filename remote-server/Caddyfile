@@ -4,9 +4,9 @@
 # Caddy obtains/renews the certificate automatically; port 80 and 443 must be
 # reachable from the internet and DNS must point at this host.
 #
-# WebSocket upgrades (/v1/control) are proxied transparently by reverse_proxy;
-# the X-Forwarded-* headers below are only trusted by the server when
-# TRUST_PROXY=1 (compose.yaml sets it).
+# WebSocket upgrades (/v1/tunnel for the Host, device traffic under /) are
+# proxied transparently by reverse_proxy; the X-Forwarded-* headers below are
+# only trusted by the server when TRUST_PROXY=1 (compose.yaml sets it).
 {$SITE_ADDRESS:localhost} {
 	encode zstd gzip
 

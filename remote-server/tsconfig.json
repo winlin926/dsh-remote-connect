@@ -22,13 +22,10 @@
   },
   "include": [
     "src/**/*.ts",
-    "../src/remote/tunnel-protocol.ts",
-    "../src/remote/vendor/**/*.ts"
+    "../src/remote/tunnel-protocol.ts"
   ],
   "exclude": [
     "node_modules",
-    "dist",
-    "../src/remote/vendor/crypto",
-    "../src/remote/vendor/webrtc"
+    "dist"
   ]
 }

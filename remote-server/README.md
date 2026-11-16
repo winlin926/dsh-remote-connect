@@ -1,13 +1,13 @@
 # remote-server（DSH 公网中继服务）
 
-自托管的公网节点：把电脑上的 DeepSeek Harness（Host）与手机浏览器（Client）配对，并在两端之间转发控制/数据帧与官方界面流量。服务端只做节点身份、关系、路由、限流与静态资源缓存，**不持有 Host/手机的私钥**。
+自托管的公网节点：把电脑上的 DeepSeek Harness（Host）与手机浏览器（Client）配对，并在两端之间转发隧道帧与官方界面流量。服务端只做节点身份、关系、路由、限流与静态资源缓存，**不持有 Host/手机的私钥**。
 
-**信任边界**：HTTPS/WSS 只保护「手机到节点」「主机到节点」两段传输。节点终止 TLS 并代理 HTTP/SSE/WebSocket，**节点运营者可能看到转发的请求与内容**；本服务不提供端到端加密。控制/中继帧按透明转发处理（不解析、不落盘、不打日志），但不要把它当作对运营者的内容保护。
+**信任边界**：HTTPS/WSS 只保护「手机到节点」「主机到节点」两段传输。节点终止 TLS 并代理 HTTP/SSE/WebSocket，**节点运营者可能看到转发的请求与内容**；本服务不提供端到端加密。隧道帧按透明转发处理（不解析、不落盘、不打日志），但不要把它当作对运营者的内容保护。
 
 - 运行时：Node.js 24（`node:sqlite` 内置 SQLite，无需原生模块）
 - 语言：TypeScript，`tsc` 编译，`module: NodeNext`
-- 依赖：仅 `ws` 与 `zod`（`zod` 供复用的共享协议 schemas 使用）
-- 共享协议：直接复用仓库 `src/remote/vendor/protocol/**`，控制帧格式与 Host/Client 端完全一致
+- 依赖：仅 `ws` 与 `zod`（`zod` 用于节点契约校验）
+- 共享协议：直接复用仓库 `src/remote/tunnel-protocol.ts`，Host/Client 与节点共用同一帧类型
 
 ## 统一节点契约（v2）
 
@@ -18,7 +18,7 @@
 ```
 
 - `kind` 固定 `"service"`；`protocol` 为数字 `2`，客户端必须拒绝其他值。
-- `capabilities` 只能是 `pairing`、`cache`、`official-ui`、`relay`、`turn` 的子集，且必须含 `pairing`。0.6.2 **只允许宣告** `pairing`、`cache`、`official-ui`：产品路径只走 HTTPS/WSS 隧道转发，不宣告尚未接入的 TURN/WebRTC；`relay`/`turn` 保留在 schema 白名单里供将来协议版本使用，写进 `CAPABILITIES` 会直接启动失败（失败关闭）。
+- `capabilities` 只能是 `pairing`、`cache`、`official-ui` 的子集，且必须含 `pairing`。协议里没有 relay/turn 能力；写进 `CAPABILITIES` 会直接启动失败（失败关闭）。
 - `node.id` = base64url(sha256(节点公钥的 SPKI DER))，43 字符；`node.fingerprint` = 同一 sha256 前 16 字节的小写十六进制（32 字符）；`node.publicKey` = base64url(SPKI DER)。客户端必须自行解码并复核摘要，不得信任节点返回的 `id`/`fingerprint`。
 - **服务节点不返回扁平的 `hostId`/`fingerprint`**：一个服务节点可以承载多台 Host，扁平字段属于 `kind: "gateway"` 的旧式网关，不应出现在 service 文档里。
 - `name`、`version` 可由 `NODE_NAME`、`NODE_VERSION` 覆盖。
@@ -34,19 +34,19 @@
 ```
 浏览器 ──HTTPS/WSS──▶ Caddy（TLS 终止，可选）──HTTP/WSS──▶ remote-server ──▶ SQLite（单实例）
 Host ───HTTPS/WSS──▶                                              │
-                                                                  ├─ 透明转发控制/中继帧（不解析、不落盘、不打日志）
+                                                                  ├─ 透明转发隧道帧（不解析、不落盘、不打日志）
                                                                   └─ 节点身份：<DATA_DIR>/node-identity.json（0600）
 ```
 
-- `src/app.ts`：装配 HTTP 服务与 WSS 升级（请求限流、跨源拒绝、路由分发、优雅关闭）；启动时先加载/创建节点身份。
+- `src/app.ts`：装配 HTTP 服务与隧道升级（请求限流、跨源拒绝、路由分发、优雅关闭）；启动时先加载/创建节点身份。
 - `src/node-identity.ts`：节点身份文件的加载、校验、原子生成与 `nodeId`/`fingerprint` 派生。
-- `src/http/routes/*`：按资源拆分（discovery、landing、hosts、pairings、assets、turn）。
-- `src/wss/hub.ts`：`/v1/control` WebSocket 集线器（鉴权、配对帧、连接登记、透明转发、限流、心跳）。
+- `src/http/routes/*`：按资源拆分（discovery、landing、hosts、pairings、assets）。
+- `src/tunnel/hub.ts`：`/v1/tunnel` Host 反向隧道集线器（鉴权、hello、心跳、帧路由、背压）。
+- `src/tunnel/proxy.ts`：把已配对设备的 HTTP/WebSocket 请求经隧道转发给 Host。
 - `src/db.ts`：`node:sqlite` `DatabaseSync`、迁移表、幂等建表。
 - `src/repositories.ts`：所有 SQL 访问集中在此；其余模块不直接拼 SQL。
 - `src/pairing.ts`：二维码配对状态机（票据、双端确认、发 cookie、落关系）。
 - `src/assets.ts`：Host 推送的官方 DSH 静态资源（按 `hostId` + `rev` 隔离，immutable + ETag）。
-- `src/turn.ts`：coturn REST HMAC 临时凭据。
 - `src/identity.ts`：token 生成/哈希、`identityKey` 的 SPKI DER 校验、`hostId`/`fingerprint` 推导、constant-time 比较。
 
 ### SQLite 表结构（`schema_migrations` 版本化迁移，`CREATE TABLE IF NOT EXISTS` 幂等）
@@ -80,11 +80,10 @@ Host ───HTTPS/WSS──▶                                              �
 | GET | `/v1/pairings/:requestId` | `X-Pairing-Token` | 轮询状态；完成且未发过 cookie 时补发 `Set-Cookie` |
 | POST | `/v1/pairings/:requestId/reject` | `X-Pairing-Token` | 手机拒绝（`410 PAIRING_REJECTED` 处理后续操作） |
 | GET | `/v1/hosts` | Device cookie | 只列当前 cookie 授权过且未撤销的 Host |
-| DELETE | `/v1/hosts/:hostId/devices/:deviceId` | Device cookie | 撤销关系（仅限本设备），关闭该关系的活动连接，Host 收到 `device.revoked` |
+| DELETE | `/v1/hosts/:hostId/devices/:deviceId` | Device cookie | 撤销关系（仅限本设备），关闭该设备经隧道的活动连接（4004） |
 | DELETE | `/v1/hosts/:hostId` | Host Bearer | Host 注销自己的注册：级联删除该 Host 的设备授权、设备会话、配对票据/请求与静态资源，再删除 hosts 行，返回 `204`；`hostId` 不存在返回 `404 HOST_NOT_FOUND`，凭据与路径不一致返回 `403` |
 | PUT | `/v1/assets?path=...&rev=...` | Host Bearer | 推送/覆盖资源（body 为原始字节，≤`ASSET_MAX_BYTES`），返回 `201 {ok,path,revision,etag,size}` |
 | GET/HEAD | `/assets/:hid/:rev/*` | 无 | 按 `hid`+`rev` 隔离的静态资源；普通资源 `immutable`+`ETag`+304，HTML `no-store`、清单类 `no-cache` |
-| GET | `/v1/turn-credentials` | Device cookie | coturn REST HMAC 临时凭据；未配置 TURN 返回 `501 TURN_NOT_CONFIGURED` |
 | GET | `/`、`/pair` | 无 | 配对落地页（`web/index.html`），`no-store` |
 
 ### 配对页（`/pair`）
@@ -93,14 +92,13 @@ Host ───HTTPS/WSS──▶                                              �
 - 页面展示节点名称、节点类型（隧道网关/自托管服务）、目标主机指纹与有效期，操作按钮为「拒绝」与「确认是本机」；**不再显示任何 8 位数字短码**，也不读取 claim 返回的 `verificationCode`。
 - 授权条件不变：手机确认 + 电脑端批准 + 指纹核对一致；拒绝、过期、重放（同一票据二次 claim）都不会签发设备 cookie。
 
-### `/v1/control` WebSocket
+### Host 反向隧道（`/v1/tunnel`）
 
-- 升级前校验 `Origin`；5s 内必须完成 `hello`（`helloPayloadSchema`：`role/deviceId/accessToken/protocols/capabilities`）。Host 用注册返回的 Host 凭证，Client 优先用 `hello.accessToken`（设备会话 token），否则用升级请求携带的 cookie。
-- 服务端回 `hello.ack`：`protocol:1`、`serverVersion`、`connectionSessionId`、`heartbeatIntervalMs:25000`、`maxControlFrameBytes:65536`、`maxRelayFrameBytes:1048576`。
-- 配对帧：`pair.request` 仍可携带 `verificationCode`（8 位数字，走共享 `encodeControlFrame` 校验）作为 v1 传输兼容字段，但 `/pair` 页面与新授权逻辑不读取、不显示、不参与判定；`pair.approve`/`pair.reject`（Host→Server）、`pair.complete`（Server→Host）不变。
-- 连接帧：`connect.request`（Client）→ 校验 `relationships` 未撤销 → `connect.incoming`（Host）+ `connect.accepted`（Client）。
-- 透明转发：`secure.handshake`、`relay`、`signal.offer/answer/ice`、`transport.selected`、`connect.rejected`、`connection.lease.*` 只按 `connectionId`/`targetDeviceId` 转发给对端；`relay.counter` 方向内必须严格递增。服务端不解析、不落盘、不打日志密文。
-- 限制：单帧大小上限（控制帧 64KiB、relay 帧 1MiB）、每连接帧速率限流、`bufferedAmount` 背压（超限断开）、25s 心跳 / 75s 空闲超时、每设备单控制连接（旧连接 4003 替换）。
+- Host 用注册返回的凭证以 `Authorization: Bearer` 连接 `wss://<node>/v1/tunnel`；10s 内发 `hello`（`hostId`、`version`、`capabilities`，能力取值 `http`/`ws`/`assets`）。同 `hostId` 的新连接以 4001 关闭旧连接。
+- 帧：`http.request/body/body.end/cancel`、`http.response/chunk/end/error`、`ws.open/ack/frame/close`、`ping/pong`、`pair.request/approve/reject/complete`；帧头 ≤16 KiB、负载 ≤48 KiB，更大的 body 由发送端切片、接收端重组。
+- 配对帧：`pair.request`（Server→Host），`pair.approve`/`pair.reject`（Host→Server），`pair.complete`（Server→Host）；Host 的决定失败只记日志，不回错误帧。
+- 限制：20s ping 心跳 / 60s 失联断开、`bufferedAmount` 1 MiB 高水位背压、每 Host 64 个并发中继、每设备 16 个并发中继。
+- 设备流量：已配对设备发往节点的 HTTP/WebSocket 请求由 `tunnel/proxy.ts` 经同一隧道转发给 Host；节点只在隧道断开时拒绝。
 
 ### 安全边界
 
@@ -114,9 +112,9 @@ Host ───HTTPS/WSS──▶                                              �
 
 ### 已知问题与风险
 
-1. 共享协议编码约束：`pair.request.verificationCode` 的正则为 `/^\d{8}$/`（节点与 Host 都走同一套 `encodeControlFrame` 校验）；v2 中该字段仅作 v1 传输兼容，页面不展示。`identityKeySchema` 为 40–120 字符 Base64URL（容纳 59 字符的 SPKI DER，旧的 43 字符值仍合法），DER 结构由节点用 `createPublicKey` 校验。
-2. 本节点不实现 WebRTC：`hello.ack` 返回 `webrtcEnabled:false`，连接一律走 WSS/`relay`；0.6.2 节点不允许在发现文档里宣告 `relay`/`turn`，TURN 凭据接口保留供将来版本使用。
-3. 真实 TLS 与 TURN 未在本机实测：TLS 由 Caddy 终止（compose 提供），TURN 凭据算法有单元测试但未连真实 coturn。
+1. 隧道帧编码约束：`pair.request.verificationCode` 为 8 位数字字符串，`/pair` 页面不读取、不显示、不参与判定；`identityKeySchema` 为 40–120 字符 Base64URL（容纳 59 字符的 SPKI DER，旧的 43 字符值仍合法），DER 结构由节点用 `createPublicKey` 校验。
+2. 本节点不实现 WebRTC：设备流量一律经 Host 反向隧道转发；不做 LAN/P2P。
+3. 真实 TLS 未在本机实测：TLS 由 Caddy 终止（compose 提供）。
 4. 多实例不支持：在线状态与转发成员表在进程内存，SQLite 也是单写者；横向扩展需要 PostgreSQL 与共享在线协调。
 5. 静态资源存 SQLite BLOB，适合单节点与中小体积资源（默认上限 16MiB/个），不适合大文件或 CDN 级流量。
 6. `node-identity.json` 只含公钥，但它是节点指纹的唯一来源：部署时需备份；删除或损坏（不做静默重建）都会改变节点身份，已信任旧指纹的客户端需要重新确认。
@@ -133,7 +131,7 @@ npm test
 node dist/remote-server/src/main.js   # 可用 PORT/DATA_DIR 临时指定
 ```
 
-`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 8 个文件 76 个用例。
+`npm test` 先 `tsc` 构建，再用 `node --test` 直接跑 `test/*.test.ts`（Node 24 类型剥离，测试导入编译产物），共 6 个文件 57 个用例。
 
 ## 故障排查
 
@@ -144,11 +142,11 @@ node dist/remote-server/src/main.js   # 可用 PORT/DATA_DIR 临时指定
 
 ```
 remote-server/
-  src/            服务端源码（app、http、wss、db、pairing、assets、turn、identity、node-identity、tools/reset-host 运维工具）
+  src/            服务端源码（app、http、tunnel、db、pairing、assets、identity、node-identity、tools/reset-host 运维工具）
   test/           node --test 集成测试（对编译产物运行）
   web/            配对落地页（配对入口 /pair）
   Dockerfile      多阶段构建（node:24-alpine）
-  compose.yaml    server + caddy + 可选 coturn
+  compose.yaml    server + caddy
   Caddyfile       自动 HTTPS 反代（含 Upgrade）
   .env.example    全部环境变量占位示例
   docs/           仓库级部署与安全说明（docs/self-host.md）

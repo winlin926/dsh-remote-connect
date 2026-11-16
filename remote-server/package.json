@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/remote-server/src/main.js",
     "admin:reset": "node dist/remote-server/src/tools/reset-host.js",
-    "test": "npm run build && node --test --test-timeout=20000 test/discovery.test.ts test/hosts.test.ts test/pairing.test.ts test/assets.test.ts test/control.test.ts test/security.test.ts test/turn.test.ts test/tunnel.test.ts"
+    "test": "npm run build && node --test --test-timeout=20000 test/discovery.test.ts test/hosts.test.ts test/pairing.test.ts test/assets.test.ts test/security.test.ts test/tunnel.test.ts"
   },
   "dependencies": {
     "ws": "^8.18.3",

@@ -1,11 +1,10 @@
-# Self-hostable public relay: server + Caddy (automatic HTTPS) + optional coturn.
+# Self-hostable public relay: server + Caddy (automatic HTTPS).
 #
 #   cp .env.example .env        # then edit SITE_ADDRESS / PUBLIC_ORIGIN etc.
 #   docker compose up -d --build
-#   docker compose --profile turn up -d   # optional TURN relay
 #
 # The build context is the repository root so the image can compile the shared
-# protocol from src/remote/vendor.
+# tunnel protocol from src/remote.
 name: dsh-remote-server
 
 services:
@@ -46,27 +45,6 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-
-  # Optional TURN relay reserved for future versions. v2 (0.6.2) does not
-  # advertise relay/turn in the discovery document yet.
-  coturn:
-    image: coturn/coturn:4.6.3
-    profiles:
-      - turn
-    restart: unless-stopped
-    network_mode: host
-    command:
-      - --no-cli
-      - --no-tls
-      - --no-dtls
-      - --log-file=stdout
-      - --lt-cred-mech
-      - --use-auth-secret
-      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in .env}
-      - --realm=${TURN_REALM:-dsh-remote}
-      - --external-ip=${PUBLIC_IP:?set PUBLIC_IP in .env}
-      - --min-port=49160
-      - --max-port=49200
 
 volumes:
   data:

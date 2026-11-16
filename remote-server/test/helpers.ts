@@ -1,8 +1,15 @@
-import { randomBytes, randomUUID, createHash, createHmac, generateKeyPairSync } from 'node:crypto'
+import { randomBytes, randomUUID, createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import WebSocket from 'ws'
+import {
+  decodeTunnelFrame,
+  encodeTunnelFrame,
+  TUNNEL_PROTOCOL_VERSION,
+  type TunnelFrame,
+  type TunnelHelloFrame,
+} from '../dist/src/remote/tunnel-protocol.js'
 import { createApp } from '../dist/remote-server/src/app.js'
 
 export interface TestNode {
@@ -188,176 +195,163 @@ export function parseSetCookie(raw: string): {
   }
 }
 
-export interface ControlClient {
-  ws: WebSocket
-  /** Frames not yet consumed by `next`. */
-  frames: any[]
-  /** Every frame received, in arrival order (never consumed). */
-  history: any[]
-  send(type: string, payload?: unknown): void
-  next(type: string, timeoutMs?: number): Promise<any>
-  waitClose(timeoutMs?: number): Promise<{ code: number; reason: string }>
-  close(): void
+export interface HostFrame {
+  frame: TunnelFrame
+  payload: Buffer
 }
 
-export interface ControlOptions {
-  cookie?: string
-  origin?: string
-  /** Skip the hello handshake (used to test hello timeouts). */
-  skipHello?: boolean
-  hello?: Record<string, unknown>
+interface HostWaiter {
+  match: (frame: TunnelFrame) => boolean
+  resolve: (value: HostFrame) => void
+  timer: NodeJS.Timeout
 }
 
-/** Open a `/v1/control` WebSocket, perform hello and resolve on hello.ack. */
-export async function connectControl(node: TestNode, hello: Record<string, unknown>, options: ControlOptions = {}): Promise<ControlClient> {
-  const wsUrl = node.baseUrl.replace(/^http/u, 'ws') + '/v1/control'
-  const headers: Record<string, string> = {}
-  if (options.cookie) headers.cookie = options.cookie
-  const ws = new WebSocket(wsUrl, { origin: options.origin ?? node.baseUrl, headers })
-  const frames: any[] = []
-  const history: any[] = []
-  const waiters: Array<{ type: string; resolve: (frame: any) => void; reject: (error: Error) => void; timer: any }> = []
-  let closeInfo: { code: number; reason: string } | null = null
+/** A stand-in for the desktop Host process speaking the binary tunnel protocol. */
+export class TestHost {
+  readonly received: HostFrame[] = []
+  readonly ws: WebSocket
+  private readonly waiters: HostWaiter[] = []
+  private closeInfo: { code: number; reason: string } | null = null
+  readonly closed: Promise<{ code: number; reason: string }>
 
-  const settle = (frame: any): void => {
-    for (const waiter of [...waiters]) {
-      if (waiter.type !== frame.type) continue
-      clearTimeout(waiter.timer)
-      waiters.splice(waiters.indexOf(waiter), 1)
-      const index = frames.indexOf(frame)
-      if (index >= 0) frames.splice(index, 1)
-      waiter.resolve(frame)
-    }
-  }
+  private readonly node: TestNode
+  readonly hostId: string
 
-  ws.on('message', data => {
-    let frame: any
-    try {
-      frame = JSON.parse(data.toString('utf8'))
-    } catch {
-      return
-    }
-    history.push(frame)
-    frames.push(frame)
-    settle(frame)
-  })
-
-  const closed = new Promise<{ code: number; reason: string }>(resolve => {
-    ws.on('close', (code: number, reason: Buffer) => {
-      closeInfo = { code, reason: reason.toString() }
-      resolve(closeInfo)
-    })
-  })
-
-  const opened = new Promise<void>((resolve, reject) => {
-    ws.once('open', () => resolve())
-    ws.once('error', (error: Error) => reject(error))
-    ws.once('unexpected-response', (_request: any, response: any) => {
-      reject(Object.assign(new Error(`upgrade rejected with ${response.statusCode}`), { statusCode: response.statusCode }))
-    })
-  })
-  await opened
-
-  const client: ControlClient = {
-    ws,
-    frames,
-    history,
-    send(type: string, payload: unknown = {}) {
-      ws.send(JSON.stringify({ v: 1, id: randomUUID(), type, timestamp: Date.now(), payload }))
-    },
-    next(type: string, timeoutMs = 5_000) {
-      const existing = frames.find(frame => frame.type === type)
-      if (existing) {
-        frames.splice(frames.indexOf(existing), 1)
-        return Promise.resolve(existing)
-      }
-      return new Promise((resolve, reject) => {
-        const waiter = {
-          type,
-          resolve,
-          reject,
-          timer: setTimeout(() => {
-            const index = waiters.indexOf(waiter)
-            if (index >= 0) waiters.splice(index, 1)
-            reject(new Error(`timed out waiting for frame "${type}" (received: ${frames.map(frame => frame.type).join(',')})`))
-          }, timeoutMs),
-        }
-        waiters.push(waiter)
+  constructor(ws: WebSocket, node: TestNode, hostId: string) {
+    this.ws = ws
+    this.node = node
+    this.hostId = hostId
+    this.closed = new Promise(resolve => {
+      ws.on('close', (code, reason) => {
+        this.closeInfo = { code, reason: reason.toString() }
+        resolve(this.closeInfo)
       })
-    },
-    waitClose(timeoutMs = 5_000) {
-      if (closeInfo) return Promise.resolve(closeInfo)
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('timed out waiting for close')), timeoutMs)
-        void closed.then(info => {
-          clearTimeout(timer)
-          resolve(info)
-        })
-      })
-    },
-    close() {
+    })
+    ws.on('message', (data, isBinary) => {
+      if (!isBinary) return
+      const buffer = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
+      let decoded: ReturnType<typeof decodeTunnelFrame>
       try {
-        ws.close()
+        decoded = decodeTunnelFrame(buffer)
       } catch {
-        // Already closed.
+        return
       }
-    },
+      const entry: HostFrame = { frame: decoded.frame, payload: Buffer.from(decoded.payload) }
+      if (entry.frame.t === 'ping') {
+        void this.send({ t: 'pong', at: entry.frame.at })
+        return
+      }
+      const waiter = this.waiters.find(candidate => candidate.match(entry.frame))
+      if (waiter) {
+        clearTimeout(waiter.timer)
+        this.waiters.splice(this.waiters.indexOf(waiter), 1)
+        waiter.resolve(entry)
+        return
+      }
+      this.received.push(entry)
+    })
+    ws.on('error', () => {
+      // A socket error is always followed by close.
+    })
   }
 
-  if (!options.skipHello) {
-    ws.send(JSON.stringify(hello))
-    await client.next('hello.ack')
+  static async connect(node: TestNode, host: RegisteredHost): Promise<TestHost> {
+    const ws = new WebSocket(`${node.baseUrl.replace(/^http/u, 'ws')}/v1/tunnel`, {
+      headers: { authorization: `Bearer ${host.credential}` },
+    })
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve())
+      ws.once('error', (error: Error) => reject(error))
+    })
+    const testHost = new TestHost(ws, node, host.host.hostId)
+    const hello: TunnelHelloFrame = {
+      t: 'hello',
+      hostId: host.host.hostId,
+      version: TUNNEL_PROTOCOL_VERSION,
+      capabilities: ['http', 'ws', 'assets'],
+    }
+    testHost.send(hello)
+    const deadline = Date.now() + 5_000
+    while (!node.app.services.tunnel.isHostOnline(host.host.hostId)) {
+      if (Date.now() > deadline) throw new Error('the tunnel hello handshake did not complete')
+      await delay(5)
+    }
+    return testHost
   }
-  return client
-}
 
-export function hostHello(node: TestNode, host: RegisteredHost, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    v: 1,
-    id: randomUUID(),
-    type: 'hello',
-    timestamp: Date.now(),
-    payload: {
-      role: 'host',
-      deviceId: host.registration.deviceId,
-      accessToken: host.credential,
-      protocols: [1],
-      capabilities: ['relay'],
-      clientVersion: '0.6.0-test',
-      ...overrides,
-    },
+  send(frame: TunnelFrame, payload?: Uint8Array): void {
+    this.ws.send(encodeTunnelFrame(frame, payload))
   }
-}
 
-export function clientHello(node: TestNode, deviceId: string, sessionToken: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    v: 1,
-    id: randomUUID(),
-    type: 'hello',
-    timestamp: Date.now(),
-    payload: {
-      role: 'client',
-      deviceId,
-      accessToken: sessionToken,
-      protocols: [1],
-      capabilities: ['relay'],
-      clientVersion: '0.6.0-test',
-      ...overrides,
-    },
+  count(type: string): number {
+    return this.received.filter(entry => entry.frame.t === type).length
   }
-}
 
-export async function connectHost(node: TestNode, host: RegisteredHost): Promise<ControlClient> {
-  return connectControl(node, hostHello(node, host))
-}
+  next(match: (frame: TunnelFrame) => boolean, timeoutMs = 5_000): Promise<HostFrame> {
+    const index = this.received.findIndex(entry => match(entry.frame))
+    if (index >= 0) {
+      const [entry] = this.received.splice(index, 1)
+      return Promise.resolve(entry!)
+    }
+    return new Promise((resolve, reject) => {
+      const waiter: HostWaiter = {
+        match,
+        resolve,
+        timer: setTimeout(() => {
+          const pending = this.waiters.indexOf(waiter)
+          if (pending >= 0) this.waiters.splice(pending, 1)
+          const seen = [...new Set(this.received.map(entry => entry.frame.t))].join(',')
+          reject(new Error(`timed out waiting for a tunnel frame (received: ${seen || 'none'})`))
+        }, timeoutMs),
+      }
+      this.waiters.push(waiter)
+    })
+  }
 
-export async function connectClient(node: TestNode, deviceId: string, sessionToken: string): Promise<ControlClient> {
-  return connectControl(node, clientHello(node, deviceId, sessionToken))
+  nextOfType(type: string, timeoutMs = 5_000): Promise<HostFrame> {
+    return this.next(frame => frame.t === type, timeoutMs)
+  }
+
+  waitClose(timeoutMs = 5_000): Promise<{ code: number; reason: string }> {
+    if (this.closeInfo) return Promise.resolve(this.closeInfo)
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('timed out waiting for the tunnel to close')), timeoutMs)
+      void this.closed.then(info => {
+        clearTimeout(timer)
+        resolve(info)
+      })
+    })
+  }
+
+  close(): void {
+    try {
+      this.ws.close()
+    } catch {
+      // Already closed.
+    }
+  }
+
+  /** Wait until the node has dropped this Host's tunnel (its ws close event has been processed). */
+  async waitOffline(timeoutMs = 5_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (this.node.app.services.tunnel.isHostOnline(this.hostId)) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for the Host tunnel to go offline')
+      await delay(5)
+    }
+  }
+
+  terminate(): void {
+    try {
+      this.ws.terminate()
+    } catch {
+      // Already closed.
+    }
+  }
 }
 
 export interface PairedDevice {
   host: RegisteredHost
-  hostClient: ControlClient
+  hostClient: TestHost
   client: Record<string, any>
   claim: any
   poll: any
@@ -366,6 +360,7 @@ export interface PairedDevice {
   sessionToken: string
   hostId: string
   hostDeviceId: string
+  pairRequest: HostFrame
 }
 
 /**
@@ -377,7 +372,7 @@ export async function completePairing(
   options: { clientOverrides?: Record<string, unknown> } = {},
 ): Promise<PairedDevice> {
   const host = await registerHost(node, hostRegistration())
-  const hostClient = await connectHost(node, host)
+  const hostClient = await TestHost.connect(node, host)
 
   const ticketResult = await api(node.baseUrl, 'POST', '/v1/pairings', { token: host.credential })
   if (ticketResult.status !== 201) throw new Error(`ticket creation failed: ${ticketResult.status} ${ticketResult.text}`)
@@ -393,15 +388,15 @@ export async function completePairing(
     body: { ticket: ticketResult.json.ticket, client },
   })
   if (claim.status !== 201) throw new Error(`claim failed: ${claim.status} ${claim.text}`)
-  const pairRequest = await hostClient.next('pair.request')
+  const pairRequest = await hostClient.nextOfType('pair.request')
 
   const confirm = await api(node.baseUrl, 'POST', `/v1/pairings/${claim.json.requestId}/confirm`, {
     headers: { 'x-pairing-token': claim.json.pairingToken },
   })
   if (confirm.status !== 200) throw new Error(`confirm failed: ${confirm.status} ${confirm.text}`)
 
-  hostClient.send('pair.approve', { requestId: claim.json.requestId })
-  await hostClient.next('pair.complete')
+  hostClient.send({ t: 'pair.approve', requestId: claim.json.requestId })
+  await hostClient.nextOfType('pair.complete')
 
   const poll = await api(node.baseUrl, 'GET', `/v1/pairings/${claim.json.requestId}`, {
     headers: { 'x-pairing-token': claim.json.pairingToken },
@@ -424,10 +419,6 @@ export async function completePairing(
     hostDeviceId: host.registration.deviceId,
     pairRequest,
   }
-}
-
-export function turnCredential(secret: string, username: string): string {
-  return createHmac('sha1', secret).update(username).digest('base64')
 }
 
 export function delay(ms: number): Promise<void> {

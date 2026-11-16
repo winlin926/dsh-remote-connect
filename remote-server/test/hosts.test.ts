@@ -205,6 +205,8 @@ test('two registered Hosts are isolated from each other', async () => {
     assert.equal(crossAsset.status, 404)
 
     // Tunnel: Host A may not open a tunnel that claims Host B's id.
+    b.hostClient.close()
+    await b.hostClient.waitOffline()
     const ws = new WebSocket(`${node.baseUrl.replace(/^http/u, 'ws')}/v1/tunnel`, {
       headers: { authorization: `Bearer ${a.host.credential}` },
     })

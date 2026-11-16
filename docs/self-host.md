@@ -1,8 +1,7 @@
 # 自托管公网中继节点（remote-server）
 
 `remote-server/` 是一个可自托管的公网中继节点：它让已配对的 Host（电脑上的 DSH）与手机在
-跨网络时仍能建立连接。节点做四件事——公开自己的节点身份、配对登记、控制帧路由、静态资源与
-TURN 凭据分发。
+跨网络时仍能建立连接。节点做三件事——公开自己的节点身份、配对登记、静态资源与隧道流量转发。
 
 **信任边界（务必理解）：HTTPS/WSS 只保护「手机到节点」「主机到节点」这两段传输。节点会终止
 TLS 并代理 HTTP/SSE/WebSocket 转发，节点或隧道运营者可能看到转发的请求与内容；本服务不提供
@@ -20,9 +19,7 @@ cookie、authorization、identityKey、ciphertext 等字段打码；持久化内
 | 端口 | 协议 | 用途 |
 | --- | --- | --- |
 | 80 | TCP | ACME HTTP-01 校验与 HTTPS 跳转 |
-| 443 | TCP | HTTPS + WSS `/v1/control` |
-| 3478 | TCP/UDP | TURN（0.6.2 不宣告该能力；仅为自建 coturn 实验预留） |
-| 49160-49200 | UDP | TURN 中继端口段 |
+| 443 | TCP | HTTPS + WSS `/v1/tunnel`（Host 反向隧道） |
 
 - Docker Engine 24+ 与 Compose v2。
 
@@ -39,7 +36,6 @@ Copy-Item .env.example .env
 - `SITE_ADDRESS`：公网域名，如 `relay.example.com`
 - `PUBLIC_ORIGIN`：`https://` + 同一域名
 - `ACME_EMAIL`：证书通知邮箱
-- 若启用 TURN：`TURN_URLS`、`TURN_SECRET`、`PUBLIC_IP`、`TURN_REALM`
 
 启动：
 
@@ -145,8 +141,8 @@ docker compose up -d --build
 ## 7. 撤销设备 / 关闭节点
 
 - 撤销某台手机：手机端「删除此 Host」会调 `DELETE /v1/hosts/:hostId/devices/:deviceId`；
-  服务端立即删除该设备会话、关闭其 WebSocket（关闭码 4004），并通知 Host。
-- Host 自己也能通过 `device.revoked` 控制帧撤销设备。
+  服务端立即删除该设备会话、关闭它经隧道的活动连接（关闭码 4004）。
+- 电脑端面板的「删除此设备」改的是 Host 本机配对状态，不经过节点；如要连同节点上的注册一起清掉，用上面的接口或重新注册。
 - 在电脑面板删除某个自托管节点时，插件会先调用 `DELETE /v1/hosts/:hostId`（Host Bearer，只允许删除自己）
   撤销该 Host 在节点上的注册并级联清理设备、关系、会话、票据与资源；撤销失败不阻断本地删除，面板会提示
   「节点上的主机注册可能仍在…」，此时在节点上执行 `npm run admin:reset -- <hostId>` 直接删库再重试添加。
@@ -163,7 +159,7 @@ docker compose up -d --build
   静态资源内容。
 - 传输安全由 Caddy 终止 TLS；服务端只在 `TRUST_PROXY=1` 时信任 `X-Forwarded-*`。
 - 所有写接口校验 Origin，设备 cookie 为 `Secure; HttpOnly; SameSite=Strict` 并绑定 HTTPS origin。
-- 有多层限流（HTTP、注册、配对、升级、控制帧），帧大小上限控制帧 64 KiB / 中继帧 1 MiB，另有背压与空闲超时。
+- 有多层限流（HTTP、注册、配对、升级、隧道帧），隧道帧头上限 16 KiB、负载上限 48 KiB（大包由发送端切片），另有背压与空闲超时。
   注册默认开放由这些限流与双端授权共同兜底；若需要限制来源，请在 Caddy/反向代理层做 IP 白名单，
   不要引入应用内共享令牌。
 
@@ -171,10 +167,7 @@ docker compose up -d --build
 
 - **单实例**：在线状态与转发成员表在进程内存，SQLite 为单写者；多实例需要 PostgreSQL 与共享在线协调，
   当前不支持水平扩展。
-- 本节点不做 WebRTC：`hello.ack` 返回 `webrtcEnabled:false`，连接一律走 WSS 中继；LAN/P2P 由 Host 与手机协商，
-  失败时回退中继。
-- TURN 保留给将来的协议版本，v2（0.6.2）的发现文档不宣告 `relay`/`turn`；未配置 TURN 时
-  `/v1/turn-credentials` 返回 `501 TURN_NOT_CONFIGURED`。
-- 本仓库交付环境未实测真实 TLS 证书签发与真实 coturn 连通性（仅单测覆盖凭据算法）；上线前请按第 3 节验收。
+- 本节点不做 WebRTC：设备流量一律经 Host 反向隧道（`/v1/tunnel`）转发；LAN/P2P 由 Host 与手机直接协商，与本节点无关。
+- 本仓库交付环境未实测真实 TLS 证书签发；上线前请按第 3 节验收。
 - 设备身份统一用 Base64URL(SPKI DER)（与 `src/host-identity.ts` 一致）：Host 与手机提交的都是 SPKI DER 公钥，
   节点只做 DER 合法性校验与 sha256 推导，不持有、不上传任何私钥。

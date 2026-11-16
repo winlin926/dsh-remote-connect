@@ -186,7 +186,7 @@ async function verifyDiscovery(baseUrl, dataDir) {
   })
   check('well-known: capabilities 含 pairing 且都在 v2 白名单内', () => {
     assert(Array.isArray(body.capabilities) && body.capabilities.length > 0, 'capabilities 不是非空数组。')
-    const allowed = new Set(['pairing', 'cache', 'official-ui', 'relay', 'turn'])
+    const allowed = new Set(['pairing', 'cache', 'official-ui'])
     const advertised = new Set(['pairing', 'cache', 'official-ui'])
     for (const item of body.capabilities) {
       assert(typeof item === 'string' && allowed.has(item), `capabilities 含未知能力 ${JSON.stringify(item)}。`)

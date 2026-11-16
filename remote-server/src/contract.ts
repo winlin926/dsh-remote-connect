@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 /** The complete capability whitelist of the node contract. */
-export const CAPABILITY_VALUES = ['pairing', 'cache', 'official-ui', 'relay', 'turn'] as const
+export const CAPABILITY_VALUES = ['pairing', 'cache', 'official-ui'] as const
 
 export type Capability = (typeof CAPABILITY_VALUES)[number]
 

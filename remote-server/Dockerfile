@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build context MUST be the repository root (compose.yaml sets `context: ..`)
-# because tsconfig.json compiles the shared protocol from src/remote/vendor.
+# because tsconfig.json compiles the shared tunnel protocol from src/remote.
 FROM node:24-alpine AS build
 WORKDIR /build
 

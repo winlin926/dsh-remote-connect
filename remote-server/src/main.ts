@@ -14,7 +14,6 @@ async function main(): Promise<void> {
     nodeName: app.config.nodeName,
     version: app.config.nodeVersion,
     capabilities: app.config.capabilities,
-    turn: app.services.turn.enabled,
     publicOrigin: app.config.publicOrigin,
   })
 

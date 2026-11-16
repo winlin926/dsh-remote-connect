@@ -155,10 +155,10 @@ describe('public node detection', () => {
     expect(result.node.url).toBe('https://node.example.com:8443')
     expect(result.node.capabilities).toEqual(['cache', 'pairing'])
   })
-  it('accepts relay and turn capabilities without declaring them itself', async () => {
-    const result = await detectPublicNode('https://node.example.com', { fetch: responds(v2Payload({ capabilities: ['pairing', 'relay', 'turn'] })) })
-    if (!result.ok) throw new Error(result.message)
-    expect(result.node.capabilities).toEqual(['pairing', 'relay', 'turn'])
+  it('rejects a capability this client does not implement', async () => {
+    const result = await detectPublicNode('https://node.example.com', { fetch: responds(v2Payload({ capabilities: ['pairing', 'relay'] })) })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('bad-capability')
   })
   it('ignores unknown fields for forward compatibility', async () => {
     const result = await detectPublicNode('https://node.example.com', { fetch: responds(v2Payload({ futureField: true, hostId: 'not-validated', fingerprint: 'not-validated' })) })
@@ -232,7 +232,7 @@ describe('public node detection', () => {
   it('refuses a protocol-2 node whose key does not prove its id and fingerprint', async () => {
     expect(await codeOf('https://node.example.com', responds(v2Payload({ node: { ...NODE_IDENTITY, id: HOST_ID } })))).toBe('bad-identity')
     expect(await codeOf('https://node.example.com', responds(v2Payload({ node: { ...NODE_IDENTITY, fingerprint: FINGERPRINT } })))).toBe('bad-identity')
-    expect(await codeOf('https://node.example.com', responds(v2Payload({ node: { ...NODE_IDENTITY, publicKey: `${NODE_IDENTITY.publicKey.slice(0, -1)}A` } })))).toBe('bad-identity')
+    expect(await codeOf('https://node.example.com', responds(v2Payload({ node: { ...NODE_IDENTITY, publicKey: OTHER_IDENTITY.publicKey } })))).toBe('bad-identity')
     expect(await codeOf('https://node.example.com', responds(v2Payload({ node: { ...NODE_IDENTITY, publicKey: 'x'.repeat(44) } })))).toBe('bad-identity')
   })
   it('rejects non-200, non-JSON and non-object responses', async () => {

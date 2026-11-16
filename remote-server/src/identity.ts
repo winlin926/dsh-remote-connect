@@ -1,6 +1,8 @@
 import { createHash, createPublicKey, timingSafeEqual } from 'node:crypto'
 import { ApiError } from './errors.js'
-import { PROTOCOL_VERSION } from './protocol.js'
+
+/** Version prefix of the desktop<->server pairing transcript; bump only with a format change. */
+const PAIRING_TRANSCRIPT_VERSION = 1
 
 /** Canonical unpadded Base64URL alphabet. */
 const BASE64URL = /^[A-Za-z0-9_-]+$/u
@@ -105,7 +107,7 @@ export function deriveHostIdentity(identityKey: string): HostIdentity {
  */
 export function pairingVerificationCode(ticket: string, hostIdentityKey: string, clientIdentityKey: string): string {
   const transcript = new TextEncoder().encode(
-    `DSH-REMOTE-PAIR\0v=${PROTOCOL_VERSION}\0${ticket}\0${hostIdentityKey}\0${clientIdentityKey}`,
+    `DSH-REMOTE-PAIR\0v=${PAIRING_TRANSCRIPT_VERSION}\0${ticket}\0${hostIdentityKey}\0${clientIdentityKey}`,
   )
   const digest = sha256(transcript)
   const value = digest.readUInt32BE(0)
