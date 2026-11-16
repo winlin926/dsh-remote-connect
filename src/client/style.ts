@@ -174,6 +174,41 @@ export const CSS = `
 .dsrc-proxy-field{margin-top:10px}
 .dsrc-browser-entry{padding-top:14px;border-top:1px solid var(--rc-line)}
 
+/* Public nodes: a compact list under the pairing code, one row per recorded Host. */
+.dsrc-nodes{margin-top:15px;padding-top:13px;border-top:1px solid var(--rc-line);min-width:0}
+.dsrc-nodes>.dsrc-card-head{margin-bottom:2px}
+.dsrc-service-state{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:9px;min-width:0;font-size:12px;color:var(--rc-muted)}
+.dsrc-service-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--rc-slate)}
+.dsrc-service-state[data-tone=ok] .dsrc-service-dot{background:var(--rc-success)}
+.dsrc-service-state[data-tone=warn] .dsrc-service-dot{background:var(--rc-warning)}
+.dsrc-service-state[data-tone=danger] .dsrc-service-dot{background:var(--rc-danger)}
+.dsrc-service-state strong{font-weight:650;color:var(--rc-ink)}
+.dsrc-service-state[data-tone=ok] strong{color:var(--rc-success)}
+.dsrc-service-state[data-tone=warn] strong{color:var(--rc-warning)}
+.dsrc-service-state[data-tone=danger] strong{color:var(--rc-danger)}
+.dsrc-service-reason{flex:1 1 100%;min-width:0;color:var(--rc-danger);overflow-wrap:anywhere}
+.dsrc-service-origin{flex:1 1 100%;min-width:0;font:11px/18px ui-monospace,Consolas,monospace;overflow-wrap:anywhere;word-break:break-all}
+.dsrc-node-list{display:flex;flex-direction:column;min-width:0;margin-top:6px}
+.dsrc-node{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:6px 12px;min-width:0;padding:10px 0;border-top:1px solid var(--rc-line)}
+.dsrc-node-main{flex:1 1 200px;min-width:0}
+.dsrc-node-title{display:flex;align-items:center;flex-wrap:wrap;gap:5px 6px;min-width:0}
+.dsrc-node-name{font-weight:600;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.dsrc-node-url{display:block;margin-top:3px;color:var(--rc-muted);font:11px/18px ui-monospace,Consolas,monospace;overflow-wrap:anywhere;word-break:break-all}
+.dsrc-node-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:4px;font-size:11px;color:var(--rc-muted);min-width:0}
+.dsrc-node-meta>span{min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.dsrc-node-check{font-weight:600}
+.dsrc-node-check[data-tone=ok]{color:var(--rc-success)}
+.dsrc-node-check[data-tone=warn]{color:var(--rc-warning)}
+.dsrc-node-check[data-tone=danger]{color:var(--rc-danger)}
+.dsrc-node-fingerprint{font:11px/18px ui-monospace,Consolas,monospace;letter-spacing:.02em}
+.dsrc-node-kind[data-kind=gateway]{background:var(--rc-indigo-soft);color:var(--rc-indigo)}
+.dsrc-node-kind[data-kind=service]{background:var(--rc-violet-soft);color:var(--rc-violet)}
+.dsrc-node-kind[data-kind=unknown]{background:var(--rc-warm-soft);color:var(--rc-warm)}
+.dsrc-node-error{margin-top:6px;color:var(--rc-danger);font-size:11px;overflow-wrap:anywhere}
+.dsrc-node>.dsrc-actions{margin-left:auto}
+.dsrc-node-add{margin-top:10px;padding-top:11px;border-top:1px solid var(--rc-line);min-width:0}
+.dsrc-node-add .dsrc-input{margin-top:5px}
+
 .dsrc-entry{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;color:inherit;background:transparent;border-radius:8px;padding:8px;min-width:36px;min-height:36px;font:inherit;cursor:pointer;position:relative;flex:none}
 .dsrc-entry:hover{background:#77736c15}
 .dsrc-entry-dot{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--rc-warm,#D97757);box-shadow:0 0 0 2px var(--dsw-alias-background-primary,#fff)}
@@ -218,6 +253,9 @@ export const CSS = `
 .dsrc-notice-action{margin-left:auto}
 .dsrc-mode{display:flex;width:100%}
 .dsrc-mode button{flex:1;min-width:0;padding-right:5px;padding-left:5px;white-space:normal}
+.dsrc-node{flex-direction:column;align-items:stretch;gap:8px}
+.dsrc-node-main{flex-basis:auto}
+.dsrc-node>.dsrc-actions{justify-content:flex-end;width:100%;margin-left:0}
 }
 @container(max-width:350px){
 .dsrc-pair-link{align-items:stretch;flex-direction:column}
@@ -246,6 +284,7 @@ export const CSS = `
 .dsrc-setting-kicker{font-size:12px}
 .dsrc-code-refresh,.dsrc-pair-link .dsrc-button,.dsrc-notice-action{min-height:44px;font-size:14px}
 .dsrc-placeholder{font-size:14px}
+.dsrc-node-meta,.dsrc-node-error,.dsrc-service-state{font-size:14px}
 }
 @media(prefers-reduced-motion:reduce){.dsrc *{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 @media(prefers-color-scheme:dark){

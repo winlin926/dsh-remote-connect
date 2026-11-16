@@ -3,6 +3,15 @@ import { CSS } from './style.js'
 import { PhoneIcon } from './nav-icon.js'
 const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
+export type PublicNodeKind = 'gateway' | 'service'
+/** One Host entry the panel can add, probe, choose or remove. */
+export interface PublicNode {
+  id: string; url: string; kind: PublicNodeKind | null; name: string | null; version: string | null
+  protocol: number | null; capabilities: string[] | null; hostId: string | null; fingerprint: string | null
+  addedAt: number; lastCheckAt: number | null; lastCheckOk: boolean; lastCheckError: string | null; pending: boolean
+}
+export interface ServicePairing { requestId: string; deviceName: string; expiresAt: number }
+export interface ServiceNodeState { origin: string; connected: boolean; lastError?: string; pendingPairings: ServicePairing[] }
 interface Status {
   enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null
   publicUrl?: string | null; publicPort: number
@@ -18,6 +27,10 @@ interface Status {
   phase: string; error?: string; gatewayPort: number; local: boolean; expiresAt?: number; qr?: string
   links: Array<{ base: string; url?: string }>; requests: Array<{ id: string; name: string; via: 'lan' | 'public'; nodeConfirmed: boolean; expiresAt: number }>
   devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public'; requiresRepair?: boolean }>; lanHint: string
+  /** Public entries recorded on this Host; the panel adds, probes and chooses among them. */
+  publicNodes?: { current: string | null; list: PublicNode[]; pendingReview: boolean }
+  /** Present only while this Host is connected through a self-hosted public node. */
+  serviceNode?: ServiceNodeState | null
 }
 interface ClientContext {
   effect(run: () => void | (() => void), label?: string): void
@@ -53,12 +66,15 @@ export async function command(input: Record<string, unknown>): Promise<Status> {
   }
   const data = await response.json()
   if (!response.ok) throw new Error(data.error ?? `连接失败（HTTP ${response.status}）`)
+  // Node add/probe failures arrive as HTTP 200 with { ok: false, message }; they are errors to the
+  // panel, so act() shows the same Chinese reason a thrown manage action would.
+  if (data.ok === false && typeof data.message === 'string') throw new Error(data.message)
   return data as Status
 }
 type Way = 'public' | 'lan'
-const WAYS: Array<{ mode: Way; name: string; text: string }> = [
+export const WAYS: Array<{ mode: Way; name: string; text: string }> = [
   { mode: 'lan', name: '同一 Wi‑Fi', text: '同一网络直连，无需公网配置。' },
-  { mode: 'public', name: '任意网络', text: '异地或移动网络，需固定域名。' },
+  { mode: 'public', name: '公网连接', text: '异地或移动网络，需固定域名。' },
 ]
 const wayName = (mode: string | undefined) => WAYS.find(way => way.mode === mode)?.name ?? ''
 function icon(): React.ReactNode { return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, 'aria-hidden': true }, h('rect', { x: 7, y: 2, width: 10, height: 20, rx: 3 }), h('path', { d: 'M10 5h4M11 19h2' })) }
@@ -76,10 +92,65 @@ function moveRadio(event: React.KeyboardEvent<HTMLButtonElement>, index: number,
   choose(next)
   event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role=radio]')[next]?.focus()
 }
-const when = (time: number) => new Date(time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+export const when = (time: number) => new Date(time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const address = (value: string) => {
   try { const url = new URL(value); return url.origin + (url.pathname === '/' ? '' : url.pathname) }
   catch { return value }
+}
+export type PublicNodeAddress = { ok: true; url: string } | { ok: false; error: string }
+/** Mirrors the Host's rule so a malformed draft never reaches the manage API. */
+export function parsePublicNodeAddress(value: string): PublicNodeAddress {
+  const text = value.trim()
+  if (!text) return { ok: false, error: '公网节点地址不能为空。' }
+  let url: URL
+  try { url = new URL(text) } catch { return { ok: false, error: '公网节点地址格式无效，请填写完整的 https:// 地址。' } }
+  if (url.protocol !== 'https:') return { ok: false, error: '公网节点必须使用 https:// 地址。' }
+  if (url.username || url.password) return { ok: false, error: '公网节点地址不能包含账号或密码。' }
+  if (url.pathname !== '/' || url.search || url.hash) return { ok: false, error: '公网节点地址只能是域名，不能带路径、查询参数或锚点。' }
+  return { ok: true, url: url.origin }
+}
+/** Host[:port] is the shortest unique label for buttons and confirmations. */
+export function nodeHost(url: string): string {
+  try { return new URL(url).host } catch { return url }
+}
+export function nodeKindLabel(kind: PublicNodeKind | null): string {
+  return kind === 'gateway' ? '隧道网关' : kind === 'service' ? '自托管服务' : '待确认'
+}
+/** The Host shows fingerprints as eight upper-case groups of four digits. */
+export function nodeFingerprintGroups(fingerprint: string | null): string {
+  if (!fingerprint) return '尚未上报'
+  const digits = fingerprint.replace(/[^0-9a-f]/gi, '').toUpperCase()
+  if (digits.length !== 32) return fingerprint.toUpperCase()
+  return digits.match(/.{4}/g)!.join('-')
+}
+export type NodeTone = 'ok' | 'warn' | 'danger' | 'neutral'
+export function nodeCheckStatus(node: Pick<PublicNode, 'pending' | 'lastCheckAt' | 'lastCheckOk'>): { label: string; tone: NodeTone } {
+  if (node.pending) return { label: '待检测确认', tone: 'warn' }
+  if (node.lastCheckAt === null) return { label: '尚未检测', tone: 'neutral' }
+  return node.lastCheckOk ? { label: '检测正常', tone: 'ok' } : { label: '检测失败', tone: 'danger' }
+}
+/** Relative wording keeps the list scannable; old probes fall back to the panel's absolute form. */
+export function checkedAtLabel(at: number | null, now = Date.now()): string {
+  if (at === null) return '尚未检测'
+  const elapsed = Math.max(0, now - at)
+  if (elapsed < 60_000) return '刚刚'
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
+  if (elapsed < 7 * 86_400_000) return `${Math.floor(elapsed / 86_400_000)} 天前`
+  return when(at)
+}
+/** The current entry first, then entries awaiting confirmation, then the most recently probed. */
+export function sortPublicNodes(nodes: readonly PublicNode[], current: string | null): PublicNode[] {
+  const rank = (node: PublicNode) => node.id === current ? 0 : node.pending ? 1 : 2
+  return [...nodes].sort((left, right) => rank(left) - rank(right)
+    || (right.lastCheckAt ?? 0) - (left.lastCheckAt ?? 0)
+    || right.addedAt - left.addedAt
+    || left.url.localeCompare(right.url))
+}
+export function serviceStateLabel(service: Pick<ServiceNodeState, 'connected' | 'lastError'>): { label: string; tone: NodeTone; reason: string } {
+  if (service.connected) return { label: '已连接', tone: 'ok', reason: '' }
+  if (service.lastError) return { label: '未连接', tone: 'danger', reason: service.lastError }
+  return { label: '正在连接…', tone: 'warn', reason: '' }
 }
 const AVATAR_TONES = ['indigo', 'teal', 'violet', 'warm'] as const
 const avatarTone = (seed: string) => AVATAR_TONES[[...seed].reduce((sum, character) => sum + (character.codePointAt(0) ?? 0), 0) % AVATAR_TONES.length]!
@@ -94,6 +165,9 @@ function BellIcon(): React.ReactElement {
 }
 function GearIcon(): React.ReactElement {
   return h(StrokeIcon, null, h('circle', { cx: 12, cy: 12, r: 3 }), h('path', { d: 'M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7' }))
+}
+function NodeIcon(): React.ReactElement {
+  return h(StrokeIcon, null, h('rect', { x: 3.5, y: 4, width: 17, height: 6.5, rx: 2 }), h('rect', { x: 3.5, y: 13.5, width: 17, height: 6.5, rx: 2 }), h('path', { d: 'M7 7.2h.01M7 16.8h.01' }))
 }
 const cardIcon = (tone: 'indigo' | 'teal' | 'violet' | 'warm' | 'slate', icon: React.ReactElement): React.ReactElement =>
   block('span', 'dsrc-card-icon', [icon], { 'data-tone': tone })
@@ -135,8 +209,11 @@ export function RemoteControlPanel(): React.ReactElement {
   const [error, setError] = React.useState('')
   const [statusError, setStatusError] = React.useState('')
   const [workingAction, setWorkingAction] = React.useState('')
+  const [workingNode, setWorkingNode] = React.useState('')
   const [proxy, setProxy] = React.useState<string | null>(null)
   const [domain, setDomain] = React.useState<string | null>(null)
+  const [nodeDraft, setNodeDraft] = React.useState('')
+  const [nodeError, setNodeError] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const [copyFallback, setCopyFallback] = React.useState<string | null>(null)
   const [toast, setToast] = React.useState('')
@@ -167,7 +244,7 @@ export function RemoteControlPanel(): React.ReactElement {
   const act = async (action: string, fields: Record<string, unknown> = {}) => {
     if (acting.current) return false
     acting.current = true; revision.current++
-    setWorkingAction(action); setNotice(''); setCopyFallback(null); setError('')
+    setWorkingAction(action); setWorkingNode(typeof fields.id === 'string' ? fields.id : ''); setNotice(''); setCopyFallback(null); setError('')
     try {
       const data = await command({ action, ...fields })
       if (data.links) setState(data)
@@ -181,11 +258,19 @@ export function RemoteControlPanel(): React.ReactElement {
         setNotice(action === 'preferences' ? '设置已保存。' : '设备名称已更新。')
         setTimeout(() => { void refresh() }, 200)
       } else if (['approve', 'reject', 'revoke', 'revokeAll'].includes(action)) setTimeout(() => { void refresh() }, 200)
+      else if (action === 'addPublicNode') { setNotice('公网节点已添加并通过检测。'); setTimeout(() => { void refresh() }, 200) }
+      else if (action === 'checkPublicNode') setTimeout(() => { void refresh() }, 200)
+      else if (action === 'setCurrentPublicNode') setNotice('已切换当前使用的公网节点。')
+      else if (action === 'removePublicNode') setNotice('公网节点已删除，通过它的设备授权已撤销。')
+      else if (action === 'approveServicePairing') setNotice('设备已确认，可以通过该节点继续连接。')
+      else if (action === 'rejectServicePairing') setNotice('已拒绝该设备的配对请求。')
       return true
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '操作失败。')
+      // The Host records a failed probe too, so show the refreshed row even though the call failed.
+      if (action === 'addPublicNode' || action === 'checkPublicNode') setTimeout(() => { void refresh() }, 200)
       return false
-    } finally { acting.current = false; setWorkingAction('') }
+    } finally { acting.current = false; setWorkingAction(''); setWorkingNode('') }
   }
   const copy = async (url: string, message = '已复制配对链接') => {
     if (await copyText(url)) { setCopyFallback(null); setNotice(''); say(message); return }
@@ -242,7 +327,7 @@ export function RemoteControlPanel(): React.ReactElement {
     if (!state || disabled) return
     if (mode === 'public' && !publicUrl) {
       setAsking(null)
-      setNotice(state.enabled ? '先保存固定公网域名，再切换到“任意网络”。' : '选择已保留。请填写固定公网域名，然后开启连接。')
+      setNotice(state.enabled ? '先保存固定公网域名，再切换到“公网连接”。' : '选择已保留。请填写固定公网域名，然后开启连接。')
       if (!state.enabled) void act('preferences', { mode })
       openSettings(true)
       return
@@ -281,6 +366,92 @@ export function RemoteControlPanel(): React.ReactElement {
     void act('stop')
   }
 
+  /** Public entries recorded for this Host: probe, confirm, choose or delete them without leaving the panel. */
+  const nodes = () => {
+    if (!state || shown !== 'public' || !state.publicNodes) return null
+    const entries = state.publicNodes
+    const list = sortPublicNodes(entries.list, entries.current)
+    const service = state.serviceNode
+    const serviceState = service ? serviceStateLabel(service) : null
+    // Only the Host itself may change the list; a panel opened through an entry gets a read-only view.
+    const manageDisabled = disabled || !state.local
+    const submitNode = (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      const parsed = parsePublicNodeAddress(nodeDraft)
+      if (!parsed.ok) { setNodeError(parsed.error); return }
+      setNodeError('')
+      void act('addPublicNode', { url: parsed.url }).then(saved => { if (saved) setNodeDraft('') })
+    }
+    const nodeRow = (node: PublicNode) => {
+      const current = node.id === entries.current
+      const check = nodeCheckStatus(node)
+      const host = nodeHost(node.url)
+      const busy = workingNode === node.id
+      return block('div', 'dsrc-node dsrc-row', [
+        block('div', 'dsrc-node-main', [
+          block('div', 'dsrc-node-title', [
+            h('span', { className: 'dsrc-node-name' }, node.name?.trim() || host),
+            h('span', { className: 'dsrc-tag dsrc-node-kind', 'data-kind': node.kind ?? 'unknown' }, nodeKindLabel(node.kind)),
+            current ? h('span', { className: 'dsrc-tag dsrc-online' }, '当前使用') : null,
+            node.pending ? h('span', { className: 'dsrc-tag dsrc-pending' }, '待确认') : null,
+          ]),
+          h('code', { className: 'dsrc-node-url', title: node.url }, address(node.url)),
+          block('div', 'dsrc-node-meta', [
+            h('span', { className: 'dsrc-node-check', role: 'status', 'data-tone': check.tone }, check.label),
+            h('span', null, `最近检测 ${checkedAtLabel(node.lastCheckAt)}`),
+            h('span', null, node.protocol === null ? '协议待确认' : `协议 v${node.protocol}`),
+            h('span', { className: 'dsrc-node-fingerprint' }, `Host 指纹 ${nodeFingerprintGroups(node.fingerprint)}`),
+          ]),
+          !node.pending && !node.lastCheckOk && node.lastCheckError ? h('p', { className: 'dsrc-node-error', role: 'alert' }, node.lastCheckError) : null,
+        ]),
+        node.pending
+          ? block('div', 'dsrc-actions dsrc-node-actions', [
+              h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: manageDisabled, 'aria-label': `确认使用节点 ${host}`, onClick: () => { void act('setCurrentPublicNode', { id: node.id }) } }, busy ? '正在确认…' : '确认使用'),
+              h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: manageDisabled, 'aria-label': `忽略节点 ${host}`, onClick: () => { void act('removePublicNode', { id: node.id }) } }, busy ? '正在忽略…' : '忽略'),
+            ])
+          : block('div', 'dsrc-actions dsrc-node-actions', [
+              h('button', { type: 'button', className: 'dsrc-button dsrc-ghost', disabled: manageDisabled, 'aria-label': `检测节点 ${host}`, onClick: () => { void act('checkPublicNode', { id: node.id }) } }, busy ? '正在检测…' : '检测'),
+              h('button', { type: 'button', className: 'dsrc-button', disabled: manageDisabled || current, 'aria-label': `将节点 ${host} 设为当前`, onClick: () => { void act('setCurrentPublicNode', { id: node.id }) } }, current ? '当前使用' : busy ? '正在切换…' : '设为当前'),
+              h('button', { type: 'button', className: 'dsrc-button dsrc-danger', disabled: manageDisabled, 'aria-label': `删除节点 ${host}`, onClick: () => { if (confirm(`删除公网节点 ${address(node.url)}？通过该节点授权的设备会被撤销。`)) void act('removePublicNode', { id: node.id }) } }, busy ? '正在删除…' : '删除'),
+            ]),
+      ], { key: node.id, role: 'listitem' })
+    }
+    return block('section', 'dsrc-nodes', [
+      block('div', 'dsrc-card-head', [
+        cardIcon('teal', h(NodeIcon, null)),
+        h('h3', null, '公网节点'),
+        list.length ? h('span', { className: 'dsrc-count' }, String(list.length)) : null,
+      ]),
+      service && serviceState ? block('div', 'dsrc-service-state', [
+        h('span', { className: 'dsrc-service-dot', 'aria-hidden': true }),
+        h('span', null, '自托管节点'),
+        h('strong', { role: 'status' }, serviceState.label),
+        serviceState.reason ? h('span', { className: 'dsrc-service-reason' }, `原因：${serviceState.reason}`) : null,
+        h('span', { className: 'dsrc-service-origin', title: service.origin }, address(service.origin)),
+      ], { 'data-tone': serviceState.tone }) : null,
+      entries.pendingReview ? h(InlineNotice, { tone: 'warn' }, '检测到旧公网地址，确认后才会使用。') : null,
+      list.length
+        ? h('div', { className: 'dsrc-node-list', role: 'list', 'aria-label': '公网节点' }, list.map(nodeRow))
+        : h('p', { className: 'dsrc-empty' }, '还没有公网节点。填写 https 地址后先检测，确认指纹再使用。'),
+      block('div', 'dsrc-node-add', [
+        h('label', { className: 'dsrc-field-label', htmlFor: 'dsrc-node-url' }, '添加节点'),
+        // noValidate keeps the browser bubble out of the way: the Host-style wording above is the only feedback.
+        h('form', { className: 'dsrc-input', noValidate: true, onSubmit: submitNode }, [
+          h('input', {
+            id: 'dsrc-node-url', type: 'url', value: nodeDraft, placeholder: 'https://node.example.com', spellCheck: false, autoComplete: 'off',
+            disabled: manageDisabled, 'aria-invalid': !!nodeError, 'aria-label': '公网节点 HTTPS 地址',
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => { setNodeDraft(event.target.value); if (nodeError) setNodeError('') },
+          }),
+          h('button', { type: 'submit', className: 'dsrc-button dsrc-primary', disabled: manageDisabled || !nodeDraft.trim() }, workingAction === 'addPublicNode' ? '正在添加…' : '添加'),
+        ]),
+        nodeError ? h('p', { className: 'dsrc-error', role: 'alert' }, nodeError) : null,
+        h('p', { className: 'dsrc-note' }, state.local
+          ? '只填写 https:// 域名（可带端口），不能包含路径、查询参数或账号密码；添加后会先检测节点，确认 Host 指纹再使用。'
+          : '公网节点只能在本机面板添加、检测或切换。'),
+      ]),
+    ], { 'aria-label': '公网节点', 'data-section': 'nodes' })
+  }
+
   const main = () => {
     if (!state) return block('section', 'dsrc-surface dsrc-loading', [
       h('span', { className: 'dsrc-loading-mark', 'aria-hidden': true }),
@@ -305,7 +476,7 @@ export function RemoteControlPanel(): React.ReactElement {
         h('strong', null, state.busy ? '正在启动连接…' : state.enabled ? online ? '手机已连接，可以继续使用' : '连接已就绪，等待手机扫码' : domainBlocked ? '还差一个固定公网域名' : '开启后，用手机继续操作'),
         h('p', null, state.enabled ? online ? `${online} 台设备在线；也可以继续配对其他手机。` : '已授权设备可直接使用，新手机请扫码。' : domainBlocked ? '域名通常只需配置一次，保存后回到这里开启。' : shown === 'public' ? `将通过 ${address(publicUrl)} 连接。` : '同一 Wi‑Fi 即可直连，授权设备可重复使用。'),
       ]),
-      domainBlocked ? h(InlineNotice, { tone: 'warn', action: { label: '配置域名', onClick: () => openSettings(true) } }, '“任意网络”需要固定公网域名，请在“连接设置”里填写。') : null,
+      domainBlocked ? h(InlineNotice, { tone: 'warn', action: { label: '配置域名', onClick: () => openSettings(true) } }, '“公网连接”需要固定公网域名，请在“连接设置”里填写。') : null,
       shown === 'lan' && lanCertificate ? h(InlineNotice, { tone: lanCertificate.error || lanCertificateDue ? 'warn' : 'info' },
         lanCertificate.error || (lanCertificateDue ? '局域网证书即将到期，请在外部续期后，在本机连接设置中重载。' : '使用局域网 HTTPS。请将域名解析到电脑的局域网地址，并使用手机信任的证书。')) : null,
       state.error ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
@@ -329,6 +500,7 @@ export function RemoteControlPanel(): React.ReactElement {
           h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled, onClick: () => { void change(asking) } }, '切换连接')]),
       ], { role: 'alertdialog', 'aria-label': '更换连接方式' }) : null,
       block('div', 'dsrc-stage', [code, brief]),
+      nodes(),
       statusError ? block('div', 'dsrc-panel-message', [h('span', null, `状态更新失败，当前显示上次结果。${statusError}`), h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void refresh() } }, '重试')], { 'data-tone': 'warn', role: 'alert' }) : null,
       error && error !== state.error ? block('div', 'dsrc-panel-message', [error], { 'data-tone': 'danger', role: 'alert' }) : null,
       notice ? block('div', 'dsrc-panel-message', [notice, copyFallback !== null ? h('textarea', { className: 'dsrc-copy-fallback', readOnly: true, 'aria-label': '待复制内容，可全选复制', value: copyFallback, onFocus: (event: React.FocusEvent<HTMLTextAreaElement>) => event.currentTarget.select() }) : null], { 'data-tone': 'info', role: 'status' }) : null,
@@ -371,7 +543,7 @@ export function RemoteControlPanel(): React.ReactElement {
       block('div', 'dsrc-field dsrc-certificate', [
         block('div', 'dsrc-setting-row', [
           h(StatusNote, { label: 'HTTPS 证书', value: certificateLabel, tone: certificateExpired || certificate?.error ? 'danger' : certificate?.pending ? 'warn' : certificate?.expiresAt && !certificate.selfSigned ? 'ok' : 'neutral' }),
-          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !publicUrl || !!certificate?.pending || !state.enabled || state.activeMode !== 'public', title: !state.enabled || state.activeMode !== 'public' ? '开启任意网络后可申请证书' : undefined, onClick: () => { void act('certificate') } }, certificate?.pending || workingAction === 'certificate' ? '处理中…' : certificate?.expiresAt && !certificateExpired && !certificate.selfSigned ? '续期证书' : '申请证书'),
+          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !publicUrl || !!certificate?.pending || !state.enabled || state.activeMode !== 'public', title: !state.enabled || state.activeMode !== 'public' ? '开启公网连接后可申请证书' : undefined, onClick: () => { void act('certificate') } }, certificate?.pending || workingAction === 'certificate' ? '处理中…' : certificate?.expiresAt && !certificateExpired && !certificate.selfSigned ? '续期证书' : '申请证书'),
         ]),
         certificate?.restartRequired ? h('p', { className: 'dsrc-note' }, '证书已部署，请在 SakuraFrp 中重载对应隧道。') : null,
         certificate?.error ? h('p', { className: 'dsrc-error' }, '证书错误：' + certificate.error) : null,
@@ -431,12 +603,35 @@ export function RemoteControlPanel(): React.ReactElement {
     state.repairRequired ? h(InlineNotice, { tone: 'warn' }, `有 ${state.repairRequired} 台设备是通过旧公网入口授权的，升级后已标记为需要重新配对；旧授权不再放行。`) : null,
     h('p', { className: 'dsrc-note' }, '不同连接方式分别记录授权；连续 30 天未使用的授权会过期。'),
   ], { 'data-section': 'devices' }) : null
+  /** Devices waiting on this Host to confirm a pairing with the self-hosted public node. */
+  const servicePairings = () => {
+    const pairings = state?.serviceNode?.pendingPairings ?? []
+    if (!state?.local || !pairings.length) return null
+    return block('section', 'dsrc-surface dsrc-requests', [
+      block('div', 'dsrc-card-head', [
+        cardIcon('warm', h(BellIcon, null)),
+        h('h3', null, '待确认配对'),
+        h('span', { className: 'dsrc-tag dsrc-pending' }, `${pairings.length} 项`),
+      ]),
+      h('p', { className: 'dsrc-note' }, '手机正在等待本机确认。确认后，该设备可以通过自托管公网节点继续连接。'),
+      ...pairings.map(pairing => block('div', 'dsrc-device dsrc-row', [
+        block('div', 'dsrc-device-main', [
+          block('div', 'dsrc-device-name', [pairing.deviceName]),
+          h('div', { className: 'dsrc-muted' }, `过期时间 ${when(pairing.expiresAt)}`),
+        ]),
+        block('div', 'dsrc-actions', [
+          h('button', { type: 'button', className: 'dsrc-button', disabled, 'aria-label': `拒绝设备 ${pairing.deviceName}`, onClick: () => { void act('rejectServicePairing', { id: pairing.requestId }) } }, workingNode === pairing.requestId ? '正在拒绝…' : '拒绝'),
+          h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled, 'aria-label': `确认设备 ${pairing.deviceName}`, onClick: () => { void act('approveServicePairing', { id: pairing.requestId }) } }, workingNode === pairing.requestId ? '正在确认…' : '确认'),
+        ]),
+      ], { key: pairing.requestId })),
+    ], { 'data-section': 'service-pairings' })
+  }
   return block('div', 'dsrc', [
     h('header', { className: 'dsrc-head' }, block('div', '', [h('h2', null, '远程控制'), h('p', { className: 'dsrc-sub' }, '用手机浏览器继续电脑上的会话与审批。')]),
       h('span', { className: 'dsrc-badge', 'data-state': connectionState, role: 'status' }, h('span', { className: 'dsrc-dot' }), connectionLabel)),
     block('div', 'dsrc-layout', [
       block('div', 'dsrc-col dsrc-col-main', [main()]),
-      block('div', 'dsrc-col dsrc-col-rail', [requests(), devices(), settings()]),
+      block('div', 'dsrc-col dsrc-col-rail', [requests(), servicePairings(), devices(), settings()]),
     ]),
     toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
   ], { 'data-dsh-plugin': 'dsh-remote-connect' })
