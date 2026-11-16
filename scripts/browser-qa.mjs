@@ -144,6 +144,9 @@ if (typeof taskSpace !== 'function') {
     results.push(name)
     console.log('PASS', name)
   }
+  const reveal = async (page, selector) => {
+    await page.evaluate(sel => document.querySelector(sel)?.scrollIntoView({ block: 'center' }), selector)
+  }
   let phone, passed = false
   try {
     await desktop.cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, mobile: false, deviceScaleFactor: 1 })
@@ -328,6 +331,7 @@ if (typeof taskSpace !== 'function') {
     await desktop.waitForFunction(() => /无法连接公网节点|探测超时/.test(document.querySelector('.dsrc-panel-message')?.textContent ?? ''), undefined, { timeout: 25000 })
     assert.equal(await desktop.evaluate(() => document.querySelectorAll('.dsrc-node').length), 0, 'failed detection must not save a node')
     await desktop.cdp('Page.bringToFront')
+    await reveal(desktop, '.dsrc-nodes')
     await layout(desktop, 'desktop-nodes')
     results.push('public node section rejects non-https and unreachable nodes without saving')
     // v2 契约：向 status 响应注入一组 v2、一组 v1 节点，验证节点指纹扩展、信任文案与协议标签。
@@ -440,6 +444,7 @@ if (typeof taskSpace !== 'function') {
     assert.deepEqual(updateCalls, [{ name: '@winlin926/dsh-remote-connect', version: '0.9.9' }], 'confirm installs exactly once through the manager: ' + JSON.stringify(updateCalls))
     assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-update .dsrc-tag')?.textContent), 'v0.9.9', 'update card must show the installed version after a successful update')
     await desktop.evaluate(() => { delete window.__DSH_RC_UPDATE_FIXTURE__ })
+    await reveal(desktop, '.dsrc-update')
     await layout(desktop, 'desktop-update')
     results.push('plugin update card: real manager manual hint, confirm and cancel, restart hint')
     passed = true

@@ -46,7 +46,7 @@
 - 更新需二次确认，过程中禁用按钮并显示进度；`restart-required` 提示「已更新到 X，重启 DSH 后生效」而不自动重启；调用抛错或返回失败时先回查 `listBundles` 的已装版本，已到目标版本报完成并提示不需要重复安装，否则提示结果不确定、确认前不要重复更新。
 - 检查：`pnpm typecheck`、`pnpm build` 通过；`pnpm exec vitest run` 17 个文件 285 个测试通过，其中 `tests/plugin-update.test.ts` 24 个用例覆盖缓存、强制重查、服务缺失、无更新、网络失败、确认取消、安装成功、需重启、失败、结果不确定的恢复。
 - 发布前删减：移除宿主没有调用的 WebRTC 传输、只服务测试的 `/v1/control` 控制面、TURN 预留面和旧控制面协议库，共 58 个文件、-6,946 行；`remote-server` 六项测试 57 个用例全过。
-- 隔离宿主 `qa:browser` 19 项通过：除原有桌面/手机布局、扫码批准、应用就绪、复制回退、输入、预览、撤销与公网节点面板外，新增真实现有管理器的「手动更新」提示、模拟管理器的「可更新 → 确认/取消 → 重启提示」流程，以及手机面板不渲染更新卡片。8 张截图落盘 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.3\screenshots\`，本轮没有 `captureWarnings`。三段缓存：首次访问 3047 ms / 3 请求 / 1,752,148 字节，同页重访 939 ms / 0 字节 / 3 内存命中，关页重开 1455 ms / 0 字节 / 3 磁盘命中。该 profile 只有 3 个初始资源。
+- 隔离宿主 `qa:browser` 19 项通过：除原有桌面/手机布局、扫码批准、应用就绪、复制回退、输入、预览、撤销与公网节点面板外，新增真实现有管理器的「手动更新」提示、模拟管理器的「可更新 → 确认/取消 → 重启提示」流程，以及手机面板不渲染更新卡片。8 张截图落盘 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.3\screenshots\`，本轮没有 `captureWarnings`。三段缓存：首次访问 3130 ms / 3 请求 / 1,752,130 字节，同页重访 1099 ms / 0 字节 / 3 内存命中，关页重开 1863 ms / 0 字节 / 3 磁盘命中。该 profile 只有 3 个初始资源。
 - `npm pack --ignore-scripts` 生成 `@winlin926/dsh-remote-connect@0.6.3` 候选 `.tgz`：31 个文件、120949 字节；`lib/index.js` 与 `lib/client.js` SHA-256 分别为 `85aadcb98c7b2abc442fcda0faaec527bea975068acfb2a8474ee1743b212463`（203740 字节）、`33f53846c58a02023761921ac84e47bc3f29629eb263fba97d8a2e4c4d95b38d`（107826 字节）；`.tgz` SHA-256 `05c8da8b05fc1c173fc59e079f7c27b042c46d7344d70da6992360729206c960`、SHA-512 `oVdBLXNpCWZZYMdELrqImiY4jf29seeov6ReRKBWwjFCGyT7qB8mw7xZ6e3lKv4F5Kg/aV0YZTcfPq3/dzLSiQ==`。未发布 npm，未替换日常 profile。
 - 边界：本机没有可用的新正式版，真实安装与重启流程未在真实 registry 上执行；真实管理器只覆盖 `link:` 安装的「手动更新」分支，可更新、确认、成功与重启提示由浏览器 QA 的合成管理器覆盖；更新成功后 `lib` 变更是否被宿主热重载未验证，仍提示用户手动重启。
 
