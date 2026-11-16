@@ -1,8 +1,20 @@
 import * as React from 'react'
 import { CSS } from './style.js'
 import { PhoneIcon } from './nav-icon.js'
+import { PluginUpdate, resolvePluginManager, updateCard, type PluginManagerFace } from './plugin-update.js'
 const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
+const PACKAGE_NAME = '@winlin926/dsh-remote-connect'
+/**
+ * One update card per page: the check cache has to survive closing and reopening the panel, which
+ * unmounts the component but keeps the module alive.
+ */
+let updateStore: PluginUpdate | null = null
+let hostVersion: string | null = null
+function updateStoreFor(manager: () => PluginManagerFace | null): PluginUpdate {
+  updateStore ??= new PluginUpdate({ packageName: PACKAGE_NAME, manager, installed: () => hostVersion })
+  return updateStore
+}
 export type PublicNodeKind = 'gateway' | 'service'
 /** One node identity: protocol 2 carries it, protocol 1 records only keep the flat host pair. */
 export interface PublicNodeIdentity { id: string; fingerprint: string; publicKey: string }
@@ -36,9 +48,13 @@ interface Status {
   publicNodes?: { current: string | null; list: PublicNode[]; pendingReview: boolean }
   /** Present only while this Host is connected through a self-hosted public node. */
   serviceNode?: ServiceNodeState | null
+  /** The running plugin version, shown before the plugin manager has answered. */
+  version?: string
 }
 interface ClientContext {
   effect(run: () => void | (() => void), label?: string): void
+  /** Resolve a service by name regardless of the property inject gate. */
+  get?(name: string): unknown
   slots: { inject(name: string, setup: () => unknown): void; register(meta: Record<string, unknown>, render: (props: any) => unknown): unknown }
 }
 /** A panel request must never leave the poll or a button waiting forever on a dead network. */
@@ -88,6 +104,10 @@ function WayIcon({ mode }: { mode: Way }): React.ReactElement {
     mode === 'lan'
       ? h(React.Fragment, null, h('path', { d: 'M3 9a14 14 0 0 1 18 0M6 13a9 9 0 0 1 12 0M9.5 16.5a4 4 0 0 1 5 0' }), h('circle', { cx: 12, cy: 20, r: .8, fill: 'currentColor', stroke: 0 }))
       : h(React.Fragment, null, h('circle', { cx: 12, cy: 12, r: 9 }), h('path', { d: 'M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18' })))
+}
+function UpdateIcon(): React.ReactElement {
+  return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+    h('path', { d: 'M12 3v11m0 0 4-4m-4 4-4-4' }), h('path', { d: 'M4 16v2a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-2' }))
 }
 function moveRadio(event: React.KeyboardEvent<HTMLButtonElement>, index: number, count: number, choose: (index: number) => void): void {
   const offset = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 0
@@ -217,7 +237,9 @@ function DeviceRow({ device, disabled, act }: { device: Status['devices'][number
   ])
 }
 
-export function RemoteControlPanel(): React.ReactElement {
+/** The plugin manager arrives after the panel mounts (or never), so the prop is a live resolver. */
+interface PanelProps { manager: () => PluginManagerFace | null }
+export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement {
   const [state, setState] = React.useState<Status | null>(null)
   const [error, setError] = React.useState('')
   const [statusError, setStatusError] = React.useState('')
@@ -254,6 +276,17 @@ export function RemoteControlPanel(): React.ReactElement {
     document.addEventListener('visibilitychange', update)
     return () => { mounted.current = false; clearInterval(timer); document.removeEventListener('visibilitychange', update) }
   }, [refresh])
+  const update = updateStoreFor(manager)
+  const updateState = React.useSyncExternalStore(
+    React.useCallback((notify: () => void) => update.subscribe(notify), [update]),
+    () => update.snapshot(),
+  )
+  React.useEffect(() => {
+    hostVersion = state?.version ?? null
+    update.noteInstalled(hostVersion)
+  }, [state?.version, update])
+  // Opening the panel checks once; the store's ten-minute cache keeps polls and reopenings quiet.
+  React.useEffect(() => { if (state?.local) void update.check() }, [state?.local, update])
   const act = async (action: string, fields: Record<string, unknown> = {}) => {
     if (acting.current) return false
     acting.current = true; revision.current++
@@ -541,6 +574,31 @@ export function RemoteControlPanel(): React.ReactElement {
     ], { 'data-section': 'connection', 'data-state': connectionState })
   }
 
+  /** Update card: the panel only ever asks the DSH plugin manager, never a registry or a shell. */
+  const updateSection = () => {
+    if (!state?.local) return null
+    const card = updateCard(updateState)
+    const working = updateState.busy
+    const actOnCard = () => {
+      if (updateState.confirm) void update.update()
+      else if (updateState.phase === 'available') update.ask()
+      else void update.check(true)
+    }
+    return block('section', 'dsrc-surface dsrc-update', [
+      block('div', 'dsrc-card-head', [
+        cardIcon('slate', h(UpdateIcon, null)),
+        h('h3', null, '插件更新'),
+        h('span', { className: 'dsrc-tag', 'data-tone': card.tone, 'aria-label': `当前版本 ${card.version}` }, `v${card.version}`),
+      ]),
+      h('p', { className: 'dsrc-update-status', 'data-tone': card.tone, role: 'status' }, working && !card.action ? '正在处理，请不要关闭 DSH…' : card.status),
+      card.detail ? h('p', { className: 'dsrc-muted' }, card.detail) : null,
+      block('div', 'dsrc-actions dsrc-update-actions', [
+        updateState.confirm ? h('button', { type: 'button', className: 'dsrc-button', disabled: working, onClick: () => update.cancel() }, '取消') : null,
+        card.action ? h('button', { type: 'button', className: `dsrc-button${updateState.confirm ? ' dsrc-primary' : ''}`, disabled: working, onClick: actOnCard }, working ? '正在更新…' : card.action) : null,
+      ]),
+    ], { 'data-section': 'plugin-update', 'data-phase': updateState.phase })
+  }
+
   const settings = () => {
     if (!state) return null
     const lanSettings = lanCertificate ? block('section', 'dsrc-setting-group', [
@@ -664,7 +722,7 @@ export function RemoteControlPanel(): React.ReactElement {
     h('header', { className: 'dsrc-head' }, block('div', '', [h('h2', null, '远程控制'), h('p', { className: 'dsrc-sub' }, '用手机浏览器继续电脑上的会话与审批。')]),
       h('span', { className: 'dsrc-badge', 'data-state': connectionState, role: 'status' }, h('span', { className: 'dsrc-dot' }), connectionLabel)),
     block('div', 'dsrc-layout', [
-      block('div', 'dsrc-col dsrc-col-main', [main()]),
+      block('div', 'dsrc-col dsrc-col-main', [main(), updateSection()]),
       block('div', 'dsrc-col dsrc-col-rail', [requests(), servicePairings(), devices(), settings()]),
     ]),
     toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
@@ -704,7 +762,7 @@ function PairingPrompt({ waiting, onDone }: { waiting: Waiting; onDone: () => vo
         h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled: working, autoFocus: true, onClick: () => { void answer('approve') } }, '允许连接')]),
     ]) : null)
 }
-function SidebarEntry(): React.ReactElement {
+function SidebarEntry({ manager }: PanelProps): React.ReactElement {
   const [open, setOpen] = React.useState(false), dialog = React.useRef<HTMLDialogElement>(null)
   const [waiting, setWaiting] = React.useState<Waiting>({ enabled: false, node: { name: '', fingerprint: '', fingerprintGroups: '' }, requests: [] })
   React.useEffect(() => { if (open) dialog.current?.showModal(); else dialog.current?.close() }, [open])
@@ -749,14 +807,22 @@ function SidebarEntry(): React.ReactElement {
   return h(React.Fragment, null,
     button,
     h('dialog', { className: 'dsrc-dialog', ref: dialog, 'aria-label': '远程控制', onCancel: () => setOpen(false), onClick: (event: React.MouseEvent<HTMLDialogElement>) => { if (event.target === event.currentTarget) { const r = event.currentTarget.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) setOpen(false) } } },
-      h('button', { type: 'button', className: 'dsrc-close', 'aria-label': '关闭远程控制面板', onClick: () => setOpen(false) }, '×'), open ? h(RemoteControlPanel) : null),
+      h('button', { type: 'button', className: 'dsrc-close', 'aria-label': '关闭远程控制面板', onClick: () => setOpen(false) }, '×'), open ? h(RemoteControlPanel, { manager }) : null),
     h(PairingPrompt, { waiting, onDone: () => { void check() } }))
 }
 export const inject = ['slots', 'connection']
 export function apply(ctx: ClientContext): void {
+  // `remote.pluginManager` is a Host Remote service mounted after this plugin applies. Its property gate
+  // refuses a member that was not injected, so resolve the service by name on every check instead:
+  // a Host without a plugin manager simply answers undefined and the card explains the manual path.
+  const manager = () => {
+    let found: unknown = undefined
+    try { found = ctx.get?.('remote.pluginManager') } catch { found = undefined }
+    return resolvePluginManager({ manager: (found ?? null) as PluginManagerFace | null })
+  }
   ctx.effect(() => { const style = document.createElement('style'); style.dataset.dshRemoteControl = 'true'; style.textContent = CSS; document.head.append(style); return () => style.remove() }, 'remote-control styles')
-  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'copylee-remote-control', order: 65, label: () => '远程控制' }, () => h(RemoteControlPanel)))
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'copylee-remote-control', order: 65, label: () => '远程控制' }, () => h(RemoteControlPanel, { manager })))
   // Addressed by section id: the shell skips ids it has no section for.
   ctx.slots.inject('settings.section.icon', () => ctx.slots.register({ name: 'settings.section.icon', id: 'copylee-remote-control' }, (props: { size?: number; active?: boolean }) => h(PhoneIcon, props)))
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'copylee-remote-control', order: 65 }, () => h(SidebarEntry)))
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'copylee-remote-control', order: 65 }, () => h(SidebarEntry, { manager })))
 }

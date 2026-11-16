@@ -377,7 +377,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         lanTls: config.lanTls ? { origin: lanTls?.origin, expiresAt: lanTls?.expiresAt, error: lanTlsError } : undefined,
         publicNodes: { current: publicNodes?.current ?? null, list: publicNodeList, pendingReview: publicNodeList.some(item => item.pending) },
         serviceNode: service,
-        phase, error: lastError, lastError, gatewayPort: gateway?.port ?? 0, local,
+        phase, error: lastError, lastError, version: NODE_VERSION, gatewayPort: gateway?.port ?? 0, local,
         expiresAt: identityBlocked ? undefined : record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
         links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],

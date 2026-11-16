@@ -289,6 +289,8 @@ if (typeof taskSpace !== 'function') {
         await layout(phone, `phone-${width}-${theme}`, width)
       }
     }
+    assert.equal(await phone.evaluate(() => !!document.querySelector('.dsrc-update')), false, 'phone remote panel must not render update controls')
+    results.push('phone panel hides the plugin update card')
     const device = (await manage('status')).devices.find(row => row.name === '中文测试设备')
     await manage('revoke', { id: device.id })
     await phone.waitForFunction(() => !!document.getElementById('dsh-rc-disconnected'), undefined, { timeout: 10000 })
@@ -398,6 +400,48 @@ if (typeof taskSpace !== 'function') {
       await desktop.waitForFunction(() => document.querySelectorAll('.dsrc-nodes .dsrc-node').length === 0, undefined, { timeout: 10000 }).catch(() => {})
       results.push('public node panel shows v2 fingerprint groups, trust copy and v1/v2 protocol labels')
     }
+    // 插件更新卡片：先走真实管理器（隔离宿主用 link: 安装，管理器能列出包但没有可更新来源），
+    // 再用模拟管理器验证「可更新 / 确认 / 取消 / 需要重启」四个状态；模拟管理器只在页面内存在。
+    await desktop.waitForSelector('.dsrc-update', { state: 'visible', timeout: 15000 })
+    await desktop.waitForFunction(() => /请通过 DSH 插件管理器手动更新/.test(document.querySelector('.dsrc-update-status')?.textContent ?? ''), undefined, { timeout: 15000 })
+    const updateReal = await desktop.evaluate(() => ({
+      version: document.querySelector('.dsrc-update .dsrc-tag')?.textContent ?? '',
+      status: document.querySelector('.dsrc-update-status')?.textContent ?? '',
+      detail: document.querySelector('.dsrc-update .dsrc-muted')?.textContent ?? '',
+      actions: [...document.querySelectorAll('.dsrc-update-actions button')].map(button => button.textContent.trim()),
+    }))
+    assert.match(updateReal.version, /^v\d+\.\d+\.\d+$/, 'update card must show the running version: ' + JSON.stringify(updateReal))
+    assert.equal(updateReal.status, '请通过 DSH 插件管理器手动更新')
+    assert.match(updateReal.detail, /本地链接或 Git 固定提交/, 'update card must reach the real plugin manager; "没有连到 DSH 插件管理器" means the Client remote namespace lookup failed: ' + JSON.stringify(updateReal))
+    assert.deepEqual(updateReal.actions, ['检查更新'], 'update card offers a manual re-check: ' + JSON.stringify(updateReal))
+    await desktop.evaluate(() => {
+      window.__qaUpdateCalls = []
+      window.__DSH_RC_UPDATE_FIXTURE__ = {
+        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-remote-connect', installed: true, version: '0.6.2', update: 'registry' }] } },
+        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.2', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
+        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.2', to: version, result: { changed: true, application: 'restart-required' } } } },
+      }
+    })
+    await clickButton(desktop, '检查更新')
+    await desktop.waitForFunction(() => /可更新到 0\.9\.9/.test(document.querySelector('.dsrc-update-status')?.textContent ?? ''), undefined, { timeout: 10000 })
+    const offered = await desktop.evaluate(() => [...document.querySelectorAll('.dsrc-update-actions button')].map(button => button.textContent.trim()))
+    assert.deepEqual(offered, ['更新到 0.9.9'], 'available update offers one install button: ' + JSON.stringify(offered))
+    await clickButton(desktop, '更新到 0.9.9')
+    await desktop.waitForFunction(() => /确认更新到 0\.9\.9/.test(document.querySelector('.dsrc-update-status')?.textContent ?? ''), undefined, { timeout: 5000 })
+    const confirmRow = await desktop.evaluate(() => [...document.querySelectorAll('.dsrc-update-actions button')].map(button => button.textContent.trim()))
+    assert.deepEqual(confirmRow, ['取消', '确认更新'], 'confirmation row offers cancel and confirm: ' + JSON.stringify(confirmRow))
+    await clickButton(desktop, '取消')
+    await desktop.waitForFunction(() => /可更新到 0\.9\.9/.test(document.querySelector('.dsrc-update-status')?.textContent ?? ''), undefined, { timeout: 5000 })
+    assert.equal((await desktop.evaluate(() => window.__qaUpdateCalls.length)), 0, 'cancel must not install anything')
+    await clickButton(desktop, '更新到 0.9.9')
+    await clickButton(desktop, '确认更新')
+    await desktop.waitForFunction(() => /已更新到 0\.9\.9，重启 DSH 后生效/.test(document.querySelector('.dsrc-update-status')?.textContent ?? ''), undefined, { timeout: 10000 })
+    const updateCalls = await desktop.evaluate(() => window.__qaUpdateCalls)
+    assert.deepEqual(updateCalls, [{ name: '@winlin926/dsh-remote-connect', version: '0.9.9' }], 'confirm installs exactly once through the manager: ' + JSON.stringify(updateCalls))
+    assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-update .dsrc-tag')?.textContent), 'v0.9.9', 'update card must show the installed version after a successful update')
+    await desktop.evaluate(() => { delete window.__DSH_RC_UPDATE_FIXTURE__ })
+    await layout(desktop, 'desktop-update')
+    results.push('plugin update card: real manager manual hint, confirm and cancel, restart hint')
     passed = true
     console.log(JSON.stringify({ passed, results, cacheRuns, browserProcessRestart: 'manual', captureWarnings, screenshots: captures }, null, 2))
   } finally {

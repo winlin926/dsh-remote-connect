@@ -131,6 +131,15 @@ export const CSS = `
 .dsrc-tag[data-way=public]{background:var(--rc-teal-soft);color:var(--rc-teal)}
 .dsrc-online{background:color-mix(in srgb,var(--rc-teal) 11%,transparent);color:var(--rc-teal)}
 .dsrc-pending{background:color-mix(in srgb,var(--rc-warm) 12%,transparent);color:var(--rc-warm)}
+.dsrc-tag[data-tone=ok]{background:color-mix(in srgb,var(--rc-success) 12%,transparent);color:var(--rc-success)}
+.dsrc-tag[data-tone=warn]{background:color-mix(in srgb,var(--rc-warm) 12%,transparent);color:var(--rc-warm)}
+.dsrc-tag[data-tone=danger]{background:color-mix(in srgb,var(--rc-danger) 12%,transparent);color:var(--rc-danger)}
+.dsrc-update{display:flex;flex-direction:column;gap:8px}
+.dsrc-update-status{margin:0;font-size:12px;color:var(--rc-muted);overflow-wrap:anywhere}
+.dsrc-update-status[data-tone=ok]{color:var(--rc-success);font-weight:600}
+.dsrc-update-status[data-tone=warn]{color:var(--rc-warm);font-weight:600}
+.dsrc-update-status[data-tone=danger]{color:var(--rc-danger);font-weight:600}
+.dsrc-update-actions{margin-top:2px}
 .dsrc-rename{height:32px;width:220px;max-width:100%;border:1px solid var(--rc-accent);border-radius:8px;background:var(--rc-paper);padding:0 8px;font-weight:600}
 
 .dsrc-preferences{padding:0 15px}
