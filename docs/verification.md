@@ -1,6 +1,6 @@
 # 验证范围
 
-开发依赖、锁文件和隔离验收宿主统一使用 DSH 0.2.2-rc.3。插件版本为 0.6.2。
+开发依赖、锁文件和隔离验收宿主统一使用 DSH 0.2.2-rc.3。插件版本为 0.6.3。
 
 ## 修改后的检查
 
@@ -41,6 +41,13 @@
 - `package-manifest.json` 式的旧包清单未再生成；`scripts/check-package.mjs` 直接校验 `.tgz`，确认入口文件与本次构建逐字节相同、包内无 `.qa`、测试与开发文件。
 - 边界：自托管节点的端到端链路只在本机进程内假节点、`scripts/verify-node-v2.mjs` 起的真实进程与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；本机没有 Docker，`docker compose config`、镜像构建与 `up` 未执行，Compose/Dockerfile/Caddyfile 只做静态核对；Coturn 临时凭据与真实 TLS 未实测；日常 profile 已切到 0.6.2 固定 tgz 并安装完成，重启宿主前仍在运行 0.6.1。
 - 手机与真实节点结论保持「桌面已验证，手机与真实节点待验证」：v2 手机配对页只在源码断言与浏览器 DOM 断言层面验证，没有真机扫码；没有真实 v2 服务节点，节点身份变化阻断只由单元测试与合成状态覆盖。
+- 面板新增「插件更新」卡片（`src/client/plugin-update.ts`，约 330 行）：只在电脑本机面板渲染（`state.local` 为真），手机远程面板不渲染；打开面板自动检查，结果缓存 10 分钟并允许手动重查。不新增 Host 接口、不自行请求 npm 或执行 shell：客户端按名解析 `remote.pluginManager`（`ctx.get('remote.pluginManager')`，每处将 `remote` 的成员属性都受注入门控，因此不再静态注入该成员），只调用 `listBundles`、`listVersions`、`updateBundle`。
+- 只处理本插件兼容正式版：从管理器已按 semver 新→旧排好的列表里取第一个 `bundle` 为真、非预发布、无 `incompatible` 的版本，不自比版本号、不引入 `semver`；`update` 字段缺失（`link:` 或 Git 固定提交安装）显示「请通过 DSH 插件管理器手动更新」，管理器不可用时同样降级，远程连接功能不受影响。
+- 更新需二次确认，过程中禁用按钮并显示进度；`restart-required` 提示「已更新到 X，重启 DSH 后生效」而不自动重启；调用抛错或返回失败时先回查 `listBundles` 的已装版本，已到目标版本报完成并提示不需要重复安装，否则提示结果不确定、确认前不要重复更新。
+- 检查：`pnpm typecheck`、`pnpm build` 通过；`pnpm exec vitest run` 18 个文件 286 个测试通过，其中新增 `tests/plugin-update.test.ts` 24 个用例覆盖缓存、强制重查、服务缺失、无更新、网络失败、确认取消、安装成功、需重启、失败、结果不确定的恢复。
+- 隔离宿主 `qa:browser` 19 项通过：除原有桌面/手机布局、扫码批准、应用就绪、复制回退、输入、预览、撤销与公网节点面板外，新增真实现有管理器的「手动更新」提示、模拟管理器的「可更新 → 确认/取消 → 重启提示」流程，以及手机面板不渲染更新卡片；截图 `desktop-update.png` 与 `desktop-update-card.png`。
+- `npm pack --ignore-scripts` 生成 `@winlin926/dsh-remote-connect@0.6.3` 候选 `.tgz`：50 个文件、140370 字节；`lib/index.js` 与 `lib/client.js` SHA-256 分别为 `66d6202b1dda1053e2392d317512708505b6016f0e54373b6f2b94f0dd06a7e1`（205412 字节）、`33f53846c58a02023761921ac84e47bc3f29629eb263fba97d8a2e4c4d95b38d`（107826 字节）；`.tgz` SHA-256 `025683449e16eafab412b378181f6ab3b7d08e6971c785845b54b08db1aacc63`、SHA-512 `6OiZS5JhmH/0wWSK3KZ3sDrWMp3oCrBhaqzQ1Nz8t+x2iYJtBP29UR0PfoHAywe75aLcBRYAmNQ4mYfH5AtEuA==`。未发布 npm，未替换日常 profile。
+- 边界：本机没有可用的新正式版，真实安装与重启流程未在真实 registry 上执行；真实管理器只覆盖 `link:` 安装的「手动更新」分支，可更新、确认、成功与重启提示由浏览器 QA 的合成管理器覆盖；更新成功后 `lib` 变更是否被宿主热重载未验证，仍提示用户手动重启。
 
 - `pnpm test`：10 个文件、129 个测试通过；`pnpm typecheck`、`pnpm build` 通过。
 - 局域网 TLS 覆盖证书到期/SAN/私钥、可信 WSS/SSE、Secure Cookie、规范 Host/origin、热重载原子性及不降级；browser transport 覆盖官方启动成功/失败状态、加载错误与凭据净化。
