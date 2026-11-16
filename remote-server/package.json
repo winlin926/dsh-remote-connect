@@ -1,0 +1,25 @@
+{
+  "name": "dsh-remote-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hostable public relay node for DeepSeek Harness remote control",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/remote-server/src/main.js",
+    "test": "npm run build && node --test --test-timeout=20000 test/discovery.test.ts test/hosts.test.ts test/pairing.test.ts test/assets.test.ts test/control.test.ts test/security.test.ts test/turn.test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2",
+    "typescript": "^6.0.3"
+  }
+}

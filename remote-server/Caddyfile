@@ -1,0 +1,30 @@
+# Automatic HTTPS reverse proxy for the public relay node.
+#
+# Set SITE_ADDRESS in .env to the public hostname (e.g. relay.example.com).
+# Caddy obtains/renews the certificate automatically; port 80 and 443 must be
+# reachable from the internet and DNS must point at this host.
+#
+# WebSocket upgrades (/v1/control) are proxied transparently by reverse_proxy;
+# the X-Forwarded-* headers below are only trusted by the server when
+# TRUST_PROXY=1 (compose.yaml sets it).
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	reverse_proxy remote-server:8787 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-For {remote_host}
+	}
+
+	# Security headers for the small landing page; API responses set their own.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
