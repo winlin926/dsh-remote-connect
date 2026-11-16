@@ -114,7 +114,7 @@ it('explicitly switches entries, invalidates the old entry, and can retry a fail
 it('confirms the public node on both ends before issuing a device cookie', async () => withHost(async command => {
   await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' })
   const state = await command('start')
-  expect(state.node).toMatchObject({ kind: 'gateway', protocol: 1, fingerprint: expect.stringMatching(/^[a-f0-9]{32}$/), fingerprintGroups: expect.stringMatching(/^([A-F0-9]{4}-){7}[A-F0-9]{4}$/) })
+  expect(state.node).toMatchObject({ kind: 'gateway', protocol: 2, fingerprint: expect.stringMatching(/^[a-f0-9]{32}$/), fingerprintGroups: expect.stringMatching(/^([A-F0-9]{4}-){7}[A-F0-9]{4}$/) })
   const send = (path: string, body: unknown, headers: Record<string, string> = {}, method = 'POST') => new Promise<{ status: number; body: any; text: string; cookie: string }>((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port: state.gatewayPort, path, method, headers: { host: 'dsh.example.com', origin: 'https://dsh.example.com', 'content-type': 'application/json', ...headers } }, res => {
       let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text.startsWith('{') ? JSON.parse(text) : {}, text, cookie: res.headers['set-cookie']?.[0] ?? '' }))
@@ -123,11 +123,16 @@ it('confirms the public node on both ends before issuing a device cookie', async
   // The page the browser reaches first names this node, not the Host behind it.
   const page = await send('/pair', undefined, { accept: 'text/html' }, 'GET')
   expect(page.status).toBe(200)
-  for (const text of ['确认是本机', state.node.fingerprintGroups, '隧道网关', 'v1', '主机指纹']) expect(page.text).toContain(text)
+  for (const text of ['确认是本机', state.node.fingerprintGroups, '隧道网关', 'v2', '目标主机指纹']) expect(page.text).toContain(text)
   const discovery = await send('/.well-known/dsh-remote', undefined, {}, 'GET')
   expect(discovery.status).toBe(200)
-  expect(discovery.body).toMatchObject({ protocol: 1, kind: 'gateway', name: 'DeepSeek Harness', fingerprint: state.node.fingerprint })
-  expect(discovery.body.hostId).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  expect(discovery.body).toMatchObject({
+    protocol: 2, kind: 'gateway', name: 'DeepSeek Harness',
+    node: { id: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), fingerprint: state.node.fingerprint, publicKey: expect.stringMatching(/^[A-Za-z0-9_-]{40,120}$/) },
+  })
+  // The flat fields stay as compatibility aliases for clients up to 0.6.1; they repeat the node identity.
+  expect(discovery.body.hostId).toBe(discovery.body.node.id)
+  expect(discovery.body.fingerprint).toBe(state.node.fingerprint)
   const token = new URL(state.links[0].url).hash.slice(6)
   // A page that did not confirm this host's fingerprint cannot even ask for a ticket.
   const mismatched = await send('/rc/pair/request', { token, fingerprint: '0'.repeat(32) })

@@ -4,7 +4,9 @@ import * as Connection from '@deepseek-ai/dsh-client-connection'
 import * as Plugin from '../src/index.js'
 import { Gateway, MANAGE_PATH } from '../src/gateway.js'
 import { TUNNEL_PATH } from '../src/remote/tunnel-protocol.js'
-import { randomBytes } from 'node:crypto'
+import { identityOfPublicKey } from '../src/host-identity.js'
+import type { PublicNodeIdentity } from '../src/public-node.js'
+import { randomBytes, generateKeyPairSync } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpsServer } from 'node:https'
 import { tmpdir } from 'node:os'
@@ -43,13 +45,37 @@ async function withHost(run: (harness: Harness) => Promise<void>, prepare?: (sto
   }
 }
 
-interface DiscoveryOptions { kind?: 'gateway' | 'service'; name?: string; version?: string; hostId?: string; fingerprint?: string }
+/** A real Ed25519 key is the only way to build a protocol-2 node identity the plugin will trust. */
+function nodeIdentity(): PublicNodeIdentity {
+  const der = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' })
+  const derived = identityOfPublicKey(der)
+  return { id: derived.hostId, fingerprint: derived.fingerprint, publicKey: der.toString('base64url') }
+}
+const NODE_A = nodeIdentity()
+const NODE_B = nodeIdentity()
+
+interface DiscoveryOptions { kind?: 'gateway' | 'service'; name?: string; version?: string; identity?: PublicNodeIdentity }
+/** The protocol-2 document a node serves: the node identity plus the flat aliases ≤0.6.1 clients read. */
 function discovery(options: DiscoveryOptions = {}): Response {
+  const node = options.identity ?? NODE_A
   return Response.json({
-    protocol: 1,
+    protocol: 2,
     kind: options.kind ?? 'service',
     name: options.name ?? '测试公网节点',
     version: options.version ?? '1.2.3',
+    capabilities: ['pairing', 'cache'],
+    node,
+    hostId: node.id,
+    fingerprint: node.fingerprint,
+  })
+}
+/** A node that never upgraded still answers protocol 1 with the flat identity only. */
+function legacyDiscovery(options: { kind?: 'gateway' | 'service'; name?: string; version?: string; hostId?: string; fingerprint?: string } = {}): Response {
+  return Response.json({
+    protocol: 1,
+    kind: options.kind ?? 'gateway',
+    name: options.name ?? '旧版公网节点',
+    version: options.version ?? '0.5.1',
     capabilities: ['pairing', 'cache'],
     hostId: options.hostId ?? 'A'.repeat(43),
     fingerprint: options.fingerprint ?? 'a'.repeat(32),
@@ -177,10 +203,11 @@ it('adds a detected service node, refuses duplicates, and shows it as the connec
   stubDiscovery(() => discovery())
   const added = await command('addPublicNode', { url: 'https://service.example.com' })
   expect(added).toMatchObject({ status: 200, ok: true })
-  expect(added.node).toMatchObject({ url: 'https://service.example.com', kind: 'service', name: '测试公网节点', version: '1.2.3', hostId: 'A'.repeat(43), fingerprint: 'a'.repeat(32), pending: false, lastCheckOk: true })
+  expect(added.node).toMatchObject({ url: 'https://service.example.com', kind: 'service', name: '测试公网节点', version: '1.2.3', protocol: 2, node: NODE_A, hostId: null, fingerprint: null, pending: false, lastCheckOk: true, identityChange: null })
   const stored = JSON.parse(readFileSync(join(storage, 'public-nodes.json'), 'utf8'))
-  expect(stored).toMatchObject({ version: 1, current: null })
+  expect(stored).toMatchObject({ version: 2, current: null })
   expect(stored.nodes).toHaveLength(1)
+  expect(stored.nodes[0]).toMatchObject({ protocol: 2, node: NODE_A, hostId: null, fingerprint: null })
   const duplicate = await command('addPublicNode', { url: 'https://service.example.com' })
   expect(duplicate).toMatchObject({ status: 200, ok: false, message: '该公网节点已存在。' })
   const state = await command('status')
@@ -206,6 +233,86 @@ it('re-checks a node and records both the successful and the failed probe', () =
   expect(listed).toHaveLength(1)
   expect(listed[0]).toMatchObject({ lastCheckOk: false, lastCheckError: '节点发现接口返回 HTTP 502。', version: '2.0.0' })
   expect(await command('checkPublicNode', { id: 'missing' })).toMatchObject({ status: 400, error: '公网节点不存在。' })
+}))
+
+it('still adds a protocol-1 node and records its flat identity', () => withHost(async ({ command, storage }) => {
+  stubDiscovery(() => legacyDiscovery({ kind: 'gateway' }))
+  const added = await command('addPublicNode', { url: 'https://old.example.com' })
+  expect(added).toMatchObject({ status: 200, ok: true })
+  expect(added.node).toMatchObject({ protocol: 1, node: null, hostId: 'A'.repeat(43), fingerprint: 'a'.repeat(32), kind: 'gateway', pending: false })
+  const stored = JSON.parse(readFileSync(join(storage, 'public-nodes.json'), 'utf8'))
+  expect(stored).toMatchObject({ version: 2, current: null })
+  expect(stored.nodes[0]).toMatchObject({ node: null, hostId: 'A'.repeat(43), fingerprint: 'a'.repeat(32) })
+}))
+
+it('adopts the first node identity silently and records a later change as a blocked state', () => withHost(async ({ command }) => {
+  stubDiscovery(() => discovery())
+  const added = await command('addPublicNode', { url: 'https://service.example.com' })
+  expect(added.node).toMatchObject({ protocol: 2, node: NODE_A, hostId: null, fingerprint: null, identityChange: null })
+  // Re-checking against the same identity is a plain successful probe, not a review request.
+  const checked = await command('checkPublicNode', { id: added.node.id })
+  expect(checked).toMatchObject({ status: 200, ok: true })
+  expect(checked.node).toMatchObject({ protocol: 2, node: NODE_A, lastCheckOk: true })
+  stubDiscovery(() => discovery({ identity: NODE_B }))
+  const changed = await command('checkPublicNode', { id: added.node.id })
+  expect(changed).toMatchObject({ status: 200, ok: false, message: '节点身份已变化，需要重新确认。' })
+  const listed = (await command('status')).publicNodes.list[0]
+  expect(listed).toMatchObject({ node: NODE_A, protocol: 2, hostId: null, fingerprint: null, lastCheckOk: false, lastCheckError: '节点身份已变化，需要重新确认。', identityChange: { from: NODE_A, to: NODE_B } })
+  expect(listed.identityChange.detectedAt).toEqual(expect.any(Number))
+  // A second probe must not rotate the stored identity: the user decides from the panel.
+  expect((await command('checkPublicNode', { id: added.node.id })).message).toBe('公网节点的身份已变化，请先在面板确认。')
+  expect((await command('status')).publicNodes.list[0].node).toEqual(NODE_A)
+}))
+
+it('blocks a current node whose identity changed until the panel confirms it', () => withHost(async ({ command }) => {
+  stubDiscovery(() => discovery())
+  const added = await command('addPublicNode', { url: 'https://service.example.com' })
+  await command('setCurrentPublicNode', { id: added.node.id })
+  await command('preferences', { mode: 'public' })
+  stubDiscovery(() => discovery({ identity: NODE_B }))
+  await command('checkPublicNode', { id: added.node.id })
+  const blocked = await command('status')
+  expect(blocked).toMatchObject({
+    phase: 'error', links: [],
+    error: '公网节点的身份已变化，请先在面板确认。', lastError: '公网节点的身份已变化，请先在面板确认。',
+  })
+  expect(blocked.qr).toBeUndefined()
+  expect(blocked.serviceNode).toMatchObject({ connected: false })
+  expect(blocked.expiresAt).toBeUndefined()
+  expect(await command('refresh')).toMatchObject({ status: 400, error: '公网节点的身份已变化，请先在面板确认。' })
+  expect(await command('start')).toMatchObject({ status: 400, error: '公网节点的身份已变化，请先在面板确认。' })
+  expect(await command('setCurrentPublicNode', { id: added.node.id })).toMatchObject({ status: 400, error: '公网节点的身份已变化，请先在面板确认。' })
+  // Confirming adopts the identity the node presents now; the next probe agrees and the block clears.
+  stubDiscovery(() => discovery({ identity: NODE_B }))
+  const confirmed = await command('confirmPublicNodeIdentity', { id: added.node.id })
+  expect(confirmed).toMatchObject({ status: 200, ok: true })
+  expect(confirmed.node).toMatchObject({ protocol: 2, node: NODE_B, identityChange: null, lastCheckOk: true })
+  const recovered = await command('status')
+  expect(recovered.publicNodes.list[0]).toMatchObject({ node: NODE_B, identityChange: null, lastCheckOk: true })
+  expect(recovered.error).toBeUndefined()
+  expect(recovered.phase).toBe('off')
+}))
+
+it('keeps a confirmed identity when the follow-up probe fails', () => withHost(async ({ command }) => {
+  stubDiscovery(() => discovery())
+  const added = await command('addPublicNode', { url: 'https://service.example.com' })
+  stubDiscovery(() => discovery({ identity: NODE_B }))
+  await command('checkPublicNode', { id: added.node.id })
+  stubDiscovery(() => new Response('down', { status: 503 }))
+  const confirmed = await command('confirmPublicNodeIdentity', { id: added.node.id })
+  expect(confirmed).toMatchObject({ status: 200, ok: true })
+  expect(confirmed.node).toMatchObject({ node: NODE_B, identityChange: null, lastCheckOk: false, lastCheckError: '节点发现接口返回 HTTP 503。' })
+  expect((await command('status')).publicNodes.list[0].node).toEqual(NODE_B)
+}))
+
+it('does not accept a protocol-1 answer for a node that already proved protocol 2', () => withHost(async ({ command }) => {
+  stubDiscovery(() => discovery())
+  const added = await command('addPublicNode', { url: 'https://service.example.com' })
+  stubDiscovery(() => legacyDiscovery({ kind: 'service' }))
+  const downgraded = await command('checkPublicNode', { id: added.node.id })
+  expect(downgraded).toMatchObject({ status: 200, ok: false, message: '节点已降级为旧版协议，需要重新检测。' })
+  const listed = (await command('status')).publicNodes.list[0]
+  expect(listed).toMatchObject({ protocol: 2, node: NODE_A, hostId: null, fingerprint: null, lastCheckOk: false, lastCheckError: '节点已降级为旧版协议，需要重新检测。', identityChange: null })
 }))
 
 it('switches the current gateway node and keeps PublicAccess on the same domain', () => withHost(async ({ command, storage }) => {

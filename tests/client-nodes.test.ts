@@ -9,6 +9,8 @@ import {
   nodeHost,
   nodeKindLabel,
   parsePublicNodeAddress,
+  publicNodeFingerprint,
+  publicNodeProtocolLabel,
   serviceStateLabel,
   sortPublicNodes,
   when,
@@ -17,9 +19,10 @@ import type { PublicNode } from '../src/client/index.js'
 
 const SOURCE = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
 const FINGERPRINT = 'e5029063f54829c639dac06e7a3de8cd'
+const OTHER_FINGERPRINT = '0f1e2d3c4b5a69788796a5b4c3d2e1f0'
 const makeNode = (overrides: Partial<PublicNode> = {}): PublicNode => ({
   id: 'node-1', url: 'https://node.example.com', kind: 'gateway', name: '节点一', version: '0.5.1', protocol: 1,
-  capabilities: ['remote-control'], hostId: 'host-1', fingerprint: FINGERPRINT,
+  capabilities: ['remote-control'], hostId: 'host-1', fingerprint: FINGERPRINT, node: null, identityChange: null,
   addedAt: 1_700_000_000_000, lastCheckAt: 1_700_000_500_000, lastCheckOk: true, lastCheckError: null, pending: false,
   ...overrides,
 })
@@ -76,6 +79,23 @@ describe('nodeFingerprintGroups', () => {
     expect(nodeFingerprintGroups(null)).toBe('尚未上报')
     expect(nodeFingerprintGroups('')).toBe('尚未上报')
     expect(nodeFingerprintGroups('not-a-fingerprint')).toBe('NOT-A-FINGERPRINT')
+  })
+})
+
+describe('publicNodeFingerprint', () => {
+  it('prefers the node identity and falls back to the legacy flat fingerprint', () => {
+    const identity = { id: 'v'.repeat(43), fingerprint: OTHER_FINGERPRINT, publicKey: 'k'.repeat(43) }
+    expect(publicNodeFingerprint(makeNode({ protocol: 2, node: identity, hostId: null, fingerprint: null }))).toBe(OTHER_FINGERPRINT)
+    expect(publicNodeFingerprint(makeNode({ protocol: 1 }))).toBe(FINGERPRINT)
+    expect(publicNodeFingerprint(makeNode({ protocol: null, fingerprint: null }))).toBeNull()
+  })
+})
+
+describe('publicNodeProtocolLabel', () => {
+  it('distinguishes a v2 node identity from the legacy single-host protocol', () => {
+    expect(publicNodeProtocolLabel(2)).toBe('v2')
+    expect(publicNodeProtocolLabel(1)).toBe('旧版 v1（单主机）')
+    expect(publicNodeProtocolLabel(null)).toBe('协议待确认')
   })
 })
 
@@ -166,9 +186,54 @@ describe('connection way copy', () => {
 
 describe('node interactions use the documented manage actions', () => {
   it('wires every node control to its manage action', () => {
-    for (const action of ['addPublicNode', 'checkPublicNode', 'setCurrentPublicNode', 'removePublicNode', 'approveServicePairing', 'rejectServicePairing']) {
+    for (const action of ['addPublicNode', 'checkPublicNode', 'setCurrentPublicNode', 'removePublicNode', 'confirmPublicNodeIdentity', 'approveServicePairing', 'rejectServicePairing']) {
       expect(SOURCE).toContain(action)
     }
+  })
+})
+
+describe('public node identity copy', () => {
+  it('states the trust boundary of a public node verbatim', () => {
+    expect(SOURCE).toContain('通过 HTTPS 连接该节点。节点或隧道运营者可能看到转发给本机的请求与内容，本插件不提供端到端加密。请只添加你信任的节点。')
+  })
+
+  it('explains an identity change and offers re-confirmation instead of pretending it is healthy', () => {
+    expect(SOURCE).toContain('节点身份已变化，需要重新确认')
+    expect(SOURCE).toContain('原节点指纹')
+    expect(SOURCE).toContain('新节点指纹')
+    expect(SOURCE).toContain('重新确认')
+    expect(SOURCE).toContain('当前公网节点')
+  })
+
+  it('shows the v2 node fingerprint and protocol label rather than the legacy host identity', () => {
+    expect(SOURCE).toContain('节点指纹')
+    expect(SOURCE).toContain('旧版 v1（单主机）')
+    expect(SOURCE).toContain('publicNodeProtocolLabel')
+  })
+
+  it('cannot set a node with a pending identity change as the current one', () => {
+    expect(SOURCE).toContain('需先确认身份')
+    expect(SOURCE).toContain('disabled: manageDisabled || current || !!change')
+  })
+})
+
+describe('pairing page', () => {
+  const page = readFileSync(new URL('../src/pages.ts', import.meta.url), 'utf8')
+
+  it('derives the target host fingerprint locally from the QR public key', () => {
+    expect(page).toContain('crypto.subtle.digest')
+    expect(page).toContain("params.get('key')")
+    expect(page).toContain('二维码中的主机指纹与这台电脑不一致')
+    expect(page).toContain('目标主机指纹')
+    expect(page).toContain('确认是本机')
+  })
+
+  it('shows the node type without any short verification code', () => {
+    expect(page).toContain('隧道网关')
+    expect(page).toContain('自托管服务')
+    expect(page).not.toContain('verificationCode')
+    expect(page).not.toContain('8 位')
+    expect(page).not.toContain('短码')
   })
 })
 

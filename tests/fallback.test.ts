@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -6,13 +7,25 @@ import { join } from 'node:path'
 import { Gateway } from '../src/gateway.js'
 import { PairingService } from '../src/pairing.js'
 import { PublicAccess } from '../src/public-access.js'
-import type { PublicNodeDiscovery } from '../src/public-node.js'
+import { identityOfPublicKey } from '../src/host-identity.js'
+import { PUBLIC_NODE_PROTOCOL_V1, PUBLIC_NODE_PROTOCOL_V2, type PublicNodeDiscovery, type PublicNodeIdentity } from '../src/public-node.js'
 
-const HOST_ID = '5QKQY_VIKcY52sBuej3ozcSh4gUAwAYe0YENr18qsfA'
-const OTHER_HOST_ID = 'A'.repeat(43)
-const FINGERPRINT = 'e5029063f54829c639dac06e7a3de8cd'
-const OTHER_FINGERPRINT = '0'.repeat(32)
-const node = (hostId: string, fingerprint: string): PublicNodeDiscovery => ({ protocol: 1, kind: 'gateway', name: 'DeepSeek Harness', version: '0.5.1', capabilities: ['pairing', 'official-ui'], hostId, fingerprint })
+const identity = (): PublicNodeIdentity => {
+  const der = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' })
+  const derived = identityOfPublicKey(der)
+  return { id: derived.hostId, fingerprint: derived.fingerprint, publicKey: der.toString('base64url') }
+}
+const SELF = identity()
+const OTHER = identity()
+const HOST = { hostId: SELF.id, fingerprint: SELF.fingerprint }
+const node = (value: PublicNodeIdentity): PublicNodeDiscovery => ({
+  protocol: PUBLIC_NODE_PROTOCOL_V2, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', capabilities: ['pairing', 'official-ui'],
+  node: value, hostId: value.id, fingerprint: value.fingerprint,
+})
+const legacyNode = (value: PublicNodeIdentity): PublicNodeDiscovery => ({
+  protocol: PUBLIC_NODE_PROTOCOL_V1, kind: 'gateway', name: 'DeepSeek Harness', version: '0.6.2', capabilities: ['pairing', 'official-ui'],
+  node: null, hostId: value.id, fingerprint: value.fingerprint,
+})
 
 const folders: string[] = []
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
@@ -63,36 +76,56 @@ const call = (port: number, path: string, options: { method?: string; headers?: 
   req.on('error', reject); req.end(options.data === undefined ? undefined : JSON.stringify(options.data))
 })
 const fallback = (port: number, credential: string) => call(port, '/rc/fallback', { method: 'POST', headers: { 'content-type': 'application/json', cookie: `dsh_rc=${credential}` }, data: {} })
+const sameHostAnswer = (url: string) => ({ sameHost: true, url, node: { id: SELF.id, fingerprint: SELF.fingerprint }, hostId: SELF.id, fingerprint: SELF.fingerprint })
 
 describe('same-host LAN fallback', () => {
-  it('answers for the same Host and hands back the LAN entry of this computer', async () => {
+  it('answers for the same protocol-2 node and hands back the LAN entry of this computer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-rc-fallback-')); folders.push(root)
-    const lan = await new Lan(node(HOST_ID, FINGERPRINT), root).start()
-    const value = await publicGateway(root, lan.url, node(HOST_ID, FINGERPRINT), { hostId: HOST_ID, fingerprint: FINGERPRINT })
+    const lan = await new Lan(node(SELF), root).start()
+    const value = await publicGateway(root, lan.url, node(SELF), HOST)
     try {
-      // The public entry exposes the same discovery document as the LAN entry.
-      expect(JSON.parse((await call(value.port, '/.well-known/dsh-remote')).body)).toEqual(node(HOST_ID, FINGERPRINT))
+      // The public entry exposes the same node identity as the LAN entry, aliases included for old clients.
+      expect(JSON.parse((await call(value.port, '/.well-known/dsh-remote')).body)).toEqual(node(SELF))
       const answer = await fallback(value.port, value.credential)
       expect(answer.status).toBe(200)
-      expect(JSON.parse(answer.body)).toEqual({ sameHost: true, url: lan.url, hostId: HOST_ID, fingerprint: FINGERPRINT })
+      expect(JSON.parse(answer.body)).toEqual(sameHostAnswer(lan.url))
+    } finally { await lan.gateway.close() }
+  })
+
+  it('still answers for a protocol-1 LAN entry that reports the same flat identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-rc-fallback-')); folders.push(root)
+    const lan = await new Lan(legacyNode(SELF), root).start()
+    const value = await publicGateway(root, lan.url, node(SELF), HOST)
+    try {
+      expect(JSON.parse((await fallback(value.port, value.credential)).body)).toEqual(sameHostAnswer(lan.url))
     } finally { await lan.gateway.close() }
   })
 
   it('refuses when the LAN entry belongs to another Host', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-rc-fallback-')); folders.push(root)
-    const lan = await new Lan(node(OTHER_HOST_ID, OTHER_FINGERPRINT), root).start()
-    const value = await publicGateway(root, lan.url, node(HOST_ID, FINGERPRINT), { hostId: HOST_ID, fingerprint: FINGERPRINT })
+    const lan = await new Lan(node(OTHER), root).start()
+    const value = await publicGateway(root, lan.url, node(SELF), HOST)
     try {
       const answer = await fallback(value.port, value.credential)
       expect(JSON.parse(answer.body)).toEqual({ sameHost: false, reason: 'identity' })
     } finally { await lan.gateway.close() }
   })
 
+  it('refuses a LAN entry that spoofed the flat alias but not the node identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-rc-fallback-')); folders.push(root)
+    // The flat fields claim this computer, but the protocol-2 node object proves another key.
+    const lan = await new Lan({ ...node(OTHER), hostId: SELF.id, fingerprint: SELF.fingerprint }, root).start()
+    const value = await publicGateway(root, lan.url, node(SELF), HOST)
+    try {
+      expect(JSON.parse((await fallback(value.port, value.credential)).body)).toEqual({ sameHost: false, reason: 'identity' })
+    } finally { await lan.gateway.close() }
+  })
+
   it('refuses when the browser has no LAN authorization, and when no LAN entry is configured', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-rc-fallback-')); folders.push(root)
-    const lan = await new Lan(node(HOST_ID, FINGERPRINT), root).start()
-    const value = await publicGateway(root, lan.url, node(HOST_ID, FINGERPRINT), { hostId: HOST_ID, fingerprint: FINGERPRINT })
-    const noLan = await publicGateway(root, undefined, node(HOST_ID, FINGERPRINT), { hostId: HOST_ID, fingerprint: FINGERPRINT })
+    const lan = await new Lan(node(SELF), root).start()
+    const value = await publicGateway(root, lan.url, node(SELF), HOST)
+    const noLan = await publicGateway(root, undefined, node(SELF), HOST)
     try {
       const anonymous = await call(value.port, '/rc/fallback', { method: 'POST', headers: { 'content-type': 'application/json' }, data: {} })
       expect(anonymous.status).toBe(403); expect(JSON.parse(anonymous.body)).toMatchObject({ code: 'unpaired' })

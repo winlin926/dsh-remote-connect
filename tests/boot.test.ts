@@ -314,7 +314,11 @@ it('shows a revoked device as a modal dialog that starts on its only action', as
 const HOST_ID = '5QKQY_VIKcY52sBuej3ozcSh4gUAwAYe0YENr18qsfA'
 const FINGERPRINT = 'e5029063f54829c639dac06e7a3de8cd'
 const LAN_URL = 'http://192.168.1.9:59395'
-const context = (): BootContext => ({ fallback: { hostId: HOST_ID, fingerprint: FINGERPRINT, url: LAN_URL } })
+const IDENTITY = { id: HOST_ID, fingerprint: FINGERPRINT }
+const context = (): BootContext => ({ fallback: { node: IDENTITY, hostId: HOST_ID, fingerprint: FINGERPRINT, url: LAN_URL } })
+const legacyContext = (): BootContext => ({ fallback: { node: null, hostId: HOST_ID, fingerprint: FINGERPRINT, url: LAN_URL } })
+const v2OnlyContext = (): BootContext => ({ fallback: { node: IDENTITY, hostId: null, fingerprint: null, url: LAN_URL } })
+const fallbackAnswer = () => ({ sameHost: true, node: IDENTITY, url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT })
 const settle = async () => { await new Promise(resolve => setTimeout(resolve, 0)); await new Promise(resolve => setImmediate(resolve)) }
 const dialog = (elements: StandInElement[]) => elements.find(node => node.id === 'dsh-rc-disconnected')
 const toast = (elements: StandInElement[]) => elements.find(node => node.id === 'dsh-rc-notice')
@@ -339,11 +343,29 @@ it('switches a paired browser to the same Host LAN entry when the public connect
   timer.run()
   const request = f.requests.at(-1)!
   expect(request).toMatchObject({ url: '/rc/fallback', method: 'POST' })
-  f.answerWith(200, JSON.stringify({ sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT }))
+  f.answerWith(200, JSON.stringify(fallbackAnswer()))
   await settle()
   expect(f.replacements).toEqual([`${LAN_URL}/?rc=lan`])
   expect(toast(f.elements)!.textContent).toBe('已切换到局域网')
   expect(dialog(f.elements)).toBeUndefined()
+})
+
+it('still follows a protocol-1 LAN gateway that only reports the flat host identity', async () => {
+  const f = bootPage(undefined, {}, { context: legacyContext() })
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  f.timers.at(-1)!.run()
+  f.answerWith(200, JSON.stringify({ sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT }))
+  await settle()
+  expect(f.replacements).toEqual([`${LAN_URL}/?rc=lan`])
+})
+
+it('trusts the node identity over the flat compatibility aliases', async () => {
+  const f = bootPage(undefined, {}, { context: v2OnlyContext() })
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  f.timers.at(-1)!.run()
+  f.answerWith(200, JSON.stringify({ ...fallbackAnswer(), hostId: 'A'.repeat(43), fingerprint: '0'.repeat(32) }))
+  await settle()
+  expect(f.replacements).toEqual([`${LAN_URL}/?rc=lan`])
 })
 
 it('cancels the fallback when the connection comes back first', async () => {
@@ -363,6 +385,8 @@ it('never follows a LAN entry that reports another Host, another fingerprint or 
     for (const answer of [
       { sameHost: true, url: LAN_URL, hostId: 'A'.repeat(43), fingerprint: FINGERPRINT },
       { sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: '0'.repeat(32) },
+      { sameHost: true, url: LAN_URL, node: { id: 'A'.repeat(43), fingerprint: FINGERPRINT }, hostId: HOST_ID, fingerprint: FINGERPRINT },
+      { sameHost: true, url: LAN_URL, node: { id: HOST_ID, fingerprint: '0'.repeat(32) }, hostId: HOST_ID, fingerprint: FINGERPRINT },
       { sameHost: true, url: 'http://10.0.0.7:59395', hostId: HOST_ID, fingerprint: FINGERPRINT },
       { sameHost: false, reason: 'identity', url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT },
     ]) {
