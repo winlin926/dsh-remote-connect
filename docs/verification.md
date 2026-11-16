@@ -39,7 +39,7 @@
 - 日常 profile 已装 0.6.1（`file:` 固定 tgz）并重启宿主：重启后 `/.well-known/dsh-remote` 返回 `version: "0.6.1"`，`hostId` `g7iflg32huZJkCXpOeWlLfYIOgAkPLcCyVIU-e2Un_Q` 与指纹 `83b89f960df686e6499025e939e5a52d` 与重启前一致，5 台设备授权保留，未配对访问仍 403。
 - 日常 54 插件三段缓存（桌面 Chromium，真实磁盘缓存）：冷启动 7373 ms / 90 请求 / 14,656,593 字节；同页重访 4236 ms / 47 请求 / 699,746 字节（4.8%，插件捆包全部命中、0 字节）；关页重开 4797 ms / 86 请求 / 3,243,349 字节（22.1%，7.8 MB 与 1.4 MB 捆包仍从磁盘缓存复用）；三次 `boot-reports` 均 `phase=ready result=ready errors=0 completed=3`。残余为 `dsh-genui` 两个 vendor 资源无缓存头（909,910 + 177,738 字节/次）与宿主动态接口 JSON；完整报告见 `F:\AIData\dsh-releases\dsh-remote-connect\0.6.1\lan-cache-report.md`。
 - `package-manifest.json` 式的旧包清单未再生成；`scripts/check-package.mjs` 直接校验 `.tgz`，确认入口文件与本次构建逐字节相同、包内无 `.qa`、测试与开发文件。
-- 边界：自托管节点的端到端链路只在本机进程内假节点、`scripts/verify-node-v2.mjs` 起的真实进程与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；本机没有 Docker，`docker compose config`、镜像构建与 `up` 未执行，Compose/Dockerfile/Caddyfile 只做静态核对；Coturn 临时凭据与真实 TLS 未实测；日常 profile 仍装 0.6.1，本轮只生成 0.6.2 候选包，未替换、未重启。
+- 边界：自托管节点的端到端链路只在本机进程内假节点、`scripts/verify-node-v2.mjs` 起的真实进程与自签 HTTPS 上验证，未在真实域名、真实服务器、真实手机与真实隧道上跑通；本机没有 Docker，`docker compose config`、镜像构建与 `up` 未执行，Compose/Dockerfile/Caddyfile 只做静态核对；Coturn 临时凭据与真实 TLS 未实测；日常 profile 已切到 0.6.2 固定 tgz 并安装完成，重启宿主前仍在运行 0.6.1。
 - 手机与真实节点结论保持「桌面已验证，手机与真实节点待验证」：v2 手机配对页只在源码断言与浏览器 DOM 断言层面验证，没有真机扫码；没有真实 v2 服务节点，节点身份变化阻断只由单元测试与合成状态覆盖。
 
 - `pnpm test`：10 个文件、129 个测试通过；`pnpm typecheck`、`pnpm build` 通过。
