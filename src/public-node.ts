@@ -3,12 +3,24 @@
  * address is a DSH gateway (a domain tunnelled to this computer's gateway) or a self-hosted
  * service (a remote-server). Gateway and service share the same document shape, so the rest of
  * the plugin never has to know which one it is talking to.
+ *
+ * Two protocol versions are accepted. Protocol 1 names one Host identity with flat `hostId` and
+ * `fingerprint` fields. Protocol 2 names the node with a self-certifying `node` object
+ * (`id`/`fingerprint`/`publicKey`); a gateway also repeats the flat fields as a compatibility
+ * alias for clients up to 0.6.1, while a protocol-2 service node must not send them.
  */
+import { createHash, createPublicKey } from 'node:crypto'
+import { identityOfPublicKey } from './host-identity.js'
 
 /** The only discovery path; the exact path is also the gateway's only unpaired route. */
 export const PUBLIC_NODE_PATH = '/.well-known/dsh-remote'
-/** Changing this number is a breaking change: clients refuse any other value instead of guessing. */
-export const PUBLIC_NODE_PROTOCOL = 1
+/** Protocol 1: one flat Host identity; the original document shape. */
+export const PUBLIC_NODE_PROTOCOL_V1 = 1
+/** Protocol 2: a self-certifying node identity. Clients that do not know it refuse the node. */
+export const PUBLIC_NODE_PROTOCOL_V2 = 2
+/** Both versions this plugin can read. */
+export const PUBLIC_NODE_PROTOCOLS: readonly PublicNodeProtocol[] = [PUBLIC_NODE_PROTOCOL_V1, PUBLIC_NODE_PROTOCOL_V2]
+export type PublicNodeProtocol = 1 | 2
 /** Discovery doubles as a reachability check; a node slower than this is unusable for the check. */
 export const PUBLIC_NODE_TIMEOUT = 5000
 /** `name` as a person reads it, counted in Unicode code points. */
@@ -23,6 +35,8 @@ export const PUBLIC_NODE_CAPABILITIES: readonly PublicNodeCapability[] = ['pairi
 /** Host identity encodings; see `host-identity.ts` for how a node derives them. */
 export const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/
 export const FINGERPRINT_PATTERN = /^[a-f0-9]{32}$/
+/** An Ed25519 SPKI DER in base64url: 40–120 URL-safe characters before the self-check. */
+export const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{40,120}$/
 /** 1–32 ASCII characters, starting with a letter or digit: a semver fits, prose and spaces do not. */
 export const NODE_VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
 /** A content revision: the same alphabet the Host's own asset URLs use. */
@@ -37,6 +51,10 @@ export function isPublicNodeCapability(value: unknown): value is PublicNodeCapab
   return typeof value === 'string' && (PUBLIC_NODE_CAPABILITIES as readonly string[]).includes(value)
 }
 
+export function isPublicNodeProtocol(value: unknown): value is PublicNodeProtocol {
+  return value === PUBLIC_NODE_PROTOCOL_V1 || value === PUBLIC_NODE_PROTOCOL_V2
+}
+
 /** 1–64 Unicode code points, no C0/C1 control characters. */
 export function isPublicNodeName(value: unknown): value is string {
   if (typeof value !== 'string' || CONTROL_CHARACTERS.test(value)) return false
@@ -44,15 +62,35 @@ export function isPublicNodeName(value: unknown): value is string {
   return length >= 1 && length <= NODE_NAME_MAX
 }
 
+/** The public half of one node: two encodings of sha256(SPKI DER) plus the key itself. */
+export interface PublicNodeIdentity {
+  /** base64url(sha256(SPKI DER)), exactly 43 characters. */
+  id: string
+  /** The first 16 digest bytes as lowercase hex, exactly 32 characters. */
+  fingerprint: string
+  /** SPKI DER, base64url; public and safe to publish. */
+  publicKey: string
+}
+
+/** What two discovery documents can be compared by: a protocol-2 node or protocol-1 flat fields. */
+export interface PublicNodeIdentityFields {
+  id: string
+  fingerprint: string
+}
+
 /** The document at {@link PUBLIC_NODE_PATH}. Field order is not significant to clients. */
 export interface PublicNodeDiscovery {
-  protocol: 1
+  protocol: PublicNodeProtocol
   kind: PublicNodeKind
   name: string
   version: string
   capabilities: PublicNodeCapability[]
-  hostId: string
-  fingerprint: string
+  /** Protocol 2 only; null on a protocol-1 document. */
+  node: PublicNodeIdentity | null
+  /** Protocol 1 only; null on a protocol-2 document (a gateway also sends aliases, which are dropped). */
+  hostId: string | null
+  /** Protocol 1 only; see `hostId`. */
+  fingerprint: string | null
 }
 
 /** A discovery document whose address was validated; `url` is the normalized origin. */
@@ -79,6 +117,51 @@ export type PublicNodeFetch = (url: string, init: RequestInit) => Promise<Respon
 export interface DetectPublicNodeOptions { fetch?: PublicNodeFetch; timeoutMs?: number }
 
 function failure(code: PublicNodeErrorCode, message: string): PublicNodeFailure { return { ok: false, code, message } }
+
+/** Structural pattern check only: it says the fields look like one identity, not that the key derives them. */
+export function isPublicNodeIdentity(value: unknown): value is PublicNodeIdentity {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return typeof row.id === 'string' && HOST_ID_PATTERN.test(row.id)
+    && typeof row.fingerprint === 'string' && FINGERPRINT_PATTERN.test(row.fingerprint)
+    && typeof row.publicKey === 'string' && PUBLIC_KEY_PATTERN.test(row.publicKey)
+}
+
+/**
+ * Decode a node identity and prove it: the Ed25519 SPKI DER must parse, and sha256 over that DER
+ * must reproduce both `id` and `fingerprint`. A document that merely copies plausible strings is
+ * not a node identity. Returns null on any mismatch.
+ */
+export function parsePublicNodeIdentity(value: unknown): PublicNodeIdentity | null {
+  if (!isPublicNodeIdentity(value)) return null
+  let der: Buffer
+  try {
+    der = Buffer.from(value.publicKey, 'base64url')
+    // Only the canonical base64url spelling of these bytes is accepted, so one key has one encoding.
+    if (der.toString('base64url') !== value.publicKey) return null
+    if (createPublicKey({ key: der, format: 'der', type: 'spki' }).asymmetricKeyType !== 'ed25519') return null
+  } catch { return null }
+  const derived = identityOfPublicKey(der)
+  if (derived.hostId !== value.id || derived.fingerprint !== value.fingerprint) return null
+  return { id: derived.hostId, fingerprint: derived.fingerprint, publicKey: value.publicKey }
+}
+
+/**
+ * The identity a discovery document names: a protocol-2 `node` first, protocol-1 flat fields as
+ * the fallback. Works on raw JSON as well as a parsed document, so callers comparing a live node
+ * against an expected identity do not have to trust either shape.
+ */
+export function nodeIdentityOf(document: unknown): PublicNodeIdentityFields | null {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return null
+  const row = document as Record<string, unknown>
+  const node = row.node
+  if (node && typeof node === 'object' && !Array.isArray(node)) {
+    const fields = node as Record<string, unknown>
+    if (typeof fields.id === 'string' && HOST_ID_PATTERN.test(fields.id) && typeof fields.fingerprint === 'string' && FINGERPRINT_PATTERN.test(fields.fingerprint)) return { id: fields.id, fingerprint: fields.fingerprint }
+  }
+  if (typeof row.hostId === 'string' && HOST_ID_PATTERN.test(row.hostId) && typeof row.fingerprint === 'string' && FINGERPRINT_PATTERN.test(row.fingerprint)) return { id: row.hostId, fingerprint: row.fingerprint }
+  return null
+}
 
 type AddressResult = { ok: true; origin: string } | PublicNodeFailure
 /** The address is an origin and nothing else: a path, query, fragment or userinfo would name a different resource. */
@@ -118,7 +201,7 @@ function transportFailure(error: unknown): PublicNodeFailure {
 function validateDiscovery(origin: string, input: unknown): PublicNodeDetection {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return failure('bad-response', '节点发现接口的响应不是 JSON 对象。')
   const body = input as Record<string, unknown>
-  if (body.protocol !== PUBLIC_NODE_PROTOCOL) return failure('bad-protocol', `节点协议版本不是 ${PUBLIC_NODE_PROTOCOL}。`)
+  if (!isPublicNodeProtocol(body.protocol)) return failure('bad-protocol', '节点协议版本无效：只支持 1 和 2。')
   if (!isPublicNodeKind(body.kind)) return failure('bad-kind', '节点类型无效：只能是 gateway 或 service。')
   if (!isPublicNodeName(body.name)) return failure('bad-response', '节点名称无效：需要 1–64 个字符。')
   if (typeof body.version !== 'string' || !NODE_VERSION_PATTERN.test(body.version)) return failure('bad-response', '节点版本号无效：需要 1–32 位字母、数字或 . + _ - 组成的字符串。')
@@ -126,9 +209,18 @@ function validateDiscovery(origin: string, input: unknown): PublicNodeDetection 
   const capabilities: PublicNodeCapability[] = []
   for (const item of body.capabilities) { if (!isPublicNodeCapability(item)) return failure('bad-capability', `节点能力列表包含未知能力：${String(item)}。`); capabilities.push(item) }
   if (!capabilities.includes('pairing')) return failure('bad-capability', '节点能力列表缺少必需的 pairing。')
-  if (typeof body.hostId !== 'string' || !HOST_ID_PATTERN.test(body.hostId)) return failure('bad-identity', '节点身份无效：hostId 必须是 43 位 base64url。')
-  if (typeof body.fingerprint !== 'string' || !FINGERPRINT_PATTERN.test(body.fingerprint)) return failure('bad-identity', '节点身份无效：fingerprint 必须是 32 位小写十六进制。')
-  return { ok: true, node: { protocol: PUBLIC_NODE_PROTOCOL, kind: body.kind, name: body.name, version: body.version, capabilities: [...new Set(capabilities)], hostId: body.hostId, fingerprint: body.fingerprint, url: origin } }
+  const shared = { protocol: body.protocol, kind: body.kind, name: body.name, version: body.version, capabilities: [...new Set(capabilities)] }
+  if (body.protocol === PUBLIC_NODE_PROTOCOL_V1) {
+    if (typeof body.hostId !== 'string' || !HOST_ID_PATTERN.test(body.hostId)) return failure('bad-identity', '节点身份无效：hostId 必须是 43 位 base64url。')
+    if (typeof body.fingerprint !== 'string' || !FINGERPRINT_PATTERN.test(body.fingerprint)) return failure('bad-identity', '节点身份无效：fingerprint 必须是 32 位小写十六进制。')
+    return { ok: true, node: { ...shared, node: null, hostId: body.hostId, fingerprint: body.fingerprint, url: origin } }
+  }
+  // Protocol 2: the flat fields are compatibility aliases for old clients and are deliberately
+  // neither validated nor returned here; `node` is the one identity this plugin records.
+  if (!body.node || typeof body.node !== 'object' || Array.isArray(body.node)) return failure('bad-identity', '节点身份无效：协议 2 的发现文档缺少 node 身份对象。')
+  const node = parsePublicNodeIdentity(body.node)
+  if (!node) return failure('bad-identity', '节点身份无效：publicKey 必须是有效的 Ed25519 公钥，且其 sha256 必须同时等于 id 与 fingerprint。')
+  return { ok: true, node: { ...shared, node, hostId: null, fingerprint: null, url: origin } }
 }
 
 /**
