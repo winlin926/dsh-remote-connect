@@ -372,7 +372,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       if (busy) throw new Error('连接操作正在进行，请稍后再试。')
       // A service node is reached through its own tunnel origin, so it needs no stored public domain.
       const serviceNodeMode = currentNode()?.kind === 'service'
-      if (preferences.mode === 'public' && !serviceNodeMode && !access?.domain) throw new Error('请先填写固定公网域名，再开启“任意网络”。')
+      if (preferences.mode === 'public' && !serviceNodeMode && !access?.domain) throw new Error('请先添加公网节点并设为当前，再开启“公网连接”。')
       busy = true; error = undefined
       let ticket = generation
       let next: Gateway | undefined
@@ -547,7 +547,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         case 'certificate': {
           if (!local) throw new Error('证书只能在本机面板管理。')
           if (!access?.domain) throw new Error('请先保存固定公网域名。')
-          if (!enabled || activeMode !== 'public') throw new Error('请先开启“任意网络”，再申请证书。')
+          if (!enabled || activeMode !== 'public') throw new Error('请先开启“公网连接”，再申请证书。')
           if (gateway?.port !== PUBLIC_PORT) throw new Error('公网监听端口与固定域名转发目标不一致，请先修复端口配置。')
           void access.certificates.ensure(true).catch(() => undefined)
           return status(local)
