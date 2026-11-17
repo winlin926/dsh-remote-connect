@@ -54,15 +54,10 @@ Do not install both packages in the same profile. The new package continues to u
 <p align="center"><strong>Host computer: enable access, pair devices, and manage authorizations</strong></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="New DSH session in a phone browser" width="300" />
-  &nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="DSH conversation and message input on a phone" width="300" />
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="Workspace tools in a phone browser" width="300" />
-  &nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="DSH general settings in a phone browser" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="New DSH session in a phone browser" width="23%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="DSH conversation and message input on a phone" width="23%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="Workspace tools in a phone browser" width="23%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="DSH general settings in a phone browser" width="23%" />
 </p>
 
 <p align="center"><strong>Phone: new session · conversation · workspace tools · general settings</strong></p>
