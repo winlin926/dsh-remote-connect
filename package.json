@@ -1,6 +1,7 @@
 {
   "name": "@winlin926/dsh-carry",
-  "version": "0.6.1",
+  "version": "0.6.2",
+  "icon": "assets/logo.png",
   "description": "DeepSeek Harness 远程控制：手机浏览器扫码接入电脑上的 DSH 会话，继续对话、审批工具、预览文件，局域网直连或自托管公网节点。",
   "type": "module",
   "license": "MIT",
@@ -21,12 +22,16 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
+    "./icon": "./assets/logo.png",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/*.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
+    "assets/logo.png",
+    "locale/*.json",
     "README.md",
     "LICENSE"
   ],

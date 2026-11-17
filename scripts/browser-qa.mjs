@@ -419,9 +419,9 @@ if (typeof taskSpace !== 'function') {
     await desktop.evaluate(() => {
       window.__qaUpdateCalls = []
       window.__DSH_RC_UPDATE_FIXTURE__ = {
-        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-carry', installed: true, version: '0.6.1', update: 'registry' }] } },
-        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.1', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
-        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.1', to: version, result: { changed: true, application: 'restart-required' } } } },
+        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-carry', installed: true, version: '0.6.2', update: 'registry' }] } },
+        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.2', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
+        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.2', to: version, result: { changed: true, application: 'restart-required' } } } },
       }
     })
     await clickButton(desktop, '检查更新')

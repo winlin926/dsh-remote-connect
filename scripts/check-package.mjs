@@ -13,12 +13,12 @@ const entries = ['lib/index.js', 'lib/client.js']
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
 function checkFiles(paths) {
-  for (const path of [...entries, 'lib/types/index.d.ts', 'cordis.patch.yml', 'README.md', 'LICENSE', 'package.json']) {
+  for (const path of [...entries, 'lib/types/index.d.ts', 'cordis.patch.yml', 'assets/logo.png', 'locale/en.json', 'locale/zh.json', 'README.md', 'LICENSE', 'package.json']) {
     if (!paths.has(path)) throw new Error(`Missing package file: ${path}`)
   }
   for (const path of paths) {
     if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part => part === '..' || part === '.')) throw new Error(`Invalid package path: ${path}`)
-    if (!['package.json', 'README.md', 'LICENSE', 'cordis.patch.yml'].includes(path) && !/^lib\/[^/]+\.js$/.test(path) && !/^lib\/types\/.+\.d\.ts$/.test(path)) throw new Error(`Unexpected package file: ${path}`)
+    if (!/^(package\.json|LICENSE|README(\.[a-z-]+)?\.md|cordis\.patch\.yml|assets\/logo\.png)$/.test(path) && !/^locale\/[a-z]{2}(-[A-Z]{2})?\.json$/.test(path) && !/^lib\/[^/]+\.js$/.test(path) && !/^lib\/types\/.+\.d\.ts$/.test(path)) throw new Error(`Unexpected package file: ${path}`)
     if (path.startsWith('lib/types/') && path.endsWith('.d.ts') && !existsSync(join(root, path.replace('lib/types/', 'src/').replace(/\.d\.ts$/, '.ts')))) throw new Error(`Declaration without source: ${path}`)
   }
   if (Object.keys(expected.dependencies).includes('dsh-web-frontend')) throw new Error('The package must not ship its own copy of the DSH frontend')
