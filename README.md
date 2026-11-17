@@ -1,4 +1,4 @@
-# DSH Remote Connect
+# dsh-carry
 
 **DeepSeek Harness（DSH）的远程控制端：在手机浏览器上继续使用电脑里正在运行的会话。** 查看会话、发送消息、处理工具审批，或预览电脑上的文件；无需安装手机 App，也无需另起一个 DSH 实例。
 
@@ -11,13 +11,13 @@
 在 DSH 的「插件 → 添加插件」中搜索并安装：
 
 ```text
-@winlin926/dsh-remote-connect
+@winlin926/dsh-carry
 ```
 
 也可以将插件安装到 `dsh web` 使用的 `web` profile：
 
 ```bash
-dsh plugin --profile web add @winlin926/dsh-remote-connect@latest
+dsh plugin --profile web add @winlin926/dsh-carry@latest
 ```
 
 请安装到你准备连接的 DSH 宿主所在 profile。桌面版和 `dsh web` 使用各自独立的 profile。
@@ -29,24 +29,34 @@ dsh plugin --profile web add @winlin926/dsh-remote-connect@latest
 3. 用手机扫描二维码，然后在电脑上确认配对请求。
 4. 在手机浏览器中继续会话。
 
+## 升级与迁移
+
+旧包已停止更新，从 `@winlin926/dsh-remote-connect` 迁移到 `@winlin926/dsh-carry`：
+
+1. 在 DSH 的「插件」里移除 `@winlin926/dsh-remote-connect`。
+2. 安装 `@winlin926/dsh-carry`。
+3. 重启宿主。
+
+新旧包不能同时装到同一个 profile。新包继续读取旧存储目录 `~/.dsh/dsh-remote-connect/<profile>` 和旧管理接口，所以设备授权、公网节点和偏好文件迁移后照常可用，不需要重新扫码配对。
+
 ## 界面预览
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/desktop-connect.png" alt="电脑上的远程连接面板：开启连接、扫码配对与管理已授权设备" width="760" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" alt="电脑上的远程连接面板：开启连接、扫码配对与管理已授权设备" width="760" />
 </p>
 
 <p align="center"><strong>电脑上：开启连接、扫码配对、管理已授权设备</strong></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-session.png" alt="手机上的 DSH 新会话界面" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="手机上的 DSH 新会话界面" width="300" />
   &nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-chat.jpg" alt="手机上的 DSH 对话与输入框" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="手机上的 DSH 对话与输入框" width="300" />
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-tools.jpg" alt="手机上的工作区工具入口" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="手机上的工作区工具入口" width="300" />
   &nbsp;&nbsp;
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-remote-connect/main/assets/mobile-settings.png" alt="手机上的 DSH 通用设置界面" width="300" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="手机上的 DSH 通用设置界面" width="300" />
 </p>
 
 <p align="center"><strong>手机上：新会话 · 对话 · 工作区工具 · 通用设置</strong></p>

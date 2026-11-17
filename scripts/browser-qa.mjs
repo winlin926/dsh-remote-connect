@@ -419,9 +419,9 @@ if (typeof taskSpace !== 'function') {
     await desktop.evaluate(() => {
       window.__qaUpdateCalls = []
       window.__DSH_RC_UPDATE_FIXTURE__ = {
-        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-remote-connect', installed: true, version: '0.6.0', update: 'registry' }] } },
-        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.0', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
-        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.0', to: version, result: { changed: true, application: 'restart-required' } } } },
+        async listBundles() { return { ok: true, value: [{ name: '@winlin926/dsh-carry', installed: true, version: '0.6.1', update: 'registry' }] } },
+        async listVersions() { return { ok: true, value: { status: 'listed', installed: '0.6.1', registry: 'https://registry.npmjs.org', versions: [{ version: '0.9.9', prerelease: false, bundle: true }] } } },
+        async updateBundle(name, version) { window.__qaUpdateCalls.push({ name, version }); return { ok: true, value: { from: '0.6.1', to: version, result: { changed: true, application: 'restart-required' } } } },
       }
     })
     await clickButton(desktop, '检查更新')
@@ -439,7 +439,7 @@ if (typeof taskSpace !== 'function') {
     await clickButton(desktop, '确认更新')
     await desktop.waitForFunction(() => /已更新到 0\.9\.9，重启 DSH 后生效/.test(document.querySelector('.dsrc-update-status')?.textContent ?? ''), undefined, { timeout: 10000 })
     const updateCalls = await desktop.evaluate(() => window.__qaUpdateCalls)
-    assert.deepEqual(updateCalls, [{ name: '@winlin926/dsh-remote-connect', version: '0.9.9' }], 'confirm installs exactly once through the manager: ' + JSON.stringify(updateCalls))
+    assert.deepEqual(updateCalls, [{ name: '@winlin926/dsh-carry', version: '0.9.9' }], 'confirm installs exactly once through the manager: ' + JSON.stringify(updateCalls))
     assert.equal(await desktop.evaluate(() => document.querySelector('.dsrc-update .dsrc-tag')?.textContent), 'v0.9.9', 'update card must show the installed version after a successful update')
     await desktop.evaluate(() => { delete window.__DSH_RC_UPDATE_FIXTURE__ })
     await reveal(desktop, '.dsrc-update')

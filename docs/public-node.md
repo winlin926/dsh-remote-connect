@@ -1,6 +1,6 @@
 # 公网节点发现协议（public-node v2）
 
-本文是 `@winlin926/dsh-remote-connect` 的**协议规范**：用户只填一个 HTTPS 地址，插件探测它背后是哪一种节点、身份是谁。实现必须与此文档逐字段一致；服务端（`remote-server` 与隧道网关）照本文第 2、10 节实现即可与插件互通。
+本文是 `@winlin926/dsh-carry` 的**协议规范**：用户只填一个 HTTPS 地址，插件探测它背后是哪一种节点、身份是谁。实现必须与此文档逐字段一致；服务端（`remote-server` 与隧道网关）照本文第 2、10 节实现即可与插件互通。
 
 自 0.6.0 起定义 v2 契约（`protocol: 2`），并保留 v1（`protocol: 1`）兼容规则。新插件同时接受 v1/v2 节点；v1 节点按旧规则处理。
 
@@ -57,7 +57,7 @@
   "protocol": 2,
   "kind": "gateway",
   "name": "DeepSeek Harness",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "BuP9j9opu2CrWVV95h7bCuzbIxE0vjDnW0Vfjht5L6k",
@@ -76,7 +76,7 @@
   "protocol": 2,
   "kind": "service",
   "name": "我的节点",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "Di6lw5vsvhdLKYAG4LFOoPgX6mIfMoYOQ2Tz3oECWs0",
@@ -101,7 +101,7 @@
 | `protocol` | number | 必须**等于数字 2**（不是 `"2"`） | 协议版本。客户端拒绝其它值，不做兼容猜测；升版即破坏性变更。 |
 | `kind` | string | 精确小写 `"gateway"` 或 `"service"` | 节点类型。大小写敏感，不接受其他拼写。 |
 | `name` | string | 1–64 个 **Unicode 码点**；不得含 C0 控制符（U+0000–U+001F）或 DEL（U+007F） | 人类可读名称，仅用于展示，**不参与身份判断**。gateway 固定用 `DeepSeek Harness`（不暴露计算机名）。 |
-| `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.6.0`、`1.2.0-rc.3`。 |
+| `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.6.1`、`1.2.0-rc.3`。 |
 | `capabilities` | string[] | 非空数组；每项精确小写、取值必须属于 `pairing` `cache` `official-ui`；元素唯一；**必须包含 `"pairing"`** | 节点能力广告；未知能力即失败（新增能力必须升 protocol）。见 2.3。 |
 | `node` | object | v2 必填；`node` 缺失或任一子字段非法即 `bad-identity` | 节点身份，见 2.4。 |
 | `node.id` | string | 正则 `^[A-Za-z0-9_-]{43}$`，**恰好 43 个字符** | `base64url(sha256(SPKI DER))`，无 `=` 填充。 |
@@ -118,7 +118,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 | `cache` | 否 | 节点提供带 `rev` 的可缓存静态资源，并按 `hid`/`rev` 正确分区。 |
 | `official-ui` | 否 | 节点提供官方 DSH 界面外壳（gateway 通常有）。 |
 
-节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.0 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
+节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.1 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
 
 ### 2.4 身份来源
 
@@ -144,7 +144,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 
 ## 3. v1 兼容规则
 
-新插件（0.6.0）的检测结果分三种：
+新插件（0.6.1）的检测结果分三种：
 
 | 文档 | 处理 |
 | --- | --- |
@@ -231,7 +231,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
       "url": "https://node.example.com",
       "kind": "service",
       "name": "我的节点",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "protocol": 2,
       "capabilities": ["pairing", "cache", "official-ui"],
       "node": { "id": "…", "fingerprint": "…", "publicKey": "…" },
@@ -375,4 +375,4 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 - `protocol` 升级 = 破坏性变更；客户端遇到非 `1`/`2` 直接失败，不做降级猜测。仅支持 v1 的客户端无法添加 v2 服务节点；v2 网关保留扁平字段，旧客户端仍可添加网关节点。
 - 响应中**多出的字段被忽略**，服务端可先行添加新字段（但新能力必须等待 protocol 升级）。
 - 未知 `capabilities` 项导致客户端拒绝，因此能力白名单只能随 protocol 升版扩展。
-- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.0 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.0`。
+- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.1 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.1`。

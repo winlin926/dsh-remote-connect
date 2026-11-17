@@ -187,7 +187,7 @@ async function verifyDiscovery(baseUrl, dataDir) {
     const advertised = new Set(['pairing', 'cache', 'official-ui'])
     for (const item of body.capabilities) {
       assert(typeof item === 'string' && allowed.has(item), `capabilities 含未知能力 ${JSON.stringify(item)}。`)
-      assert(advertised.has(item), `0.6.0 节点不得宣告 ${JSON.stringify(item)}（仅为将来版本保留）。`)
+      assert(advertised.has(item), `0.6.1 节点不得宣告 ${JSON.stringify(item)}（仅为将来版本保留）。`)
     }
     assert(body.capabilities.includes('pairing'), 'capabilities 缺少必需的 pairing。')
     return body.capabilities
@@ -280,7 +280,7 @@ async function verifyHttp(baseUrl) {
         deviceId: randomUUID(),
         name: 'verify-node-v2',
         identityKey,
-        clientVersion: '0.6.0',
+        clientVersion: '0.6.1',
       }),
     })
     const text = await response.text()

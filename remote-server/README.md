@@ -14,7 +14,7 @@
 `GET /.well-known/dsh-remote`（`application/json; charset=utf-8`、`cache-control: no-store`、不返回 3xx）：
 
 ```json
-{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.0","capabilities":["pairing","cache","official-ui"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
+{"protocol":2,"kind":"service","name":"我的公网节点","version":"0.6.1","capabilities":["pairing","cache","official-ui"],"node":{"id":"<base64url 43 字符>","fingerprint":"<32 位小写 hex>","publicKey":"<base64url SPKI DER，Ed25519 44 字节 → 59 字符>"}}
 ```
 
 - `kind` 固定 `"service"`；`protocol` 为数字 `2`，客户端必须拒绝其他值。

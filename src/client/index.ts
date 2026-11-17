@@ -4,7 +4,7 @@ import { PhoneIcon } from './nav-icon.js'
 import { PluginUpdate, resolvePluginManager, updateCard, type PluginManagerFace } from './plugin-update.js'
 const h = React.createElement
 const ROUTE = '/api/dsh-remote-connect/manage'
-const PACKAGE_NAME = '@winlin926/dsh-remote-connect'
+const PACKAGE_NAME = '@winlin926/dsh-carry'
 /**
  * One update card per page: the check cache has to survive closing and reopening the panel, which
  * unmounts the component but keeps the module alive.

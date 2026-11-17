@@ -27,7 +27,7 @@ const NODE_VERSION = (() => {
   try { const value: unknown = createRequire(import.meta.url)('../package.json').version; return typeof value === 'string' && value ? value : '0.0.0' } catch { return '0.0.0' }
 })()
 
-export const name = '@winlin926/dsh-remote-connect'
+export const name = '@winlin926/dsh-carry'
 export const inject = ['connection']
 export const Config = z.object({
   gatewayPort: z.natural().max(65535).default(0).i18n({ 'zh-CN': { $description: '局域网网关端口；0 表示自动选择空闲端口。' } }),

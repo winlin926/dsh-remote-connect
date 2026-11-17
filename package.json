@@ -1,17 +1,17 @@
 {
-  "name": "@winlin926/dsh-remote-connect",
-  "version": "0.6.0",
+  "name": "@winlin926/dsh-carry",
+  "version": "0.6.1",
   "description": "DeepSeek Harness 远程控制：手机浏览器扫码接入电脑上的 DSH 会话，继续对话、审批工具、预览文件，局域网直连或自托管公网节点。",
   "type": "module",
   "license": "MIT",
   "author": "winlin926",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/winlin926/dsh-remote-connect.git"
+    "url": "git+https://github.com/winlin926/dsh-carry.git"
   },
-  "homepage": "https://github.com/winlin926/dsh-remote-connect#readme",
+  "homepage": "https://github.com/winlin926/dsh-carry#readme",
   "bugs": {
-    "url": "https://github.com/winlin926/dsh-remote-connect/issues"
+    "url": "https://github.com/winlin926/dsh-carry/issues"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

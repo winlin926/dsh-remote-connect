@@ -26,6 +26,15 @@ node scripts/verify-node-v2.mjs
 docker build -f remote-server/Dockerfile -t dsh-remote-server .
 ```
 
+## 改名兼容性
+
+更名后的包仍必须使用旧的运行时标识。在隔离的 `.qa/` profile 里验证：先装入本次构建的包，并把一份由 0.6.0 写出的 `dsh-remote-connect/<profile>` 存储目录放在 `DSH_HOME` 下。
+
+- 新包能启动，面板、二维码与配对页正常渲染。
+- 旧存储目录被继续读取：设备授权、公网节点和偏好文件在升级后照常可用，不重新生成。
+- 客户端仍能访问 `/api/dsh-remote-connect/manage`，服务标识仍为 `dsh-remote-connect`。
+- 新旧包不能同时装入同一个 profile；迁移顺序是先移除旧包再安装新包。
+
 ## 浏览器验收
 
 先安装 ego-browser，并确保 `ego-browser.exe` 位于 PATH。在两个终端分别执行：

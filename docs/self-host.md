@@ -64,7 +64,7 @@ curl.exe -sS https://relay.example.com/v1/config
 curl.exe -sS https://relay.example.com/.well-known/dsh-remote
 ```
 
-`/healthz` 返回 `{"ok":true,"version":"0.6.0"}`。
+`/healthz` 返回 `{"ok":true,"version":"0.6.1"}`。
 
 `/.well-known/dsh-remote` 是 v2 统一节点契约，返回形如：
 
@@ -73,7 +73,7 @@ curl.exe -sS https://relay.example.com/.well-known/dsh-remote
   "protocol": 2,
   "kind": "service",
   "name": "My Public Node",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "<43 字符 base64url>",

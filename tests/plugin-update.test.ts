@@ -11,7 +11,7 @@ import {
   type UpdateVersionList,
 } from '../src/client/plugin-update.js'
 
-const NAME = '@winlin926/dsh-remote-connect'
+const NAME = '@winlin926/dsh-carry'
 const SOURCE = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
 const bundle = (overrides: Partial<UpdateBundle> = {}): UpdateBundle => ({ name: NAME, installed: true, enabled: true, version: '0.6.0', update: 'registry', ...overrides })
 const listed = (versions: Array<Record<string, unknown>>, installed = '0.6.0'): UpdateVersionList => ({
