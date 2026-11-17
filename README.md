@@ -1,5 +1,9 @@
 # dsh-carry
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" alt="dsh-carry 标志：电脑与手机通过无限符号连接" width="160" height="160" />
+</p>
+
 简体中文 | [English](https://github.com/winlin926/dsh-carry/blob/main/README.en.md)
 
 **DSH 远程控制插件：用手机或另一台电脑的浏览器，远程操作正在运行的 DeepSeek Harness（DSH）。** 查看会话、发送消息、处理工具审批，或预览电脑上的文件；手机无需安装 App，也无需另起一个 DSH 实例。

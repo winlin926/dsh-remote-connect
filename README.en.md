@@ -1,5 +1,9 @@
 # dsh-carry
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" alt="dsh-carry logo: a computer and phone linked by an infinity symbol" width="160" height="160" />
+</p>
+
 [简体中文](https://github.com/winlin926/dsh-carry/blob/main/README.md) | English
 
 **A remote control plugin for DeepSeek Harness (DSH): operate your running DSH instance from a phone or another computer's browser.** View sessions, send messages, respond to tool approval requests, and preview files on the host computer. No phone app or additional DSH instance is required.
