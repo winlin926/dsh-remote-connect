@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-server",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "Self-hostable public relay node for DeepSeek Harness remote control",
   "type": "module",

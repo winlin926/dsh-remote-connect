@@ -1,6 +1,6 @@
 {
   "name": "@winlin926/dsh-carry",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "icon": "assets/logo.png",
   "description": "DeepSeek Harness 远程控制：手机浏览器扫码接入电脑上的 DSH 会话，继续对话、审批工具、预览文件，局域网直连或自托管公网节点。",
   "type": "module",
