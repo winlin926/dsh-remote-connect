@@ -56,7 +56,7 @@ class StandInSocket {
   fire(type: string): void { for (const listener of this.listeners.get(type) ?? []) listener(new Event(type)) }
 }
 class StandInElement {
-  id = ''; type = ''; src = ''; href = ''; async = false; disabled = false; focused = false
+  id = ''; type = ''; src = ''; href = ''; async = false; disabled = false; focused = false; className = ''
   style: Record<string, any> = {}
   attributes: Record<string, string> = {}
   dataset = new Proxy<Record<string, string>>({}, { set: (_target, key, value) => { this.attributes['data-' + String(key).replace(/[A-Z]/g, letter => '-' + letter.toLowerCase())] = value; return true } })
@@ -86,11 +86,40 @@ class StandInElement {
     return null
   }
 }
-function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: Uint8Array) => array }, transport: Record<string, unknown> = {}, session: { context?: BootContext; search?: string; href?: string } = {}) {
+/** One boot graph as the Host composes it: a revision, ordered rows and the initial combos carrying them. */
+const bootGraph = (rev: string, ids: string[], batches?: Array<{ phase: string; url: string; entries: string[] }>) => ({
+  rev,
+  entries: ids.map(id => ({ id, url: '/plugins/??' + id + '/client.js&rev=' + rev, rev })),
+  batches: (batches ?? [{ phase: 'bootstrap', url: '/plugins/??' + ids.join('/client.js,') + '/client.js&rev=' + rev, entries: ids }])
+    .map(batch => ({ ...batch, rev })),
+})
+/** The Host's HTML facade: a pending queue before create(), the live sink the module system installs. */
+function hostFacade() {
+  const live: StandInElement[] = []
+  const registrations: Array<{ id: string; chunk?: string }> = []
+  const facade: Record<string, any> = {
+    mode: 'queue',
+    pendingQueue: [] as Array<{ id: string; chunk?: string }>,
+    load(registration: { id: string; chunk?: string }) { facade.pendingQueue.push(registration) },
+    create(options: unknown) {
+      facade.mode = 'live'
+      facade.load = (registration: { id: string; chunk?: string }) => { registrations.push(registration) }
+      for (const registration of facade.pendingQueue.splice(0)) facade.load(registration)
+      return { options, live: registrations }
+    },
+  }
+  return { facade, registrations }
+}
+function bootPage(
+  crypto: Record<string, unknown> = { getRandomValues: (array: Uint8Array) => array },
+  transport: Record<string, unknown> = {},
+  session: { context?: BootContext; search?: string; href?: string; boot?: unknown; loader?: unknown; store?: unknown } = {},
+) {
   StandInSocket.all = []
   const requests: Array<{ url: string; body?: string; method?: string }> = []
   const waiting: Array<(response: Response) => void> = []
-  const timers: Array<{ delay: number; run: () => void; cancelled: boolean }> = []
+  const clock = { now: 0 }
+  const timers: Array<{ delay: number; due: number; run: () => void; cancelled: boolean }> = []
   const listeners = new Map<string, Array<(event: unknown) => void>>()
   const replacements: string[] = []
   const historyReplacements: string[] = []
@@ -99,6 +128,7 @@ function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: U
     fetch: (input: unknown, init?: { body?: string; method?: string }) => { requests.push({ url: String(input), body: init?.body, method: init?.method }); return new Promise<Response>(resolve => waiting.push(resolve)) },
     addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, [...listeners.get(type) ?? [], listener]) },
     dispatchEvent: () => true, WebSocket: StandInSocket, EventSource: NativeEventSource, __DSH_TRANSPORT__: transport,
+    __DSH_BOOT__: session.boot, __ModuleLoader__: session.loader, localStorage: session.store,
     history: { replaceState: (_state: unknown, _title: string, url: string) => { historyReplacements.push(url) } },
   }
   const elements: StandInElement[] = []
@@ -113,12 +143,22 @@ function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: U
   const MutationObserver = class { constructor(listener: () => void) { mutation = listener } observe() {} disconnect() { mutation = undefined } }
   let reloads = 0
   const location = { href: session.href ?? 'https://rc.example/app?token=page-secret#credential', search: session.search ?? '?token=page-secret', origin: 'https://rc.example', protocol: 'https:', assign: () => {}, reload: () => { reloads++ }, replace: (href: string) => { replacements.push(href) } }
-  new Function('window', 'document', 'location', 'crypto', 'setTimeout', 'clearTimeout', 'MutationObserver', 'navigator', 'innerWidth', 'innerHeight', 'devicePixelRatio', bootScript(session.context))(
+  new Function('window', 'document', 'location', 'crypto', 'setTimeout', 'clearTimeout', 'MutationObserver', 'navigator', 'innerWidth', 'innerHeight', 'devicePixelRatio', 'performance', bootScript(session.context))(
     window, document, location, crypto,
-    (run: () => void, delay: number) => { timers.push({ delay, run, cancelled: false }); return timers.length },
+    (run: () => void, delay: number) => { timers.push({ delay, due: clock.now + delay, run, cancelled: false }); return timers.length },
     (id: number) => { if (timers[id - 1]) timers[id - 1]!.cancelled = true },
-    MutationObserver, { userAgent: 'test browser' }, 390, 844, 1,
+    MutationObserver, { userAgent: 'test browser' }, 390, 844, 1, { now: () => clock.now },
   )
+  /** Run every timer that is due, in order, including the ones a run schedules. */
+  const advance = (ms: number): void => {
+    clock.now += ms
+    for (;;) {
+      const due = timers.filter(timer => !timer.cancelled && timer.due <= clock.now).sort((left, right) => left.due - right.due)[0]
+      if (!due) return
+      due.cancelled = true
+      due.run()
+    }
+  }
   const mountBoot = () => {
     const boot = createElement('div'); boot.dataset.dshBoot = ''
     const card = createElement('div'), spinner = createElement('div'), hint = createElement('p')
@@ -126,46 +166,232 @@ function bootPage(crypto: Record<string, unknown> = { getRandomValues: (array: U
     card.append(spinner, hint); boot.append(card); root.replaceChildren(boot); mutation?.()
     return { boot, spinner, card }
   }
+  const stored = session.store as { getItem?: (key: string) => string | null; setItem?: (key: string, value: string) => void } | undefined
   return {
-    window, NativeEventSource, requests, timers, sockets: StandInSocket.all, document, root, createElement, mountBoot,
+    window, NativeEventSource, requests, timers, sockets: StandInSocket.all, document, root, createElement, mountBoot, advance, clock,
     mutate: () => { mutation?.() }, reloads: () => reloads, replacements, historyReplacements,
+    store: stored,
     fire: (type: string, event: unknown) => { for (const listener of listeners.get(type) ?? []) listener(event) },
-    report: () => { timers.filter(timer => !timer.cancelled).at(-1)!.run(); return JSON.parse(requests.at(-1)!.body!) },
+    report: () => { advance(8000); return JSON.parse(requests.filter(request => request.url === '/rc/boot-report').at(-1)!.body!) },
     answer: () => waiting.shift()?.(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
     answerWith: (status: number, body: string) => waiting.shift()?.(new Response(body, { status, headers: { 'content-type': 'application/json' } })),
     elements,
   }
 }
-
-it('observes native script transport while leaving retry and fallback to the Host', async () => {
-  const f = bootPage(), { boot } = f.mountBoot()
-  expect(boot.textContent).toContain('正在核对插件版本')
-  const load = f.window.__DSH_TRANSPORT__.loadBundle as (url: string) => Promise<void>
-  const first = load('/plugins/??one/client.js,two/client.js&rev=batch').catch(error => error)
-  const script = f.document.head.children[0]!
-  expect(script.async).toBe(true)
-  expect(boot.textContent).toContain('正在加载资源')
-  script.fire('error')
-  expect(await first).toBeInstanceOf(Error)
-  expect(f.document.head.children).toHaveLength(0)
-  expect(f.elements.filter(element => element.tagName === 'SCRIPT')).toHaveLength(1)
-  expect(boot.textContent).not.toContain('启动失败')
-  const fallback = load('/plugins/??one/client.js&rev=one')
-  f.document.head.children[0]!.fire('load')
-  await fallback
-  expect(boot.textContent).toContain('正在初始化插件 · 已加载 1 个资源')
-  expect(f.requests).toHaveLength(0)
-  expect(f.report()).toMatchObject({ result: 'pending', mounted: false, completedResources: 1, resources: [{ result: 'error' }, { result: 'loaded' }] })
+/** The startup scene lives beside #root, so it survives the renderer replacement. */
+const screenOf = (f: ReturnType<typeof bootPage>): StandInElement | undefined => f.document.body.children.find(node => node.id === 'dsh-rc-boot-screen')
+const byClass = (node: StandInElement | undefined, name: string): StandInElement | undefined => {
+  if (!node) return undefined
+  for (const child of node.children) {
+    if (child.className === name) return child
+    const found = byClass(child, name)
+    if (found) return found
+  }
+  return undefined
+}
+const lines = (f: ReturnType<typeof bootPage>) => {
+  const screen = screenOf(f)
+  return {
+    screen,
+    stage: byClass(screen, 'stage')?.textContent,
+    count: byClass(screen, 'count')?.textContent,
+    detail: byClass(screen, 'detail')?.textContent,
+  }
+}
+const storage = (map: Map<string, string>) => ({
+  getItem: (key: string) => map.get(key) ?? null,
+  setItem: (key: string, value: string) => { map.set(key, value) },
 })
 
-it('delegates an existing transport and preserves its rejection without adding scripts', async () => {
-  const failure = new Error('transport failed'), calls: string[] = []
-  const transport = { loadBundle(this: unknown, url: string): Promise<void> { expect(this).toBe(transport); calls.push(url); return Promise.reject(failure) } }
-  const f = bootPage(undefined, transport)
-  const pending = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/one.js?rev=x')
-  expect(calls).toEqual(['/plugins/one.js?rev=x'])
-  await expect(pending).rejects.toBe(failure)
-  expect(f.document.head.children).toHaveLength(0)
+it('shows the full-screen startup scene outside the root and leaves pointer input unblocked', () => {
+  const f = bootPage()
+  expect(f.document.body.children).toContain(screenOf(f))
+  expect(lines(f).stage).toBe('正在检查插件变化…')
+  expect(lines(f).detail).toBe('正在读取插件清单…')
+  expect(screenOf(f)!.id).toBe('dsh-rc-boot-screen')
+  const style = f.document.head.children.find(node => node.id === 'dsh-rc-boot-style')!.textContent
+  expect(style).toContain('position:fixed;inset:0')
+  expect(style).toContain('background:Canvas;color:CanvasText')
+  expect(style).toContain("mask:url('./favicon.svg')")
+  expect(style).toContain('pointer-events:none')
+  f.mountBoot()
+  expect(lines(f).screen!.parentElement).toBe(f.document.body)
+  expect(f.root.children).toHaveLength(1)
+  expect(byClass(screenOf(f), 'fill')!.style.display).toBe('none')
+  expect(byClass(screenOf(f), 'sweep')!.style.display).toBe('block')
+})
+
+it('states the stage without a count when the Host published no graph, and keeps the reload with its own error area', () => {
+  const f = bootPage()
+  f.advance(3000)
+  expect(lines(f).stage).toBe('无法核对插件变化')
+  expect(lines(f).count).toBe('')
+  const { spinner, card } = f.mountBoot()
+  spinner.remove(); card.textContent = 'Failed to load plugins'; f.mutate()
+  expect(screenOf(f)).toBeUndefined()
+  const status = f.root.querySelector('[data-dsh-rc-boot-status]')!
+  expect(status.attributes.role).toBe('alert')
+  expect(status.textContent).toContain('启动失败')
+  expect(status.children.find(child => child.tagName === 'BUTTON')).toBeTruthy()
+  expect(f.report()).toMatchObject({ phase: 'failed', result: 'failed', errors: expect.arrayContaining(['official-startup-failure']) })
+})
+
+it('counts the parser batch the HTML facade queued before the graph row arrived', async () => {
+  const { facade } = hostFacade()
+  const graph = bootGraph('r1', ['@deepseek-ai/dsh-client-modules', 'one', 'two'])
+  // The facade only exists once its inline script has run, so the first observation finds nothing.
+  const f = bootPage(undefined, {}, { store: storage(new Map()) })
+  f.mutate()
+  f.window.__ModuleLoader__ = facade
+  facade.pendingQueue.push({ id: '@deepseek-ai/dsh-client-modules/client' }, { id: 'one/client' })
+  f.mutate()
+  expect(lines(f).count).toBe('')
+  f.window.__DSH_BOOT__ = graph
+  f.mutate()
+  const { boot } = f.mountBoot()
+  expect(boot.textContent).toContain('Loading plugins')
+  facade.create({ boot: graph })
+  expect(lines(f).stage).toBe('首次核对完成')
+  const loading = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/??one/client.js&rev=r1')
+  f.advance(80)
+  expect(lines(f).count).toBe('2 / 3 个模块')
+  createElementScript(f).fire('load')
+  await loading
+})
+
+it('counts every entry of one combo once and never a package-local chunk', async () => {
+  const { facade } = hostFacade()
+  const graph = bootGraph('r1', ['one', 'two'], [{ phase: 'application', url: '/plugins/??one/client.js,two/client.js&rev=r1', entries: ['one', 'two'] }])
+  const f = bootPage(undefined, {}, { boot: graph, loader: facade }); f.mountBoot()
+  facade.create({ boot: graph })
+  const loading = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/??one/client.js,two/client.js&rev=r1')
+  f.advance(400)
+  expect(lines(f).count).toBe('0 / 2 个模块')
+  expect(lines(f).detail).toBe('正在准备：one')
+  facade.load({ id: 'one/client' })
+  facade.load({ id: 'one/chunk-abc.js', chunk: 'chunk-abc.js' })
+  facade.load({ id: 'one/client' })
+  f.advance(80)
+  expect(lines(f).count).toBe('1 / 2 个模块')
+  expect(lines(f).detail).toBe('正在准备：two')
+  createElementScript(f).fire('load')
+  await loading
+  f.advance(80)
+  expect(lines(f).detail).toBe('刚完成：one')
+  facade.load({ id: 'two/client' })
+  f.advance(80)
+  expect(lines(f).count).toBe('2 / 2 个模块')
+  expect(lines(f).detail).toBe('刚完成：two')
+})
+function createElementScript(f: ReturnType<typeof bootPage>): StandInElement {
+  return f.document.head.children.at(-1)!
+}
+
+it('keeps counting when a partially executed batch falls back to one package', async () => {
+  const { facade } = hostFacade()
+  const graph = bootGraph('r1', ['one', 'two'], [{ phase: 'application', url: '/plugins/??one/client.js,two/client.js&rev=r1', entries: ['one', 'two'] }])
+  const f = bootPage(undefined, {}, { boot: graph, loader: facade }); f.mountBoot()
+  facade.create({ boot: graph })
+  const batch = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/??one/client.js,two/client.js&rev=r1')
+  facade.load({ id: 'one/client' })
+  createElementScript(f).fire('load')
+  await batch
+  const fallback = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/??two/client.js&rev=r1')
+  facade.load({ id: 'two/client' })
+  f.advance(80)
+  expect(lines(f).count).toBe('2 / 2 个模块')
+  createElementScript(f).fire('load')
+  await fallback
+})
+
+it('uses a readable label for known DSH modules instead of their package identifiers', async () => {
+  const { facade } = hostFacade()
+  const graph = bootGraph('r1', ['@deepseek-ai/dsh-client-ui-theme'])
+  const f = bootPage(undefined, {}, { boot: graph, loader: facade }); f.mountBoot()
+  facade.create({ boot: graph })
+  const loading = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/??@deepseek-ai/dsh-client-ui-theme/client.js&rev=r1')
+  f.advance(320)
+  expect(lines(f).detail).toBe('正在准备：界面主题')
+  facade.load({ id: '@deepseek-ai/dsh-client-ui-theme/client' })
+  f.advance(80)
+  expect(lines(f).count).toBe('1 / 1 个模块')
+  expect(lines(f).detail).toBe('刚完成：界面主题')
+  createElementScript(f).fire('load')
+  await loading
+})
+
+it('compares the manifest revision and stores a baseline only after the Host took the page over', () => {
+  const first = new Map<string, string>()
+  const fresh = bootPage(undefined, {}, { boot: bootGraph('r1', ['one']), store: storage(first) }); fresh.mountBoot()
+  expect(lines(fresh).stage).toBe('首次核对完成')
+  expect(first.size).toBe(0)
+  fresh.root.replaceChildren(fresh.createElement('main')); fresh.mutate()
+  expect(first.get('dsh-rc-boot-graph')).toBe('r1')
+
+  const same = bootPage(undefined, {}, { boot: bootGraph('r1', ['one']), store: storage(new Map([['dsh-rc-boot-graph', 'r1']])) })
+  expect(lines(same).stage).toBe('插件清单未变化')
+  const changed = bootPage(undefined, {}, { boot: bootGraph('r2', ['one']), store: storage(new Map([['dsh-rc-boot-graph', 'r1']])) })
+  expect(lines(changed).stage).toBe('插件清单有变化')
+  const denied = bootPage(undefined, {}, { boot: bootGraph('r1', ['one']), store: { getItem() { throw new Error('denied') }, setItem() { throw new Error('denied') } } })
+  expect(lines(denied).stage).toBe('已读取本次插件清单')
+})
+
+it('names the graph size and no denominator when the loader interface does not match', () => {
+  const graph = bootGraph('r1', ['one', 'two'])
+  const f = bootPage(undefined, {}, { boot: graph, loader: { mode: 'live', load() {}, create() { throw new Error('late') } } })
+  f.mountBoot()
+  f.advance(80)
+  expect(lines(f).count).toBe('共 2 个模块')
+  f.advance(400)
+  expect(lines(f).count).toBe('共 2 个模块')
+})
+
+it('keeps the verdict for 320ms and the completion for 600ms after a fast mount', () => {
+  const map = new Map<string, string>()
+  const f = bootPage(undefined, {}, { boot: bootGraph('r1', ['one']), store: storage(map) })
+  f.mountBoot()
+  f.advance(100)
+  f.root.replaceChildren(f.createElement('main')); f.mutate()
+  f.advance(219)
+  expect(lines(f).stage).toBe('首次核对完成')
+  f.advance(1)
+  expect(lines(f).stage).toBe('✓ 启动完成')
+  f.advance(599)
+  expect(lines(f).screen!.attributes['data-ready']).toBe('true')
+  expect(byClass(lines(f).screen, 'track')!.style.display).toBe('none')
+  expect(lines(f).detail).toBe('工作区已就绪')
+  f.advance(1)
+  expect(lines(f).screen!.attributes['data-fade']).toBe('true')
+  f.advance(160)
+  expect(screenOf(f)).toBeUndefined()
+  expect(map.get('dsh-rc-boot-graph')).toBe('r1')
+})
+
+it('holds a late plugin-check verdict for 320ms from when it first appears', () => {
+  const f = bootPage(undefined, {}, { store: storage(new Map()) })
+  f.advance(500)
+  f.window.__DSH_BOOT__ = bootGraph('r1', ['one'])
+  f.mutate()
+  expect(lines(f).stage).toBe('首次核对完成')
+  const { boot } = f.mountBoot()
+  f.root.replaceChildren(f.createElement('main')); f.mutate()
+  f.advance(319)
+  expect(lines(f).stage).toBe('首次核对完成')
+  f.advance(1)
+  expect(lines(f).stage).toBe('✓ 启动完成')
+  expect(boot.textContent).toContain('Loading plugins')
+})
+
+it('turns the sweep and the pulse off for a reduced-motion reader and keeps the dwell times', () => {
+  const script = bootScript()
+  expect(script).toContain('@media(prefers-reduced-motion:reduce)')
+  expect(script).toContain('animation:dsh-rc-sweep 1.6s ease-in-out infinite')
+  expect(script).toContain('transition:transform 180ms ease-out')
+  expect(script).toContain('pointer-events:none')
+  expect(script).toContain("aria-live")
+  expect(script).toContain('background:Canvas;color:CanvasText')
+  expect(script).toContain('data-ready=true')
+  expect(script).not.toContain('dsh-rc-pulse')
 })
 
 it('reports ready only after the official boot DOM is replaced by the application', () => {
@@ -181,17 +407,36 @@ it('reports ready only after the official boot DOM is replaced by the applicatio
   expect(f.elements.some(element => element.id === 'dsh-rc-boot-errors')).toBe(false)
 })
 
-it('shows the version check before the official boot node arrives and hands it over', () => {
-  const f = bootPage()
-  const early = f.elements.find(element => element.id === 'dsh-rc-boot-check')!
-  expect(early.textContent).toBe('正在核对插件版本…')
-  expect(f.document.body.children).toContain(early)
-  const { boot } = f.mountBoot()
-  expect(early.parentElement).toBeNull()
-  expect(boot.textContent).toContain('正在核对插件版本')
-  // A root that already holds a node is not the application while the official boot node is still there.
-  f.root.append(f.createElement('main')); f.mutate()
-  expect(f.report()).toMatchObject({ result: 'pending', mounted: false })
+it('observes native script transport while leaving retry and fallback to the Host', async () => {
+  const f = bootPage(), { boot } = f.mountBoot()
+  const load = f.window.__DSH_TRANSPORT__.loadBundle as (url: string) => Promise<void>
+  const first = load('/plugins/??one/client.js,two/client.js&rev=batch').catch(error => error)
+  const script = f.document.head.children.at(-1)!
+  expect(script.async).toBe(true)
+  f.advance(80)
+  expect(lines(f).stage).toBe('正在加载模块')
+  script.fire('error')
+  expect(await first).toBeInstanceOf(Error)
+  expect(f.document.head.children.filter(node => node.tagName === 'SCRIPT')).toHaveLength(0)
+  expect(f.elements.filter(element => element.tagName === 'SCRIPT')).toHaveLength(1)
+  expect(boot.textContent).not.toContain('启动失败')
+  const fallback = load('/plugins/??one/client.js&rev=one')
+  createElementScript(f).fire('load')
+  await fallback
+  f.advance(80)
+  expect(lines(f).stage).toBe('正在初始化插件')
+  expect(f.requests).toHaveLength(0)
+  expect(f.report()).toMatchObject({ result: 'pending', mounted: false, completedResources: 1, resources: [{ result: 'error' }, { result: 'loaded' }] })
+})
+
+it('delegates an existing transport and preserves its rejection without adding scripts', async () => {
+  const failure = new Error('transport failed'), calls: string[] = []
+  const transport = { loadBundle(this: unknown, url: string): Promise<void> { expect(this).toBe(transport); calls.push(url); return Promise.reject(failure) } }
+  const f = bootPage(undefined, transport)
+  const pending = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/one.js?rev=x')
+  expect(calls).toEqual(['/plugins/one.js?rev=x'])
+  await expect(pending).rejects.toBe(failure)
+  expect(f.document.head.children.filter(node => node.tagName === 'SCRIPT')).toHaveLength(0)
 })
 
 it('says the connection is being restored when the Host goes away and clears it when it answers', () => {
@@ -204,19 +449,6 @@ it('says the connection is being restored when the Host goes away and clears it 
   expect(f.reloads()).toBe(1)
   f.fire('dsh-rc-online', new Event('dsh-rc-online'))
   expect(banner.parentElement).toBeNull()
-})
-
-it('offers reload only for the official final failure and never for an intermediate resource error', () => {
-  const f = bootPage(), { boot, spinner, card } = f.mountBoot()
-  f.fire('error', { target: { tagName: 'LINK', href: '/plugins/??one/client.js&rev=x' } })
-  expect(boot.textContent).not.toContain('启动失败')
-  spinner.remove(); const failure = f.createElement('div'); failure.textContent = 'Failed to load plugins'; card.append(failure); f.mutate()
-  const status = boot.querySelector('[data-dsh-rc-boot-status]')!
-  expect(status.attributes.role).toBe('alert')
-  expect(status.textContent).toContain('启动失败')
-  status.children.find(child => child.tagName === 'BUTTON')!.onclick!()
-  expect(f.reloads()).toBe(1)
-  expect(f.report()).toMatchObject({ phase: 'failed', result: 'failed', mounted: false, errors: expect.arrayContaining(['official-startup-failure']) })
 })
 
 it('bounds boot reports and removes credentials, arbitrary query parameters and fragments', async () => {
