@@ -180,7 +180,12 @@ export function normalizeNodeOrigin(input: string | URL): string | null {
   return parsed.ok ? parsed.origin : null
 }
 
-/** A transport failure is a certificate failure only when the cause chain says so; everything else is reachability. */
+/**
+ * A transport failure is a certificate failure only when the cause chain names a certificate
+ * problem. A handshake that an intermediary or a dropped route aborted also reads as `SSL`/`TLS`
+ * in the message, and calling that a bad certificate sends the user to the wrong place.
+ */
+const CERTIFICATE_FAILURE = /CERT|SELF_SIGNED|SELF-SIGNED|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER|DEPTH_ZERO|ALTNAME|HOSTNAME_MISMATCH/i
 function transportFailure(error: unknown): PublicNodeFailure {
   const parts: string[] = []
   let current: unknown = error
@@ -188,7 +193,7 @@ function transportFailure(error: unknown): PublicNodeFailure {
     parts.push(current.name, current.message, String((current as NodeJS.ErrnoException).code ?? ''))
     current = (current as { cause?: unknown }).cause
   }
-  return /CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY|DEPTH_ZERO|ALTNAME|HOSTNAME_MISMATCH/i.test(parts.join(' '))
+  return CERTIFICATE_FAILURE.test(parts.join(' '))
     ? failure('bad-tls', '公网节点的 TLS 证书无效或不受信任。')
     : failure('unreachable', '无法连接公网节点：网络不可达，或域名没有指向正在运行的节点。')
 }

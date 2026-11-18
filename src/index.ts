@@ -392,12 +392,18 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     let monitor: ReturnType<typeof setInterval> | undefined
     let probing = false
     const stopMonitor = () => { if (monitor) clearInterval(monitor); monitor = undefined }
-    const probe = () => {
+    const probe = async () => {
       if (probing || !enabled || activeMode !== 'public' || !access?.domain) return
       probing = true
-      void access.checkDomain().catch(() => undefined).finally(() => { probing = false })
+      try {
+        // One failed sample is a blink, not a diagnosis: a handshake can abort on a single probe
+        // while the entry is fine for every phone. Probe again before the panel is told it is down.
+        const first = await access.checkDomain()
+        if (!first.reachable && enabled && activeMode === 'public') await access.checkDomain()
+      } catch { /* the check reports its own failures */ }
+      finally { probing = false }
     }
-    const startMonitor = () => { stopMonitor(); monitor = setInterval(probe, 120_000); monitor.unref(); probe() }
+    const startMonitor = () => { stopMonitor(); monitor = setInterval(() => void probe(), 120_000); monitor.unref(); void probe() }
     const stop = async () => {
       ++generation
       enabled = false; activeMode = undefined; access?.setActive(false); qr = undefined; pairing.invalidate()

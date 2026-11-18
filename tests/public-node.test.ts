@@ -179,6 +179,9 @@ describe('public node detection', () => {
     expect(await codeOf('https://node.example.com', throws(new TypeError('fetch failed')))).toBe('unreachable')
     const tls = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('self-signed certificate'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' }) })
     expect(await codeOf('https://node.example.com', throws(tls))).toBe('bad-tls')
+    // An aborted handshake names SSL in its message but says nothing about the certificate.
+    const aborted = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('0A000086:SSL routines:ssl3_read_bytes:tlsv1 alert internal error'), { code: 'EPROTO' }) })
+    expect(await codeOf('https://node.example.com', throws(aborted))).toBe('unreachable')
   })
   it('refuses any redirect, including a same-origin one', async () => {
     expect(await codeOf('https://node.example.com', responds('', 302))).toBe('redirect')
