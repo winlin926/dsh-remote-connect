@@ -36,13 +36,19 @@ You can also search for `@winlin926/dsh-carry` under **Plugins → Add plugin** 
 <p align="center"><strong>Host computer: enable access, pair devices, manage authorizations</strong></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="New DSH session in a phone browser" width="23%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="DSH conversation and message input on a phone" width="23%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="Workspace tools in a phone browser" width="23%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="DSH general settings in a phone browser" width="23%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" alt="Boot screen in a phone browser: loading modules with real progress" width="44%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="New DSH session in a phone browser" width="44%" />
 </p>
 
-<p align="center"><strong>Phone: new session · conversation · workspace tools · settings</strong></p>
+<p align="center"><strong>Phone: boot screen · new session</strong></p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="DSH conversation and message input on a phone" width="30%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="Workspace tools in a phone browser" width="30%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="DSH general settings in a phone browser" width="30%" />
+</p>
+
+<p align="center"><strong>Phone: conversation · workspace tools · settings</strong></p>
 
 ## Features
 

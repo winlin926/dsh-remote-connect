@@ -36,13 +36,19 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 <p align="center"><strong>电脑上：开启连接、扫码配对、管理已授权设备</strong></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="手机上的 DSH 新会话界面" width="23%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="手机上的 DSH 对话与输入框" width="23%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="手机上的工作区工具入口" width="23%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="手机上的 DSH 通用设置界面" width="23%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" alt="手机上的启动界面：正在加载模块，显示真实模块进度" width="44%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="手机上的 DSH 新会话界面" width="44%" />
 </p>
 
-<p align="center"><strong>手机上：新会话 · 对话 · 工作区工具 · 通用设置</strong></p>
+<p align="center"><strong>手机上：启动界面 · 新会话</strong></p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="手机上的 DSH 对话与输入框" width="30%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="手机上的工作区工具入口" width="30%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="手机上的 DSH 通用设置界面" width="30%" />
+</p>
+
+<p align="center"><strong>手机上：对话 · 工作区工具 · 通用设置</strong></p>
 
 ## 主要功能
 
