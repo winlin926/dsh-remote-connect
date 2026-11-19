@@ -1,91 +1,66 @@
-# dsh-carry
-
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" alt="dsh-carry logo: a computer and phone linked by an infinity symbol" width="160" height="160" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" width="112" height="112" alt="dsh-carry" />
+</p>
+<h1 align="center">dsh-carry</h1>
+<p align="center"><strong>Pick up your DSH session on your phone.</strong></p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/dsh-plugin.svg" alt="DeepSeek Harness plugin" />
+</p>
+<p align="center">
+  <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm package</a> · <a href="https://github.com/winlin926/dsh-carry/releases">Releases</a>
 </p>
 
-[简体中文](https://github.com/winlin926/dsh-carry/blob/main/README.md) | English
+When you step away from your computer, you can still reach its running DeepSeek Harness (DSH) instance from your phone browser. Scan a QR code to pair, then continue a conversation, review a tool request, or open an HTML page from your workspace. The phone uses the computer’s own DSH interface, so the available sessions and tools depend on the host.
 
-**Operate a running DeepSeek Harness (DSH) from a phone browser.** View sessions, send messages, respond to tool approvals, and preview workspace files — no app to install, no second DSH instance.
+## Install and pair your phone
 
-The phone always opens the **host's own Web UI**, so what is available on the phone depends on your host version.
+Install the plugin on the computer you want to reach. In the **DSH desktop app**, open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. For **`dsh web`**, run this command.
 
-## Install
-
-```bash
+```sh
 dsh plugin --profile web add @winlin926/dsh-carry@latest
 ```
 
-You can also search for `@winlin926/dsh-carry` under **Plugins → Add plugin** in DSH.
+The desktop app and `dsh web` keep separate plugin profiles. If the Remote Control panel is missing, check which profile you installed the plugin in.
 
-> **Note**: the desktop app and `dsh web` use separate profiles. Install into the profile of the **DSH host you actually want to connect to**, otherwise the panel will not appear on that machine.
+1. Connect your phone and computer to the same Wi-Fi. On the computer, open **Remote Control** (远程控制), select **Same Wi-Fi** (同一 Wi-Fi), and enable the connection.
+2. Scan the QR code with your phone. Check the device shown on the computer and approve the pairing request.
+3. Open an existing session in your phone browser. To revoke access later, remove the phone from the authorized devices on your computer.
 
-## Quick start (same Wi-Fi)
+<p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="Remote Control panel on the computer with a pairing QR code and a list of authorized devices" /></p>
 
-1. Make sure the phone and the computer are on the same Wi-Fi.
-2. On the computer, open the **Remote Control** (远程控制) panel, select **Same Wi-Fi** and turn the connection on.
-3. Scan the QR code with the phone, then approve the pairing request on the computer.
-4. Once paired, continue the session directly in the phone browser.
+## What you can do from your phone
 
-## Screenshots
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" alt="Remote control panel on the host computer: enable access, pair devices, and manage authorized devices" width="760" />
-</p>
-
-<p align="center"><strong>Host computer: enable access, pair devices, manage authorizations</strong></p>
+| When… | On your phone |
+| --- | --- |
+| A task is still running when you leave your desk | Open the same conversation, read the reply, and send a follow-up. |
+| A tool is waiting for approval | Review the request in the host interface and decide whether to approve it. |
+| You want to inspect a generated file | Follow its workspace link to view the file or preview an HTML page in the browser. |
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" alt="Boot screen in a phone browser: loading modules with real progress" width="44%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="New DSH session in a phone browser" width="44%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="Boot screen preview with a theme selector while DSH checks plugins" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" width="30%" alt="A new DSH session in the phone browser" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" width="30%" alt="An existing conversation with its message input on the phone" />
 </p>
+<p align="center">Boot screen preview · New session · Ongoing conversation</p>
 
-<p align="center"><strong>Phone: boot screen · new session</strong></p>
+<details>
+<summary>More phone screenshots — workspace tools and settings</summary>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="DSH conversation and message input on a phone" width="30%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="Workspace tools in a phone browser" width="30%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="DSH general settings in a phone browser" width="30%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="32%" alt="Workspace tools on the phone" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" width="32%" alt="DSH general settings on the phone" />
 </p>
 
-<p align="center"><strong>Phone: conversation · workspace tools · settings</strong></p>
+</details>
 
-## Features
+## Connecting from another network
 
-- **Keep using DSH on a phone**: open the host's Web UI directly to view and continue sessions, send messages and answer tool approvals. What works on the phone is decided by the host version.
-- **QR pairing and device management**: a new device must be approved on the computer. Authorized devices can be reviewed and revoked at any time.
-- **Workspace file previews**: open files and HTML pages from the computer's workspace on the phone. Ordinary files up to 48 MiB.
-- **LAN HTTPS and connection diagnostics**: configure a domain certificate the phone trusts for the LAN entry point; startup checks validate the certificate and port settings.
-- **Self-hosted access across networks**: use a fixed-domain tunnel gateway, or deploy your own `remote-server` node. One node can serve several computers with separate connections.
-- **Node and host identity checks**: verify the node before connecting; during public pairing, the phone and the computer each confirm the target host fingerprint.
-- **Local plugin updates**: check for updates from the panel on the computer and let the DSH plugin manager install them.
+On the same LAN, the phone can connect directly to your computer. For mobile data or another Wi-Fi network, use an HTTPS tunnel gateway with a fixed domain or deploy the included `remote-server` relay. During public pairing, compare the host fingerprint on both devices to confirm you have reached your computer.
 
-## Public access and self-hosting
+**Approve only devices you trust.** A paired phone has privileges close to local access. Public nodes terminate TLS, so their operators can read forwarded content. Choose a node you run or an operator you trust. The project does not operate a public relay.
 
-Reaching DSH over mobile data or another Wi-Fi needs an HTTPS public node you trust:
-
-```text
-Phone browser → HTTPS public node → tunnel → DSH on the computer
-```
-
-Use an existing HTTPS tunnel gateway, or deploy this repository's `remote-server/` on your own server. See the [self-hosted node guide](docs/self-host.md) for deployment and the [public node protocol](docs/public-node.md) for the protocol. Both guides are currently in Chinese.
-
-## Security boundaries
-
-- A paired phone has permissions close to local access on the computer — **only approve devices you trust**.
-- Public nodes terminate TLS and forward requests, so **node or tunnel operators may see the forwarded content**. This plugin provides no end-to-end encryption and operates no public nodes.
-- Use only nodes you trust, and always connect over HTTPS.
-
-## Migrating from the old package
-
-The package `@winlin926/dsh-remote-connect` is deprecated. The new package keeps its runtime identifiers, so migration needs no re-pairing:
-
-1. Remove `@winlin926/dsh-remote-connect` in DSH's plugin manager.
-2. Install `@winlin926/dsh-carry`.
-3. Restart the host.
-
-Both packages cannot be installed in the same profile. Device authorizations, public nodes and preferences stay in `~/.dsh/dsh-remote-connect/<profile>` and keep working after the move.
+[Self-hosting guide](docs/self-host.md) · [Public node protocol](docs/public-node.md) · [Plugin capabilities and host interfaces](docs/features.md) (guides in Chinese)
 
 ## Credits and license
 
-Maintained from [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control), retaining the original author's attribution and the MIT license. See [LICENSE](LICENSE).
+Based on [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control), with the original attribution preserved. Released under the [MIT License](LICENSE).

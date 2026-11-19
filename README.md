@@ -1,91 +1,66 @@
-# dsh-carry
-
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" alt="dsh-carry 标志：电脑与手机通过无限符号连接" width="160" height="160" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" width="112" height="112" alt="dsh-carry" />
+</p>
+<h1 align="center">dsh-carry</h1>
+<p align="center"><strong>电脑上的 DSH 会话，拿起手机接着用。</strong></p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/dsh-plugin.svg" alt="DeepSeek Harness 插件" />
+</p>
+<p align="center">
+  简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a> · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm 包</a> · <a href="https://github.com/winlin926/dsh-carry/releases">发行记录</a>
 </p>
 
-简体中文 | [English](https://github.com/winlin926/dsh-carry/blob/main/README.en.md)
+离开电脑时，正在运行的 DeepSeek Harness（DSH）仍可在手机浏览器里打开。扫码配对后，你可以接着聊、决定是否批准工具请求，也能点开电脑工作区里的文件或 HTML 页面。手机使用电脑上同一个 DSH 实例，会话和工具界面由宿主提供。
 
-**用手机浏览器远程操作电脑上正在运行的 DeepSeek Harness（DSH）。** 查看会话、发送消息、处理工具审批、预览工作区文件，不用装 App，也不用另起一个 DSH 实例。
+## 安装与首次连接
 
-手机打开的始终是**当前宿主自己的 Web 界面**，所以能用的功能由宿主版本决定。
+在要远程访问的电脑上安装插件。**桌面版**在 DSH 的「插件 → 添加插件」中搜索 `@winlin926/dsh-carry`。**使用 `dsh web`** 时，运行：
 
-## 安装
-
-```bash
+```sh
 dsh plugin --profile web add @winlin926/dsh-carry@latest
 ```
 
-也可以在 DSH 的「插件 → 添加插件」里搜索 `@winlin926/dsh-carry` 安装。
+桌面版和 `dsh web` 各自管理插件。如果电脑上找不到「远程控制」面板，先确认插件装在正在使用的那个 profile 中。
 
-> **注意**：桌面版和 `dsh web` 使用各自独立的 profile。请把插件安装到你**实际要连接的那个 DSH 宿主**所在的 profile，否则面板不会出现在你要连的那台机器上。
+1. 让手机和电脑连接同一 Wi-Fi。在电脑上打开「远程控制」，选择「同一 Wi-Fi」并开启连接。
+2. 用手机扫描面板上的二维码，在电脑上核对设备并批准配对。
+3. 在手机浏览器中打开已有会话。以后要收回权限，在电脑的已授权设备列表中撤销该手机即可。
 
-## 快速上手（同一 Wi-Fi）
+<p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="电脑端远程控制面板，显示配对二维码和已授权设备列表" /></p>
 
-1. 确保手机和电脑连接在同一个 Wi-Fi 下。
-2. 在电脑端 DSH 中打开「远程控制」面板，选择「同一 Wi-Fi」并开启连接。
-3. 用手机扫描二维码，并在电脑端确认这次配对请求。
-4. 配对完成后，直接在手机浏览器里继续当前会话。
+## 手机上能做什么
 
-## 界面预览
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" alt="电脑上的远程控制面板：开启连接、扫码配对与管理已授权设备" width="760" />
-</p>
-
-<p align="center"><strong>电脑上：开启连接、扫码配对、管理已授权设备</strong></p>
+| 场景 | 在手机上操作 |
+| --- | --- |
+| 离开工位，任务还在跑 | 打开电脑上的会话，查看回复，继续发消息。 |
+| 工具请求正在等你确认 | 在宿主界面里查看请求，决定是否批准。 |
+| 想看刚生成的文件 | 点开工作区文件链接，在浏览器中查看文件或预览 HTML 页面。 |
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" alt="手机上的启动界面：正在加载模块，显示真实模块进度" width="44%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" alt="手机上的 DSH 新会话界面" width="44%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="启动页预览，顶部可选主题，中央显示插件检查进度" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" width="30%" alt="手机浏览器中的 DSH 新会话" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" width="30%" alt="手机上已有的对话和消息输入框" />
 </p>
+<p align="center">启动页预览 · 新会话 · 继续对话</p>
 
-<p align="center"><strong>手机上：启动界面 · 新会话</strong></p>
+<details>
+<summary>查看更多手机界面：工作区工具与设置</summary>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" alt="手机上的 DSH 对话与输入框" width="30%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" alt="手机上的工作区工具入口" width="30%" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" alt="手机上的 DSH 通用设置界面" width="30%" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="32%" alt="手机上的工作区工具入口" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" width="32%" alt="手机上的 DSH 通用设置" />
 </p>
 
-<p align="center"><strong>手机上：对话 · 工作区工具 · 通用设置</strong></p>
+</details>
 
-## 主要功能
+## 离开同一 Wi-Fi 后怎么连？
 
-- **手机继续使用 DSH**：直接打开当前宿主的 Web 界面，查看和继续会话、发送消息、处理工具审批；手机端可用功能由宿主版本决定。
-- **扫码配对与设备管理**：新设备必须在电脑端批准才能接入；已授权设备可随时查看和撤销。
-- **工作区文件预览**：在手机上打开电脑工作区内的文件与 HTML 页面，普通文件最大支持 48 MiB。
-- **局域网 HTTPS 与连接诊断**：可为局域网入口配置受手机信任的域名证书，启动时自动检查证书与端口配置。
-- **跨网络自托管接入**：可接入固定域名隧道网关，或自行部署 `remote-server` 节点；单节点支持多台电脑分别接入。
-- **节点与主机身份校验**：连接前核对节点身份；公网配对时由手机与电脑双端确认目标主机指纹。
-- **本机插件更新**：可在电脑端面板直接检查更新，并交由 DSH 插件管理器安装。
+同一局域网内，手机可以直连电脑。换成移动数据或其他 Wi-Fi 时，可使用固定域名的 HTTPS 隧道网关，或自行部署仓库里的 `remote-server` 中继节点。公网配对时，在手机与电脑上核对主机指纹，确认连接的是自己的电脑。
 
-## 外网访问与自托管
+**只批准你信任的设备。** 已配对的手机拥有接近本机的操作权限。公网节点会终止 TLS，运营者可以看到转发内容。这条链路没有端到端加密，请使用自己部署或信任的节点。项目不运营公共节点。
 
-在移动网络或其他 Wi-Fi 下访问，需要一个你信任的 HTTPS 公网节点：
+[自托管部署指南](docs/self-host.md) · [公网节点协议](docs/public-node.md) · [插件能力与宿主接口](docs/features.md)
 
-```text
-手机浏览器 → HTTPS 公网节点 → 隧道 → 电脑上的 DSH
-```
+## 致谢与许可
 
-可以接入已有的 HTTPS 隧道网关，也可以把本仓库的 `remote-server/` 部署到自己的服务器。部署步骤见[服务节点指南](docs/self-host.md)，协议说明见[公网节点协议](docs/public-node.md)。
-
-## 安全边界
-
-- 已配对手机拥有与电脑本机相近的操作权限，**请只批准你信任的设备**。
-- 公网节点会终止 TLS 并转发请求，**节点或隧道运营者可以看到转发内容**；本插件不提供端到端加密，也不运营任何公共节点。
-- 请只使用你信任的节点，并始终通过 HTTPS 连接。
-
-## 从旧包迁移
-
-旧包 `@winlin926/dsh-remote-connect` 已弃用，新包继承它的运行时标识，迁移不用重新配对：
-
-1. 在 DSH 的「插件」里移除 `@winlin926/dsh-remote-connect`。
-2. 安装 `@winlin926/dsh-carry`。
-3. 重启宿主。
-
-新旧包不能同时装在同一个 profile。设备授权、公网节点和偏好仍保存在 `~/.dsh/dsh-remote-connect/<profile>`，迁移后照常可用。
-
-## 致谢与许可证
-
-本项目基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 维护，保留原作者署名和 MIT 许可证。许可证见 [LICENSE](LICENSE)。
+本项目基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 维护，保留原作者署名，采用 [MIT 许可证](LICENSE)。

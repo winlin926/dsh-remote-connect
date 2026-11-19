@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="182" height="24" viewBox="0 0 182 24" role="img" aria-labelledby="title">
+  <title id="title">DeepSeek Harness plugin</title>
+  <clipPath id="pill"><rect width="182" height="24" rx="6"/></clipPath>
+  <g clip-path="url(#pill)">
+    <rect width="128" height="24" fill="#24292f"/>
+    <rect x="128" width="54" height="24" fill="#964832"/>
+  </g>
+  <g fill="white" text-anchor="middle" font-family="Verdana,Arial,sans-serif" font-size="12">
+    <text x="64" y="16.5">DeepSeek Harness</text>
+    <text x="155" y="16.5">Plugin</text>
+  </g>
+</svg>
