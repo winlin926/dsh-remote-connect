@@ -63,4 +63,4 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 ## 📄 致谢与许可
 
-本项目基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 维护，保留原作者署名，采用 [MIT 许可证](LICENSE)。
+感谢 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 的早期实现。MIT 许可，版权声明见 [LICENSE](LICENSE)。

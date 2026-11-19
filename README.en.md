@@ -63,4 +63,4 @@ On the same LAN, the phone can connect directly to your computer. For mobile dat
 
 ## 📄 Credits and license
 
-Based on [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control), with the original attribution preserved. Released under the [MIT License](LICENSE).
+Thanks to [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) for the early implementation. MIT license; copyright notice in [LICENSE](LICENSE).
