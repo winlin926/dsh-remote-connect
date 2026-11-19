@@ -4,7 +4,7 @@
 <h1 align="center">dsh-carry</h1>
 <p align="center"><strong>电脑上的 DSH 会话，拿起手机接着用。</strong></p>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/dsh-plugin.svg" alt="DeepSeek Harness 插件" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/31a9e5729812e46646e2b1ca02883d701ed95477/assets/dsh-plugin.svg" alt="DSH | Plugin" />
 </p>
 <p align="center">
   简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a> · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm 包</a> · <a href="https://github.com/winlin926/dsh-carry/releases">发行记录</a>

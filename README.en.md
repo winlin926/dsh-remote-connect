@@ -4,7 +4,7 @@
 <h1 align="center">dsh-carry</h1>
 <p align="center"><strong>Pick up your DSH session on your phone.</strong></p>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/dsh-plugin.svg" alt="DeepSeek Harness plugin" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/31a9e5729812e46646e2b1ca02883d701ed95477/assets/dsh-plugin.svg" alt="DSH | Plugin" />
 </p>
 <p align="center">
   <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm package</a> · <a href="https://github.com/winlin926/dsh-carry/releases">Releases</a>

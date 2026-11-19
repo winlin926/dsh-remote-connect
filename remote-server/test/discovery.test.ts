@@ -43,7 +43,7 @@ test('well-known descriptor is a strict v2 service document with a persisted nod
     assert.equal(result.json.protocol, 2)
     assert.equal(result.json.kind, 'service')
     assert.equal(result.json.name, '我的公网节点')
-    assert.equal(result.json.version, '0.6.4')
+    assert.equal(result.json.version, '0.6.5')
     assert.ok(result.json.capabilities.includes('pairing'))
     assert.equal(result.json.hostId, undefined, 'a service node must not publish a flat Host identity')
     assert.equal(result.json.fingerprint, undefined)
@@ -144,7 +144,7 @@ test('healthz and /v1/config expose the v2 service identity and no Host fields',
   try {
     const health = await api(node.baseUrl, 'GET', '/healthz')
     assert.equal(health.status, 200)
-    assert.deepEqual(health.json, { ok: true, version: '0.6.4' })
+    assert.deepEqual(health.json, { ok: true, version: '0.6.5' })
 
     const wellKnown = await api(node.baseUrl, 'GET', '/.well-known/dsh-remote')
     const config = await api(node.baseUrl, 'GET', '/v1/config')
