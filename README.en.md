@@ -11,7 +11,7 @@
   <a href="https://github.com/winlin926/dsh-carry/blob/main/LICENSE"><img src="https://img.shields.io/github/license/winlin926/dsh-carry?label=license" height="20" alt="license" /></a>
 </p>
 <p>
-  <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm package</a> · <a href="https://github.com/winlin926/dsh-carry/releases">Releases</a>
+  <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English
 </p>
 
 `dsh-carry` lets you use the DeepSeek Harness (DSH) instance running on your computer from a phone browser. Scan a QR code to pair, then continue a conversation, approve tool requests, and view workspace files or HTML previews. Your phone connects to the computer’s DSH instance, so available sessions and tools depend on the host.

@@ -11,7 +11,7 @@
   <a href="https://github.com/winlin926/dsh-carry/blob/main/LICENSE"><img src="https://img.shields.io/github/license/winlin926/dsh-carry?label=license" height="20" alt="license" /></a>
 </p>
 <p>
-  简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a> · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm 包</a> · <a href="https://github.com/winlin926/dsh-carry/releases">发行记录</a>
+  简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a>
 </p>
 
 `dsh-carry` 让你通过手机浏览器远程使用电脑上运行的 DeepSeek Harness（DSH）。扫码配对后，可以继续会话、审批工具请求，并查看工作区文件或 HTML 预览。手机连接的是电脑上的 DSH 实例，可用会话和工具由宿主提供。
