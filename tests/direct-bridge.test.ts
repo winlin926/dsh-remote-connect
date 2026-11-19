@@ -85,8 +85,9 @@ describe('direct bridge', () => {
     expect(result.status).toBe(200)
     const body = Buffer.concat(frames.filter(frame => frame.t === 'chunk').map(frame => Buffer.from(frame.payload))).toString()
     expect(JSON.parse(body)).toMatchObject({ path: '/api/hello', size: 0 })
-    // The Host session cookie never travels inward, and the Host's own set-cookie never travels out.
-    expect(JSON.parse(body).cookie).toBeNull()
+    // The device's own cookie never travels inward: the Host sees only the gateway's session cookie,
+    // and the Host's own set-cookie never travels back out to the phone.
+    expect(JSON.parse(body).cookie).toBe('host-private=secret')
     expect(JSON.stringify(result.headers)).not.toContain('host-secret')
     // The request did reach the Host, and it was counted on the direct line.
     expect(f.seen.map(entry => entry.path)).toEqual(['/api/hello'])
@@ -98,7 +99,6 @@ describe('direct bridge', () => {
     const f = await fixture()
     open(f.wire, 'r2', 'GET', '/api/stream')
     await new Promise(resolve => setTimeout(resolve, 800))
-    console.log('DIAG out=' + f.wire.out.length + ' seen=' + JSON.stringify(f.seen) + ' stats=' + JSON.stringify(f.bridge.snapshot()))
     await f.wire.until(list => list.some(frame => frame.t === 'done'))
     const chunks = f.wire.out.filter(frame => frame.t === 'chunk').map(frame => Buffer.from(frame.payload).toString())
     expect(chunks.join('')).toContain('第一条')

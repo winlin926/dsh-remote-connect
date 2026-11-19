@@ -1,6 +1,7 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
 import { localFilePath } from './local-file.js'
 import { createBootScreen } from './boot-screen.js'
+import { createDirectLink } from './boot-direct.js'
 
 /** The same computer's LAN entry, injected only into a paired device's public page. */
 export interface LanFallback {
@@ -11,9 +12,11 @@ export interface LanFallback {
   fingerprint: string | null
   url: string
 }
-export interface BootContext { fallback: LanFallback }
+/** The direct line is offered per boot: its signaling route, and which line this phone prefers. */
+export interface BootDirect { signal: string; preference: 'lan' | 'public' }
+export interface BootContext { fallback?: LanFallback; direct?: BootDirect }
 
-function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null, createScreen: typeof createBootScreen): void {
+function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null, createScreen: typeof createBootScreen, createLink: typeof createDirectLink): void {
   const globals = window as unknown as Record<string, any>
   globals.__DSH_REMOTE_CONTROL__ = true
   // The Host owns the document language, theme colour and keyboard policy since 0.2.2: a phone
@@ -32,7 +35,27 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   const transport = globals.__DSH_TRANSPORT__ ?? {}
   globals.__DSH_TRANSPORT__ = transport
   const originalFetch = window.fetch.bind(window)
-  globals.__DSH_FILE_UPLOAD__ = { fetch: originalFetch }
+  // The direct line is prepared in the background from the first paint: the page keeps using the
+  // entry it arrived through until the channel has proven it carries traffic in both directions.
+  const direct = context?.direct
+  const link = direct ? createLink({
+    signalPath: direct.signal,
+    fetch: (url: string, init?: RequestInit) => originalFetch(url, init),
+    WebSocket: window.WebSocket,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    random: () => String(crypto.randomUUID?.() ?? Math.random()),
+    baseUrl: () => location.href,
+    preference: () => direct.preference,
+    onState: state => { if (state.ready) notice('已启用直连线路'); else if (state.reason) notice(state.reason) },
+  }) : undefined
+  /** Every same-origin call the app makes: uploads, streaming and previews take the live line. */
+  const routedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
+    if (link?.ready) return link.fetch(url, init).catch(() => originalFetch(input, init))
+    return originalFetch(input, init)
+  }
+  globals.__DSH_FILE_UPLOAD__ = { fetch: routedFetch }
+  if (link) setTimeout(() => { void link.start() }, 0)
   function notice(message: string): void {
     const existing = document.getElementById('dsh-rc-notice')
     if (existing) existing.remove()
@@ -430,7 +453,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     try { return (await response.clone().json())?.code === 'unpaired' } catch { return false }
   }
   window.fetch = async (...args) => {
-    const response = await originalFetch(...args)
+    const response = await routedFetch(args[0] as RequestInfo, args[1])
     if (new URL(String(args[0] instanceof Request ? args[0].url : args[0]), location.href).origin === location.origin && await unpaired(response)) disconnected('设备授权已失效或撤销，请重新扫码并在电脑上确认。')
     return response
   }
@@ -445,6 +468,10 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   }
   globals.WebSocket = class extends OriginalSocket {
     constructor(url: string | URL, protocols?: string | string[]) {
+      // A same-origin socket rides the direct line while it is up; anything else is a plain socket.
+      if (link?.ready) {
+        try { if (new URL(String(url), location.href).origin === location.origin) return link.socket(String(url), protocols) as unknown as WebSocket } catch { /* fall through */ }
+      }
       super(url, protocols)
       // Only a socket that reached the Host says anything about the authorization, and the SSE
       // carrier reconnects by design, so probing it would be a heartbeat request of its own.
@@ -517,7 +544,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
 }
 /** The Host reads this same string every request, so it stays one self-contained function. */
 export function bootScript(context?: BootContext): string {
-  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()});`
+  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()},${createDirectLink.toString()});`
 }
 /** The boot script is a same-origin file, not an inline script, so a Host CSP cannot block it. */
 export const BOOT_PATH = '/rc/boot.js'

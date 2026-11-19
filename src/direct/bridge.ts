@@ -34,7 +34,7 @@ const BLOCKED = new Set([
   'proxy-authorization', 'proxy-connection', 'upgrade-insecure-requests',
 ])
 
-interface HttpCall { req: ClientRequest; res?: IncomingMessage; timer?: ReturnType<typeof setTimeout> }
+interface HttpCall { req: ClientRequest; res?: IncomingMessage; timer?: ReturnType<typeof setTimeout>; ended?: boolean }
 
 /**
  * One direct connection's traffic, carried as frames and replayed against the computer's own
@@ -73,7 +73,7 @@ export class DirectBridge {
           case 'pong': return
           case 'open': this.open(frame.id, readControl(frame), send, fail); return
           case 'body': this.write(frame.id, frame.payload); return
-          case 'end': this.calls.get(frame.id)?.req.end(); return
+          case 'end': this.endCall(frame.id); return
           case 'cancel': this.cancel(frame.id); return
           case 'ws.open': void this.openSocket(frame.id, readControl(frame), reply, send); return
           case 'ws.text': this.sockets.get(frame.id)?.write(Buffer.from(frame.payload).toString('utf8')); return
@@ -136,6 +136,16 @@ export class DirectBridge {
       res.on('error', error => { fail(id, 'RESPONSE_ERROR', describe(error)); this.finish(id) })
     })
     req.on('error', error => { fail(id, 'REQUEST_ERROR', describe(error)); this.finish(id) })
+    // A GET or HEAD body never arrives, so waiting for an `end` frame would hold the request open
+    // for its whole timeout. Every other method waits for the phone to say the body is complete.
+    if (method === 'GET' || method === 'HEAD') this.endCall(id)
+  }
+
+  private endCall(id: string): void {
+    const call = this.calls.get(id)
+    if (!call || call.ended) return
+    call.ended = true
+    call.req.end()
   }
 
   private write(id: string, payload: Uint8Array): void {

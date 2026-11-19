@@ -63,6 +63,8 @@ export interface GatewayOptions {
   direct?: {
     offer: (deviceId: string, sdp: string) => Promise<{ sessionId: string; sdp: string }>
     resolve: (mark: string) => string | undefined
+    /** Which line this phone prefers; read per boot, because the panel may change it later. */
+    preference?: () => 'lan' | 'public'
     /** Every channel bound to this device ends; called when the device is revoked. */
     closeDevice?: (deviceId: string) => void
   }
@@ -234,8 +236,11 @@ export class Gateway {
   }
   private bootContext(): BootContext | undefined {
     const identity = this.hostIdentity(), lan = this.lanFallback()
-    if (!identity || !lan) return undefined
-    return { fallback: { node: identity, hostId: identity.id, fingerprint: identity.fingerprint, url: lan } }
+    // The direct line is offered on every entry that has one; the LAN fallback only exists while a
+    // public entry runs beside this computer's own address.
+    const direct = this.options.direct ? { signal: DIRECT_SIGNAL_PATH, preference: this.options.direct.preference?.() ?? 'lan' } : undefined
+    if (!direct && (!identity || !lan)) return undefined
+    return { ...(identity && lan ? { fallback: { node: identity, hostId: identity.id, fingerprint: identity.fingerprint, url: lan } } : {}), ...(direct ? { direct } : {}) }
   }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!safePath(req.url ?? '/') || !this.validHost(req)) { json(res, 403, { error: '不受信任的访问地址。' }); return }

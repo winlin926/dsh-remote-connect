@@ -45,8 +45,10 @@ type Mode = 'public' | 'lan'
 /** Where outbound domain checks and certificate requests get their proxy. */
 type ProxyMode = 'system' | 'manual' | 'off'
 const isProxyMode = (value: unknown): value is ProxyMode => value === 'system' || value === 'manual' || value === 'off'
+/** The line a phone prefers when both are reachable; it decides nothing on this computer. */
+type Line = 'lan' | 'public'
 interface Preferences {
-  autoStart: boolean; mode: Mode; proxy?: string; proxyMode: ProxyMode
+  autoStart: boolean; mode: Mode; line: Line; proxy?: string; proxyMode: ProxyMode
   /** The port last used, tried again so the address a phone knows keeps working after a restart. */
   port?: number
 }
@@ -139,12 +141,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     hostId: hostIdentity.hostId, fingerprint: hostIdentity.fingerprint,
   }
   const prefsFile = join(storage, 'preferences.json')
-  let preferences: Preferences = { autoStart: false, mode: 'lan', proxyMode: 'off' }
+  let preferences: Preferences = { autoStart: false, mode: 'lan', line: 'lan', proxyMode: 'off' }
   let error: string | undefined
   if (existsSync(prefsFile)) {
     try {
       const stored = JSON.parse(readFileSync(prefsFile, 'utf8')) as Partial<Preferences>
-      preferences = { autoStart: stored.autoStart === true, mode: stored.mode === 'public' ? 'public' : 'lan', proxy: typeof stored.proxy === 'string' ? stored.proxy : undefined,
+      preferences = { autoStart: stored.autoStart === true, mode: stored.mode === 'public' ? 'public' : 'lan', line: stored.line === 'public' ? 'public' : 'lan', proxy: typeof stored.proxy === 'string' ? stored.proxy : undefined,
         // An address typed before proxy modes existed is still an explicit manual choice.
         proxyMode: isProxyMode(stored.proxyMode) ? stored.proxyMode : stored.proxy ? 'manual' : 'off', port: Number.isInteger(stored.port) && stored.port! > 0 && stored.port! < 65536 ? stored.port : undefined }
     } catch {
@@ -371,7 +373,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       // The panel shows one failure string; the contract names it `lastError` while the panel reads `error`.
       const lastError = identityBlocked ? IDENTITY_CHANGE_ERROR : error
       return {
-        enabled, busy, mode: preferences.mode, activeMode, autoStart: preferences.autoStart,
+        enabled, busy, mode: preferences.mode, line: preferences.line, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
         systemProxy: preferences.proxyMode === 'system' && preferences.mode === 'public' ? await systemProxy() : undefined,
         publicUrl: access?.domain, publicPort: PUBLIC_PORT,
@@ -469,6 +471,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           direct: {
             offer: (deviceId, sdp) => direct().offer(deviceId, sdp),
             resolve: mark => directHost?.mark(mark),
+            // Read per boot: changing the preference never restarts the gateway.
+            preference: () => preferences.line,
             closeDevice: deviceId => directHost?.closeDevice(deviceId),
           },
           onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } },
@@ -585,6 +589,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           const next = { ...preferences }
           if (typeof input.autoStart === 'boolean') next.autoStart = input.autoStart
           if (input.mode !== undefined) { if (input.mode !== 'public' && input.mode !== 'lan') throw new Error('连接模式不正确。'); next.mode = input.mode }
+          // The line preference decides what a phone tries first; it never touches a live gateway.
+          if (input.line !== undefined) { if (input.line !== 'public' && input.line !== 'lan') throw new Error('线路偏好不正确。'); next.line = input.line }
           if (input.proxyMode !== undefined) { if (!isProxyMode(input.proxyMode)) throw new Error('代理方式不正确。'); next.proxyMode = input.proxyMode }
           if (input.publicUrl !== undefined) {
             if (!local) throw new Error('公网域名只能在本机面板修改。')
