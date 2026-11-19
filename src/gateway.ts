@@ -19,6 +19,7 @@ import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from '.
 import type { LanTlsMaterial } from './lan-tls.js'
 import { fingerprintGroupsOf } from './host-identity.js'
 import { PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL_V2, isPublicNodeProtocol, nodeIdentityOf, type PublicNodeDiscovery, type PublicNodeIdentityFields } from './public-node.js'
+import { DIRECT_MARK, DIRECT_SIGNAL_PATH } from './direct/protocol.js'
 
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** The paired browser asks this same-host route whether the LAN entry is the same computer. */
@@ -55,6 +56,16 @@ export interface GatewayOptions {
   onBootReport?: (report: Record<string, unknown>, device: { id: string; name: string } | undefined) => void
   /** Public identity document at {@link PUBLIC_NODE_PATH}; served before pairing, absent means "not advertised". */
   discovery?: PublicNodeDiscovery
+  /**
+   * The direct line. Its offer is answered here, and the bridge's mark is resolved back to the
+   * device it was bound to, so a direct request is admitted by the same rules as a remote one.
+   */
+  direct?: {
+    offer: (deviceId: string, sdp: string) => Promise<{ sessionId: string; sdp: string }>
+    resolve: (mark: string) => string | undefined
+    /** Every channel bound to this device ends; called when the device is revoked. */
+    closeDevice?: (deviceId: string) => void
+  }
 }
 export function safePath(path: string): boolean {
   if (!path.startsWith('/') || path.startsWith('//') || /[\x00-\x1f\\]/.test(path)) return false
@@ -146,7 +157,7 @@ export class Gateway {
     return () => { set!.delete(cancel); if (!set!.size) this.active.delete(deviceId) }
   }
   onlineIds(): string[] { return [...this.active.keys()] }
-  revoke(id: string): void { this.previews.revoke(id); for (const cancel of [...this.active.get(id) ?? []]) cancel(); this.active.delete(id) }
+  revoke(id: string): void { this.previews.revoke(id); this.options.direct?.closeDevice?.(id); for (const cancel of [...this.active.get(id) ?? []]) cancel(); this.active.delete(id) }
   private device(req: IncomingMessage): Device | undefined { return this.options.pairing.authenticate(cookie(req)) }
   private cookieHeader(credential: string, secure: boolean): string {
     // Trust forwarded protocol only after fixed-domain Host admission; frpc targets this private port.
@@ -298,7 +309,13 @@ export class Gateway {
       await this.previews.serve(preview, req, res)
       return
     }
-    const device = this.device(req)
+    // A direct request arrives over loopback from the bridge, which stamps the mark of the channel
+    // that carried it; everything else authenticates with the device's own cookie. A mark is only
+    // ever resolved through the live channel registry, so a forged header on a loopback request
+    // can only name a channel that already exists.
+    const mark = req.headers[DIRECT_MARK]
+    const marked = typeof mark === 'string' ? this.options.direct?.resolve(mark) : undefined
+    const device = marked ? this.options.pairing.find(marked) : this.device(req)
     if (!device) {
       if (req.headers.accept?.includes('text/html') && req.method === 'GET') {
         // A fallback landing without a LAN authorization is told to scan again on this same computer.
@@ -325,8 +342,21 @@ export class Gateway {
       json(res, 200, { sameHost: true, url: lan, node: identity, hostId: identity.id, fingerprint: identity.fingerprint })
       return
     }
+    // Answer a direct line's offer. The device comes from this request's own cookie, so an
+    // unpaired browser cannot create a channel at all.
+    if (url.pathname === DIRECT_SIGNAL_PATH) {
+      if (!this.options.direct) { json(res, 404, { error: '直连未启用。' }); return }
+      if (req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
+      if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
+      try {
+        const input = await body(req)
+        if (input.op !== 'offer') { json(res, 400, { error: '未知的直连操作。' }); return }
+        json(res, 200, await this.options.direct.offer(device.id, String(input.sdp ?? '')))
+      } catch (error) { json(res, 400, { error: error instanceof Error ? error.message : '直连协商失败。' }) }
+      return
+    }
     // Renew the browser expiry along with the durable 30-day idle authorization.
-    res.setHeader('set-cookie', this.cookieHeader(cookie(req)!, !!this.lanTls || publicRequest))
+    if (!marked) res.setHeader('set-cookie', this.cookieHeader(cookie(req)!, !!this.lanTls || publicRequest))
     const untrack = this.track(device.id, () => { req.destroy(); res.destroy() }); res.once('close', untrack)
     if (decodeURIComponent(url.pathname) === MANAGE_PATH) {
       if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return }

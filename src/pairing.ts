@@ -178,6 +178,8 @@ export class PairingService {
     else if (claim.state === 'rejected') this.pending.delete(id)
     return result
   }
+  /** One device row by id, for a caller that already proved who it is (a live direct channel). */
+  find(id: string): Device | undefined { this.expire(); return this.devices.get(id) }
   authenticate(credential: string | undefined): Device | undefined {
     this.expire()
     if (!credential || credential.length > 128) return undefined

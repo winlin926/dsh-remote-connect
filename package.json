@@ -81,11 +81,12 @@
     "qa:browser": "node scripts/browser-qa.mjs"
   },
   "dependencies": {
+    "acme-client": "5.4.0",
+    "https-proxy-agent": "^7.0.6",
     "qrcode": "^1.5.4",
     "undici": "^7.30.0",
-    "ws": "^8.18.3",
-    "acme-client": "5.4.0",
-    "https-proxy-agent": "^7.0.6"
+    "werift": "0.28.0",
+    "ws": "^8.18.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0 <5",

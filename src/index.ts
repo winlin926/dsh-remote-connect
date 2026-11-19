@@ -21,6 +21,7 @@ import { detectSystemProxy, type SystemProxy } from './system-proxy.js'
 import { readLanTls, type LanTlsConfig, type LanTlsMaterial } from './lan-tls.js'
 import { loadHostIdentity, fingerprintGroupsOf } from './host-identity.js'
 import { PUBLIC_NODE_PROTOCOL_V2, detectPublicNode, type PublicNodeDiscovery } from './public-node.js'
+import { DirectHost } from './direct/peer.js'
 
 /** Advertised by discovery; read from the installed package so it always matches the running build. */
 const NODE_VERSION = (() => {
@@ -258,6 +259,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     // The node record owns more than the old public domain: a `service` node is reached through an
     // outbound tunnel this computer starts, so one instance follows the current record and every
     // lifecycle change (start, stop, switch, remove) reconciles through this function.
+    // The direct line is built on first use: a Host that never enables it never loads werift.
+    let directHost: DirectHost | undefined
+    const direct = (): DirectHost => (directHost ??= new DirectHost({
+      port: () => gateway?.port ?? 0,
+      log: message => { try { ready.logger?.warn?.('[direct] ' + message) } catch { /* logging must never break a connection */ } },
+    }))
     let serviceNode: ServiceNode | undefined
     // A service node's QR is a one-time ticket the node signs for this Host; it expires on its own.
     let serviceQr: { url: string; expiresAt: number } | undefined
@@ -378,6 +385,8 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         publicNodes: { current: publicNodes?.current ?? null, list: publicNodeList, pendingReview: publicNodeList.some(item => item.pending) },
         serviceNode: service,
         phase, error: lastError, lastError, version: NODE_VERSION, gatewayPort: gateway?.port ?? 0, local,
+        // Read by the panel and by the acceptance harness: one row per live direct channel.
+        direct: directHost?.state() ?? [],
         expiresAt: identityBlocked ? undefined : record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
         links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
@@ -410,6 +419,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       stopMonitor()
       const current = gateway; gateway = undefined
       await current?.close()
+      // A direct channel points at the gateway that just closed; keeping it would only keep a
+      // phone on a line whose target no longer exists.
+      const channels = directHost; directHost = undefined
+      await channels?.close()
       await reconcileServiceNode()
     }
     shutdown = stop
@@ -451,12 +464,21 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
             return address ? `http://${address}:${gateway.port}` : undefined
           },
           websocketCompression: config.websocketCompression !== false,
+          // The direct line answers offers here and resolves its channels back to devices, so a
+          // direct request is admitted by the same rules as a request that came through a tunnel.
+          direct: {
+            offer: (deviceId, sdp) => direct().offer(deviceId, sdp),
+            resolve: mark => directHost?.mark(mark),
+            closeDevice: deviceId => directHost?.closeDevice(deviceId),
+          },
           onBootReport: (report, device) => { try { appendBootReport(join(storage, 'boot-reports.jsonl'), report, device) } catch { /* diagnostics must never break the gateway */ } },
         })
         const host = '0.0.0.0'
         next = create()
         // The port of last time first: a phone's bookmark or open tab then still points at this computer.
-        const wanted = mode === 'public' ? PUBLIC_PORT : config.gatewayPort || preferences.port || 0
+        // A configured port wins in both modes: the QA profile pins one, and a fixed domain still
+        // needs PUBLIC_PORT when nothing is configured.
+        const wanted = config.gatewayPort || (mode === 'public' ? PUBLIC_PORT : preferences.port || 0)
         try { await next.listen(host, wanted) }
         catch (failure) {
           const code = (failure as NodeJS.ErrnoException).code ?? ''
