@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PluginUpdate,
   UPDATE_CACHE_MS,
+  explainFailure,
   pickUpdate,
   resolvePluginManager,
   updateCard,
@@ -149,6 +150,13 @@ describe('check', () => {
     expect((await store(broken.face).update.check()).detail).toBe('连接被重置')
   })
 
+  it('turns a missing-runtime stack into one actionable line', async () => {
+    const stack = "node:internal/modules/cjs/loader:1575\nthrow err;\n^\nError: Cannot find module 'F:\\AIData\\DeepSeek\\resources\\runtime\\primary-runtime\\dependencies\\pnpm\\bin\\pnpm.mjs'\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1571:15)\n{ code: 'MODULE_NOT_FOUND' }"
+    const broken = manager({ bundles: async () => ({ ok: false, error: { message: stack } }) })
+    const snapshot = await store(broken.face).update.check()
+    expect(snapshot).toMatchObject({ phase: 'error', detail: 'DSH 安装缺少内置运行时（找不到 pnpm），请重装或修复 DSH 后重试。' })
+  })
+
   it('falls back to the Host version when the manager reports none', async () => {
     const { face } = manager({
       bundles: async () => ({ ok: true, value: [bundle({ version: undefined })] }),
@@ -265,6 +273,14 @@ describe('resolvePluginManager', () => {
     source = face
     await update.check(true)
     expect(update.snapshot().phase).toBe('available')
+  })
+})
+
+describe('explainFailure', () => {
+  it('keeps one readable line from a stack and passes short messages through', () => {
+    expect(explainFailure('boom\n    at run (x.ts:1:1)')).toBe('boom')
+    expect(explainFailure('权限不足')).toBe('权限不足')
+    expect(explainFailure('  ')).toBe('插件管理器没有返回原因。')
   })
 })
 

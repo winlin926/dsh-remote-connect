@@ -104,7 +104,7 @@ export class PluginUpdate {
     try { return this.options.manager() } catch { return null }
   }
   private fail(detail: string): void {
-    this.patch({ phase: 'error', busy: false, progress: null, confirm: false, message: '检查更新失败', detail, checkedAt: this.now() })
+    this.patch({ phase: 'error', busy: false, progress: null, confirm: false, message: '检查更新失败', detail: explainFailure(detail), checkedAt: this.now() })
   }
 
   /** Ask the manager for the newest compatible release. Cached results keep panel polls silent. */
@@ -206,7 +206,7 @@ export class PluginUpdate {
       return this.state
     }
     if (application === 'failed') {
-      this.patch({ phase: 'error', busy: false, progress: null, message: '更新失败', detail: answer.value.result.error?.message || '插件管理器没有完成安装。', checkedAt: this.now() })
+      this.patch({ phase: 'error', busy: false, progress: null, message: '更新失败', detail: explainFailure(answer.value.result.error?.message || '插件管理器没有完成安装。'), checkedAt: this.now() })
       return this.state
     }
     // `restart-required` is the normal outcome: the profile already points at the new bytes.
@@ -261,6 +261,14 @@ export interface UpdateCard {
   tone: UpdateTone
   /** Primary button label, or null when the card only reports state. */
   action: string | null
+}
+/** The manager's failure text can be a whole Node stack; the card has one line to give. */
+export function explainFailure(detail: string): string {
+  const text = detail.trim()
+  if (!text) return '插件管理器没有返回原因。'
+  if (/MODULE_NOT_FOUND/.test(text) && /pnpm/.test(text)) return 'DSH 安装缺少内置运行时（找不到 pnpm），请重装或修复 DSH 后重试。'
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  return lines.find(line => /error|错误|失败|超时|timeout/i.test(line)) ?? lines[0] ?? text
 }
 /** Everything the card renders, derived from the snapshot so the component stays dumb. */
 export function updateCard(snapshot: UpdateSnapshot): UpdateCard {
