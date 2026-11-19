@@ -76,6 +76,7 @@
     "test": "vitest run",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run build",
+    "preview:boot": "node scripts/preview-boot.mjs",
     "qa:host": "node scripts/launch-qa.mjs",
     "qa:browser": "node scripts/browser-qa.mjs"
   },

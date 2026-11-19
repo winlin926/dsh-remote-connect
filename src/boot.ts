@@ -1,5 +1,6 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
 import { localFilePath } from './local-file.js'
+import { createBootScreen } from './boot-screen.js'
 
 /** The same computer's LAN entry, injected only into a paired device's public page. */
 export interface LanFallback {
@@ -12,7 +13,7 @@ export interface LanFallback {
 }
 export interface BootContext { fallback: LanFallback }
 
-function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null): void {
+function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null, createScreen: typeof createBootScreen): void {
   const globals = window as unknown as Record<string, any>
   globals.__DSH_REMOTE_CONTROL__ = true
   // The Host owns the document language, theme colour and keyboard policy since 0.2.2: a phone
@@ -124,23 +125,6 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   }
   // -------------------------------------------------------------- startup progress
   const STORE_KEY = 'dsh-rc-boot-graph'
-  const SCREEN_CSS = `#dsh-rc-boot-screen{position:fixed;inset:0;z-index:2147483645;display:grid;place-items:center;padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom));background:Canvas;color:CanvasText;color-scheme:inherit;font:14px/1.5 system-ui,sans-serif;pointer-events:none;transition:background-color 160ms ease-out}
-#dsh-rc-boot-screen .content{display:flex;width:min(100%,340px);flex-direction:column;align-items:center;text-align:center;transition:opacity 160ms ease-out}
-#dsh-rc-boot-screen .whale{width:72px;height:72px;background:CanvasText;-webkit-mask:url('./favicon.svg') center/contain no-repeat;mask:url('./favicon.svg') center/contain no-repeat}
-#dsh-rc-boot-screen .eyebrow{margin-top:28px;color:GrayText;font-size:11px;letter-spacing:.16em;line-height:1;text-transform:uppercase}
-#dsh-rc-boot-screen .stage{margin-top:28px;font-size:20px;font-weight:500}
-#dsh-rc-boot-screen .count{min-height:20px;margin-top:8px;font-size:14px;font-variant-numeric:tabular-nums}
-#dsh-rc-boot-screen .detail{min-height:24px;margin-top:3px;color:GrayText;font-size:13px}
-#dsh-rc-boot-screen .track{position:relative;width:min(100%,280px);height:4px;margin-top:24px;overflow:hidden;border-radius:9px;background:color-mix(in srgb,CanvasText 12%,Canvas)}
-#dsh-rc-boot-screen .fill{position:absolute;inset:0;background:CanvasText;transform:scaleX(0);transform-origin:left;transition:transform 180ms ease-out}
-#dsh-rc-boot-screen .sweep{position:absolute;top:0;bottom:0;width:28%;background:linear-gradient(90deg,transparent,color-mix(in srgb,Canvas 70%,transparent),transparent);animation:dsh-rc-sweep 1.6s ease-in-out infinite}
-#dsh-rc-boot-screen .hint{margin-top:20px;color:GrayText;font-size:11px}
-#dsh-rc-boot-screen[data-ready=true]{background:transparent}
-#dsh-rc-boot-screen[data-ready=true] .track{display:none}
-#dsh-rc-boot-screen[data-fade=true] .content{opacity:0}
-#dsh-rc-boot-live{position:fixed;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-@keyframes dsh-rc-sweep{from{transform:translateX(-110%)}to{transform:translateX(470%)}}
-@media(prefers-reduced-motion:reduce){#dsh-rc-boot-screen .sweep{animation:none}#dsh-rc-boot-screen .fill,#dsh-rc-boot-screen .content{transition:none}}`
   type Graph = { rev: string; entries: Array<{ id: string; url: string }>; batches: Array<{ url: string; entries: string[] }> }
   /** The Host resolves `<package>/client` and its package onto one graph row. */
   const bare = (spec: string): string => (spec.endsWith('/client') ? spec.slice(0, -7) : spec)
@@ -151,12 +135,11 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   const registered = new Set<number>()
   const early: unknown[] = [], inFlight: string[] = []
   const timers: Record<string, ReturnType<typeof setTimeout> | undefined> = {}
-  const screen: Record<string, HTMLElement | null> = {}
+  let screen: ReturnType<typeof createScreen> | null = createScreen()
   const VERDICT: Record<string, string> = { same: '插件清单未变化', changed: '插件清单有变化', first: '首次核对完成', unavailable: '已读取本次插件清单', unknown: '无法核对插件变化' }
   let graph: Graph | null = null, check: 'pending' | 'same' | 'changed' | 'first' | 'unavailable' | 'unknown' = 'pending'
-  let counting: 'unknown' | 'watching' | 'absent' = 'unknown', wrapped = false, completed = false, said = ''
-  let recent: number[] = [], newest = -1, shownCheck = '', checkShownAt = 0
-  const write = (node: HTMLElement | null | undefined, text: string): void => { if (node && node.textContent !== text) node.textContent = text }
+  let counting: 'unknown' | 'watching' | 'absent' = 'unknown', wrapped = false, completed = false
+  let recent: number[] = [], newest = -1, shownCheck = '', holdingVerdict = false
   const node = (tag: string, cls: string, parent?: HTMLElement): HTMLElement => {
     const made = document.createElement(tag) as HTMLElement
     made.className = cls
@@ -215,39 +198,17 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     for (const registration of early.splice(0)) observe(registration)
     paint()
   }
-  const ensureScreen = (): void => {
-    if (screen.root) return
-    const style = document.createElement('style'); style.id = 'dsh-rc-boot-style'; style.textContent = SCREEN_CSS
-    const root = node('div', ''); root.id = 'dsh-rc-boot-screen'
-    const content = node('div', 'content', root)
-    node('div', 'whale', content)
-    const eyebrow = node('div', 'eyebrow', content); eyebrow.textContent = 'DSH'
-    const live = node('div', ''); live.id = 'dsh-rc-boot-live'
-    live.setAttribute('role', 'status'); live.setAttribute('aria-live', 'polite')
-    screen.root = root; screen.stage = node('div', 'stage', content); screen.count = node('div', 'count', content); screen.detail = node('div', 'detail', content)
-    screen.track = node('div', 'track', content); screen.fill = node('div', 'fill', screen.track); screen.sweep = node('div', 'sweep', screen.track); screen.live = live
-    const hint = node('div', 'hint', content); hint.textContent = '正在准备工作区'
-    const host = document.body ?? document.documentElement
-    host.append(live, root); document.head.append(style)
-  }
-  const removeScreen = (): void => { screen.root?.remove(); screen.live?.remove(); screen.root = null; screen.live = null }
-  /** One writer, so no two paths can disagree about what the page shows. */
+  const removeScreen = (): void => { screen?.remove(); screen = null }
   const paint = (): void => {
-    const root = screen.root
-    if (!root) return
+    if (!screen) return
     clearTimeout(timers.progress); timers.progress = undefined
-    const host = document.body ?? document.documentElement
-    if (root.parentElement !== host) host.append(root)
     if (recent.length) { newest = Math.min(...recent); recent = [] }
     const total = graph?.entries.length ?? 0, counted = counting === 'watching' && total > 0
     const done = registered.size, settled = check !== 'pending'
-    if (settled && shownCheck !== check) { shownCheck = check; checkShownAt = performance.now() }
-    const holding = settled && performance.now() < checkShownAt + 320
+    const holding = settled && (shownCheck !== check || holdingVerdict)
     let stage = '', count = '', detail = ''
-    const partial = completed && counted && done < total
     if (completed) {
-      stage = partial ? '已就绪 · 部分模块未加载' : '✓ 启动完成'
-      detail = partial ? done + ' / ' + total + ' 个模块已就绪' : '工作区已就绪'
+      stage = '✓ 启动完成'; detail = '工作区已就绪'
     } else if (phase === 'loading' || phase === 'initializing') {
       stage = phase === 'loading' ? '正在加载模块' : '正在初始化插件'
       if (counted) count = done + ' / ' + total + ' 个模块'
@@ -258,17 +219,28 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
       else detail = '正在接管工作区…'
     } else if (!settled) { stage = '正在检查插件变化…'; detail = '正在读取插件清单…'; if (graph) count = total ? '共 ' + total + ' 个模块' : '无需加载模块' }
     else { stage = VERDICT[check] ?? '无法核对插件变化'; if (graph) count = total ? '共 ' + total + ' 个模块' : '无需加载模块' }
-    write(screen.stage, stage); write(screen.count, count); write(screen.detail, detail)
-    if (screen.track) screen.track.style.display = completed || (graph && !total) ? 'none' : 'block'
-    if (screen.fill) { screen.fill.style.display = counted && !completed ? 'block' : 'none'; screen.fill.style.transform = 'scaleX(' + (counted ? done / total : 0) + ')' }
-    if (screen.sweep) { screen.sweep.style.display = completed ? 'none' : 'block'; screen.sweep.style.left = counted ? done / total * 100 + '%' : '0%' }
-    root.dataset.ready = completed ? 'true' : 'false'
-    // One hidden live region: stages and the verdict are spoken, a module name never is.
-    const spoken = (settled && VERDICT[check] !== stage ? VERDICT[check] + '。' : '') + stage
-    if (screen.live && spoken !== said) { said = spoken; screen.live.textContent = spoken }
+    const announcement = !completed && holding && VERDICT[check] !== stage ? VERDICT[check] + '。' + stage : stage
+    screen.paint({ stage, count, detail, complete: completed, announcement,
+      progress: completed || (graph && !total) ? null : counted && (phase === 'loading' || phase === 'initializing') ? done / total : 'pending' })
+    if (settled && shownCheck !== check) {
+      shownCheck = check
+      holdingVerdict = true
+      clearTimeout(timers.verdict)
+      const shown = check
+      const displayed = () => {
+        if (!screen || check !== shown) return
+        timers.verdict = setTimeout(() => {
+          holdingVerdict = false
+          if (result === 'ready') showComplete()
+          else paint()
+        }, 320)
+      }
+      // A busy parser may not paint between setting the text and mounting the workspace.
+      window.requestAnimationFrame(() => window.requestAnimationFrame(displayed))
+    }
   }
   const scheduleProgress = (): void => {
-    if (!screen.root || timers.progress !== undefined) return
+    if (!screen || timers.progress !== undefined) return
     timers.progress = setTimeout(paint, 80)
   }
   /** Wrap the HTML facade once: its queue holds the parser batch, its live sink every later bundle. */
@@ -291,20 +263,17 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     }
     wrapped = true
   }
+  const showComplete = (): void => {
+    if (completed || !screen) return
+    completed = true; paint()
+    timers.hold = setTimeout(() => { screen?.fade(); timers.fade = setTimeout(removeScreen, 160) }, 440)
+  }
   const finishReady = (): void => {
     if (result === 'ready') return
     phase = result = 'ready'; observer.disconnect(); scheduleReport(100); remember()
-    clearTimeout(timers.check)
+    screen?.hideControls()
     if (check === 'pending') { check = 'unknown'; paint() }
-    const wait = Math.max(0, checkShownAt + 320 - performance.now())
-    timers.reveal = setTimeout(() => {
-      completed = true; paint()
-      timers.hold = setTimeout(() => {
-        if (!screen.root) return
-        screen.root.dataset.fade = 'true'
-        timers.fade = setTimeout(removeScreen, 160)
-      }, 440)
-    }, wait)
+    if (!holdingVerdict) showComplete()
   }
   const finishFailed = (boot: HTMLElement): void => {
     if (result === 'failed') return
@@ -325,6 +294,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     retry.onclick = () => { retry.disabled = true; location.reload() }
   }
   const updateBoot = (): void => {
+    screen?.mount()
     watchLoader()
     if (!graph) adopt(readGraph((window as unknown as Record<string, any>).__DSH_BOOT__))
     if (result === 'ready' || result === 'failed') return
@@ -346,10 +316,9 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
       : completedResources ? 'initializing' : 'checking'
     scheduleProgress()
   }
-  ensureScreen()
   paint()
   // A Host that never publishes a graph leaves nothing to compare, and the reader must be told.
-  setTimeout(() => { if (check === 'pending' && !graph) { check = 'unknown'; paint() } }, 3000)
+  timers.check = setTimeout(() => { if (check === 'pending') { check = 'unknown'; paint() } }, 3000)
   const observer = new MutationObserver(updateBoot)
   observer.observe(document.documentElement, { childList: true, subtree: true })
   const previousLoad = typeof transport.loadBundle === 'function' ? transport.loadBundle.bind(transport) as (url: string) => Promise<void> : undefined
@@ -548,7 +517,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
 }
 /** The Host reads this same string every request, so it stays one self-contained function. */
 export function bootScript(context?: BootContext): string {
-  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)});`
+  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()});`
 }
 /** The boot script is a same-origin file, not an inline script, so a Host CSP cannot block it. */
 export const BOOT_PATH = '/rc/boot.js'

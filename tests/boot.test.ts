@@ -113,12 +113,13 @@ function hostFacade() {
 function bootPage(
   crypto: Record<string, unknown> = { getRandomValues: (array: Uint8Array) => array },
   transport: Record<string, unknown> = {},
-  session: { context?: BootContext; search?: string; href?: string; boot?: unknown; loader?: unknown; store?: unknown } = {},
+  session: { context?: BootContext; search?: string; href?: string; boot?: unknown; loader?: unknown; store?: unknown; deferPaint?: boolean } = {},
 ) {
   StandInSocket.all = []
   const requests: Array<{ url: string; body?: string; method?: string }> = []
   const waiting: Array<(response: Response) => void> = []
   const clock = { now: 0 }
+  const frames: Array<() => void> = []
   const timers: Array<{ delay: number; due: number; run: () => void; cancelled: boolean }> = []
   const listeners = new Map<string, Array<(event: unknown) => void>>()
   const replacements: string[] = []
@@ -129,6 +130,7 @@ function bootPage(
     addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, [...listeners.get(type) ?? [], listener]) },
     dispatchEvent: () => true, WebSocket: StandInSocket, EventSource: NativeEventSource, __DSH_TRANSPORT__: transport,
     __DSH_BOOT__: session.boot, __ModuleLoader__: session.loader, localStorage: session.store,
+    requestAnimationFrame: (run: () => void) => { if (session.deferPaint) frames.push(run); else run() },
     history: { replaceState: (_state: unknown, _title: string, url: string) => { historyReplacements.push(url) } },
   }
   const elements: StandInElement[] = []
@@ -169,7 +171,7 @@ function bootPage(
   const stored = session.store as { getItem?: (key: string) => string | null; setItem?: (key: string, value: string) => void } | undefined
   return {
     window, NativeEventSource, requests, timers, sockets: StandInSocket.all, document, root, createElement, mountBoot, advance, clock,
-    mutate: () => { mutation?.() }, reloads: () => reloads, replacements, historyReplacements,
+    mutate: () => { mutation?.() }, frame: () => frames.splice(0).forEach(run => run()), reloads: () => reloads, replacements, historyReplacements,
     store: stored,
     fire: (type: string, event: unknown) => { for (const listener of listeners.get(type) ?? []) listener(event) },
     report: () => { advance(8000); return JSON.parse(requests.filter(request => request.url === '/rc/boot-report').at(-1)!.body!) },
@@ -212,13 +214,34 @@ it('shows the full-screen startup scene outside the root and leaves pointer inpu
   const style = f.document.head.children.find(node => node.id === 'dsh-rc-boot-style')!.textContent
   expect(style).toContain('position:fixed;inset:0')
   expect(style).toContain('background:Canvas;color:CanvasText')
-  expect(style).toContain("mask:url('./favicon.svg')")
+  expect(style).toContain("mask:url('/favicon.svg')")
+  expect(style).toContain('color-scheme:light dark')
   expect(style).toContain('pointer-events:none')
   f.mountBoot()
   expect(lines(f).screen!.parentElement).toBe(f.document.body)
   expect(f.root.children).toHaveLength(1)
-  expect(byClass(screenOf(f), 'fill')!.style.display).toBe('none')
-  expect(byClass(screenOf(f), 'sweep')!.style.display).toBe('block')
+  expect(byClass(screenOf(f), 'track')!.attributes['data-pending']).toBe('true')
+  expect(byClass(screenOf(f), 'fill')!.style.width).toBe('')
+})
+
+it('switches boot-only themes, restores the device preference, and removes controls at app mount', () => {
+  const store = storage(new Map())
+  const f = bootPage(undefined, {}, { store })
+  const screen = screenOf(f)!
+  const [system, light, dark] = byClass(screen, 'theme')!.children
+  expect(system!.attributes['aria-pressed']).toBe('true')
+  dark!.onclick!()
+  expect(dark!.attributes['aria-pressed']).toBe('true')
+  expect(screen.attributes['data-theme']).toBe('dark')
+  const restored = bootPage(undefined, {}, { store })
+  expect(screenOf(restored)!.attributes['data-theme']).toBe('dark')
+  light!.onclick!()
+  expect(screen.attributes['data-theme']).toBe('light')
+  system!.onclick!()
+  expect(screen.attributes['data-theme']).toBe('system')
+  f.mountBoot()
+  f.root.replaceChildren(f.createElement('main')); f.mutate()
+  expect(byClass(screen, 'theme')).toBeUndefined()
 })
 
 it('states the stage without a count when the Host published no graph, and keeps the reload with its own error area', () => {
@@ -255,6 +278,7 @@ it('counts the parser batch the HTML facade queued before the graph row arrived'
   const loading = f.window.__DSH_TRANSPORT__.loadBundle('/plugins/??one/client.js&rev=r1')
   f.advance(80)
   expect(lines(f).count).toBe('2 / 3 个模块')
+  expect(byClass(screenOf(f), 'fill')!.style.width).toBe(2 / 3 * 100 + '%')
   createElementScript(f).fire('load')
   await loading
 })
@@ -346,7 +370,7 @@ it('names the graph size and no denominator when the loader interface does not m
   expect(lines(f).count).toBe('共 2 个模块')
 })
 
-it('keeps the verdict for 320ms and the completion for 600ms after a fast mount', () => {
+it('keeps the verdict for 320ms, then shows only the completion for 440ms before fading', () => {
   const map = new Map<string, string>()
   const f = bootPage(undefined, {}, { boot: bootGraph('r1', ['one']), store: storage(map) })
   f.mountBoot()
@@ -356,10 +380,12 @@ it('keeps the verdict for 320ms and the completion for 600ms after a fast mount'
   expect(lines(f).stage).toBe('首次核对完成')
   f.advance(1)
   expect(lines(f).stage).toBe('✓ 启动完成')
-  f.advance(599)
   expect(lines(f).screen!.attributes['data-ready']).toBe('true')
   expect(byClass(lines(f).screen, 'track')!.style.display).toBe('none')
   expect(lines(f).detail).toBe('工作区已就绪')
+  expect(lines(f).count).toBe('')
+  f.advance(439)
+  expect(lines(f).screen!.attributes['data-fade']).toBeUndefined()
   f.advance(1)
   expect(lines(f).screen!.attributes['data-fade']).toBe('true')
   f.advance(160)
@@ -368,13 +394,16 @@ it('keeps the verdict for 320ms and the completion for 600ms after a fast mount'
 })
 
 it('holds a late plugin-check verdict for 320ms from when it first appears', () => {
-  const f = bootPage(undefined, {}, { store: storage(new Map()) })
+  const f = bootPage(undefined, {}, { store: storage(new Map()), deferPaint: true })
   f.advance(500)
   f.window.__DSH_BOOT__ = bootGraph('r1', ['one'])
   f.mutate()
   expect(lines(f).stage).toBe('首次核对完成')
   const { boot } = f.mountBoot()
   f.root.replaceChildren(f.createElement('main')); f.mutate()
+  f.advance(1000)
+  expect(lines(f).stage).toBe('首次核对完成')
+  f.frame(); f.frame()
   f.advance(319)
   expect(lines(f).stage).toBe('首次核对完成')
   f.advance(1)
@@ -382,11 +411,11 @@ it('holds a late plugin-check verdict for 320ms from when it first appears', () 
   expect(boot.textContent).toContain('Loading plugins')
 })
 
-it('turns the sweep and the pulse off for a reduced-motion reader and keeps the dwell times', () => {
+it('uses a stationary indeterminate marker and no transitions for reduced motion', () => {
   const script = bootScript()
   expect(script).toContain('@media(prefers-reduced-motion:reduce)')
   expect(script).toContain('animation:dsh-rc-sweep 1.6s ease-in-out infinite')
-  expect(script).toContain('transition:transform 180ms ease-out')
+  expect(script).toContain('transition:width 180ms ease-out')
   expect(script).toContain('pointer-events:none')
   expect(script).toContain("aria-live")
   expect(script).toContain('background:Canvas;color:CanvasText')
