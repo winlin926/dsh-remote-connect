@@ -1,7 +1,7 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
 import { localFilePath } from './local-file.js'
 import { createBootScreen } from './boot-screen.js'
-import { createDirectLink } from './boot-direct.js'
+import { createDirectLink, directRuntimeSource } from './boot-direct.js'
 
 /** The same computer's LAN entry, injected only into a paired device's public page. */
 export interface LanFallback {
@@ -42,11 +42,16 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     signalPath: direct.signal,
     fetch: (url: string, init?: RequestInit) => originalFetch(url, init),
     WebSocket: window.WebSocket,
-    setTimeout, clearTimeout, setInterval, clearInterval,
+    // Bound: the browser's timer functions throw "Illegal invocation" when called off the window.
+    setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+    clearTimeout: (handle: number) => clearTimeout(handle),
+    setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
+    clearInterval: (handle: number) => clearInterval(handle),
     random: () => String(crypto.randomUUID?.() ?? Math.random()),
     baseUrl: () => location.href,
     preference: () => direct.preference,
     onState: state => { if (state.ready) notice('已启用直连线路'); else if (state.reason) notice(state.reason) },
+    log: line => { try { console.debug('[rc-direct] ' + line) } catch { /* a missing console is not a failure */ } },
   }) : undefined
   /** Every same-origin call the app makes: uploads, streaming and previews take the live line. */
   const routedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -55,6 +60,8 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     return originalFetch(input, init)
   }
   globals.__DSH_FILE_UPLOAD__ = { fetch: routedFetch }
+  // Read-only diagnostics: a phone that cannot reach its own line is otherwise undebuggable.
+  if (link) globals.__DSH_DIRECT__ = { state: () => link.state(), ready: () => link.ready }
   if (link) setTimeout(() => { void link.start() }, 0)
   function notice(message: string): void {
     const existing = document.getElementById('dsh-rc-notice')
@@ -544,7 +551,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
 }
 /** The Host reads this same string every request, so it stays one self-contained function. */
 export function bootScript(context?: BootContext): string {
-  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()},${createDirectLink.toString()});`
+  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()},${directRuntimeSource()});`
 }
 /** The boot script is a same-origin file, not an inline script, so a Host CSP cannot block it. */
 export const BOOT_PATH = '/rc/boot.js'

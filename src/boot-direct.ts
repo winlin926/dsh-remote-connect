@@ -11,6 +11,8 @@ export interface DirectLinkOptions {
   signalPath: string
   /** Called with a short Chinese reason when the line drops; the page decides what to show. */
   onState?: (state: { ready: boolean; reason?: string }) => void
+  /** Diagnostics only: never user-visible copy. */
+  log?: (line: string) => void
   fetch: (input: string, init?: RequestInit) => Promise<Response>
   WebSocket: typeof WebSocket
   setTimeout: (fn: () => void, ms: number) => any
@@ -120,6 +122,8 @@ export function createDirectLink(options: DirectLinkOptions) {
   let sessionId = ''
   let ready = false
   let closed = false
+  let retry: any
+  let attempt = 0
   let probing: any
   let failures = 0
   let slow = 0
@@ -239,8 +243,17 @@ export function createDirectLink(options: DirectLinkOptions) {
     try { send('ping', 'probe', controlBytes({ at })) } catch { failures += 1; if (failures >= DIRECT_SWITCH_AFTER_TIMEOUTS && ready) { ready = false; healthySince = 0; report('直连通道已关闭。') } }
   }
 
+  /** A phone that loses its line must come back on its own; the wait doubles and stops at 30s. */
+  function schedule(): void {
+    if (closed || retry) return
+    const wait = Math.min(30_000, 1_000 * Math.pow(2, attempt))
+    attempt += 1
+    retry = options.setTimeout(() => { retry = undefined; void connect() }, wait)
+  }
+
   async function connect(): Promise<void> {
     if (closed || peer) return
+    options.log?.('开始建立直连线路')
     const Connection = (globalThis as any).RTCPeerConnection
     if (!Connection) { report('该浏览器不支持直连线路。'); return }
     const local: any = new Connection({ iceServers: [] })
@@ -261,7 +274,11 @@ export function createDirectLink(options: DirectLinkOptions) {
       timer = options.setInterval(probe, 5_000)
     }
     dataChannel.onopen = onOpen
-    dataChannel.onclose = () => { if (ready) { ready = false; healthySince = 0; report('直连通道已断开。') } }
+    dataChannel.onclose = () => {
+      if (ready) { ready = false; healthySince = 0; report('直连通道已断开。') }
+      peer = undefined; channel = undefined
+      schedule()
+    }
     const gather = new Promise<void>(resolve => {
       if (local.iceGatheringState === 'complete') return resolve()
       const check = () => { if (local.iceGatheringState === 'complete') { local.removeEventListener('icegatheringstatechange', check); resolve() } }
@@ -278,7 +295,9 @@ export function createDirectLink(options: DirectLinkOptions) {
     if (!answer.ok) throw new Error('直连协商被拒绝（HTTP ' + answer.status + '）。')
     const data = await answer.json()
     sessionId = typeof data?.sessionId === 'string' ? data.sessionId : ''
+    options.log?.('收到应答 ' + sessionId)
     await local.setRemoteDescription({ type: 'answer', sdp: String(data?.sdp ?? '') })
+    options.log?.('已套用应答')
     // Not every runtime fires `onopen` as a property: watching the state covers both, once.
     const watch = () => { if (dataChannel.readyState === 'open') onOpen(); else if (!opened && !closed) options.setTimeout(watch, 100) }
     watch()
@@ -292,11 +311,17 @@ export function createDirectLink(options: DirectLinkOptions) {
     get latency(): number { return lastLatency },
     state(): DirectLineState { return { ready, line: this.line, probes: failures, failures, reason: ready ? undefined : undefined } as DirectLineState },
     async start(): Promise<void> {
-      try { await connect() } catch (error) { report(error instanceof Error ? error.message : '直连线路建立失败。') }
+      try { await connect() } catch (error) {
+        options.log?.('直连建立失败：' + (error instanceof Error ? error.message : String(error)))
+        report(error instanceof Error ? error.message : '直连线路建立失败。')
+        peer = undefined; channel = undefined
+        schedule()
+      }
     },
     stop(): void {
       closed = true
       if (timer) options.clearInterval(timer)
+      if (retry) options.clearTimeout(retry)
       if (probing) options.clearTimeout(probing)
       for (const key of [...calls.keys()]) fail(key, new Error('直连已关闭。'))
       sockets.clear()
@@ -359,3 +384,15 @@ export function createDirectLink(options: DirectLinkOptions) {
   }
 }
 
+/**
+ * The runtime as one expression the boot script can carry. Every helper the client closes over has
+ * to travel with it: the page gets exactly this string and nothing else.
+ */
+export function directRuntimeSource(): string {
+  return '(function(){' + 'const MAX_FRAME=' + 16 * 1024 + ',TYPES=' + JSON.stringify(TYPES) + ',ID_OK=' + String(ID_OK) + ';' +
+    'const textEncoder=new TextEncoder(),textDecoder=new TextDecoder();' +
+    'const DIRECT_SWITCH_AFTER_TIMEOUTS=' + DIRECT_SWITCH_AFTER_TIMEOUTS + ';' +
+    [encodeDirect, decodeDirect, controlBytes, readControlBytes, chooseLine].map(fn => fn.toString() + ';').join('\n') + '\n' +
+    'var DirectSocket=' + String(DirectSocket) + ';\n' + createDirectLink.toString() + ';\n' +
+    'return createDirectLink;})()'
+}
