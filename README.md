@@ -10,9 +10,9 @@
   简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a> · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm 包</a> · <a href="https://github.com/winlin926/dsh-carry/releases">发行记录</a>
 </p>
 
-离开电脑时，正在运行的 DeepSeek Harness（DSH）仍可在手机浏览器里打开。扫码配对后，你可以接着聊、决定是否批准工具请求，也能点开电脑工作区里的文件或 HTML 页面。手机使用电脑上同一个 DSH 实例，会话和工具界面由宿主提供。
+`dsh-carry` 让你通过手机浏览器远程使用电脑上运行的 DeepSeek Harness（DSH）。扫码配对后，可以继续会话、审批工具请求，并查看工作区文件或 HTML 预览。手机连接的是电脑上的 DSH 实例，可用会话和工具由宿主提供。
 
-## 安装与首次连接
+## 📦 安装与首次连接
 
 在要远程访问的电脑上安装插件。**桌面版**在 DSH 的「插件 → 添加插件」中搜索 `@winlin926/dsh-carry`。**使用 `dsh web`** 时，运行：
 
@@ -28,7 +28,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="电脑端远程控制面板，显示配对二维码和已授权设备列表" /></p>
 
-## 手机上能做什么
+## 📱 手机上能做什么
 
 | 场景 | 在手机上操作 |
 | --- | --- |
@@ -53,14 +53,14 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 </details>
 
-## 离开同一 Wi-Fi 后怎么连？
+## 🌐 离开同一 Wi-Fi 后怎么连？
 
 同一局域网内，手机可以直连电脑。换成移动数据或其他 Wi-Fi 时，可使用固定域名的 HTTPS 隧道网关，或自行部署仓库里的 `remote-server` 中继节点。公网配对时，在手机与电脑上核对主机指纹，确认连接的是自己的电脑。
 
-**只批准你信任的设备。** 已配对的手机拥有接近本机的操作权限。公网节点会终止 TLS，运营者可以看到转发内容。这条链路没有端到端加密，请使用自己部署或信任的节点。项目不运营公共节点。
+**🔒 只批准你信任的设备。** 已配对的手机拥有接近本机的操作权限。公网节点会终止 TLS，运营者可以看到转发内容。这条链路没有端到端加密，请使用自己部署或信任的节点。项目不运营公共节点。
 
 [自托管部署指南](docs/self-host.md) · [公网节点协议](docs/public-node.md) · [插件能力与宿主接口](docs/features.md)
 
-## 致谢与许可
+## 📄 致谢与许可
 
 本项目基于 [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control) 维护，保留原作者署名，采用 [MIT 许可证](LICENSE)。

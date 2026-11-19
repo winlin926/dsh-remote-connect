@@ -10,9 +10,9 @@
   <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm package</a> · <a href="https://github.com/winlin926/dsh-carry/releases">Releases</a>
 </p>
 
-When you step away from your computer, you can still reach its running DeepSeek Harness (DSH) instance from your phone browser. Scan a QR code to pair, then continue a conversation, review a tool request, or open an HTML page from your workspace. The phone uses the computer’s own DSH interface, so the available sessions and tools depend on the host.
+`dsh-carry` lets you use the DeepSeek Harness (DSH) instance running on your computer from a phone browser. Scan a QR code to pair, then continue a conversation, approve tool requests, and view workspace files or HTML previews. Your phone connects to the computer’s DSH instance, so available sessions and tools depend on the host.
 
-## Install and pair your phone
+## 📦 Install and pair your phone
 
 Install the plugin on the computer you want to reach. In the **DSH desktop app**, open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. For **`dsh web`**, run this command.
 
@@ -28,7 +28,7 @@ The desktop app and `dsh web` keep separate plugin profiles. If the Remote Contr
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="Remote Control panel on the computer with a pairing QR code and a list of authorized devices" /></p>
 
-## What you can do from your phone
+## 📱 What you can do from your phone
 
 | When… | On your phone |
 | --- | --- |
@@ -53,14 +53,14 @@ The desktop app and `dsh web` keep separate plugin profiles. If the Remote Contr
 
 </details>
 
-## Connecting from another network
+## 🌐 Connecting from another network
 
 On the same LAN, the phone can connect directly to your computer. For mobile data or another Wi-Fi network, use an HTTPS tunnel gateway with a fixed domain or deploy the included `remote-server` relay. During public pairing, compare the host fingerprint on both devices to confirm you have reached your computer.
 
-**Approve only devices you trust.** A paired phone has privileges close to local access. Public nodes terminate TLS, so their operators can read forwarded content. Choose a node you run or an operator you trust. The project does not operate a public relay.
+**🔒 Approve only devices you trust.** A paired phone has privileges close to local access. Public nodes terminate TLS, so their operators can read forwarded content. Choose a node you run or an operator you trust. The project does not operate a public relay.
 
 [Self-hosting guide](docs/self-host.md) · [Public node protocol](docs/public-node.md) · [Plugin capabilities and host interfaces](docs/features.md) (guides in Chinese)
 
-## Credits and license
+## 📄 Credits and license
 
 Based on [copylee711/dsh-remote-control](https://github.com/copylee711/dsh-remote-control), with the original attribution preserved. Released under the [MIT License](LICENSE).
