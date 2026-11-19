@@ -7,6 +7,12 @@
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/31a9e5729812e46646e2b1ca02883d701ed95477/assets/dsh-plugin.svg" alt="DSH | Plugin" />
 </p>
 <p align="center">
+  <a href="https://github.com/winlin926/dsh-carry/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/winlin926/dsh-carry/ci.yml?branch=main&label=build" alt="build" /></a>
+  <a href="https://www.npmjs.com/package/@winlin926/dsh-carry"><img src="https://img.shields.io/npm/v/@winlin926/dsh-carry?label=npm" alt="npm" /></a>
+  <a href="https://github.com/winlin926/dsh-carry/blob/main/package.json"><img src="https://img.shields.io/node/v/@winlin926/dsh-carry?label=node" alt="node" /></a>
+  <a href="https://github.com/winlin926/dsh-carry/blob/main/LICENSE"><img src="https://img.shields.io/github/license/winlin926/dsh-carry?label=license" alt="license" /></a>
+</p>
+<p align="center">
   <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English · <a href="https://www.npmjs.com/package/@winlin926/dsh-carry">npm package</a> · <a href="https://github.com/winlin926/dsh-carry/releases">Releases</a>
 </p>
 
