@@ -29,7 +29,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 3. 打开一个已有会话就能用了。想收回权限，去电脑的已授权设备列表里删掉那台手机。
 
 <details>
-<summary>查看远程控制面板截图</summary>
+<summary>查看插件面板截图</summary>
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="电脑端远程控制面板，显示配对二维码和已授权设备列表" /></p>
 
