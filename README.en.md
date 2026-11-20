@@ -28,7 +28,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 The desktop app and `dsh web` keep separate plugin profiles. If the Remote Control panel is missing, check which profile you installed the plugin in.
 
-1. Connect your phone and computer to the same Wi-Fi. On the computer, open **Remote Control** (远程控制), and enable the connection.
+1. Put your phone and computer on the same LAN. On the computer, open **Remote Control** (远程控制), and enable the connection.
 2. Scan the QR code with your phone. Check the device shown on the computer and approve the pairing request.
 3. Open an existing session in your phone browser. To revoke access later, remove the phone from the authorized devices on your computer.
 

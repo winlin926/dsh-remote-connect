@@ -48,7 +48,7 @@ pnpm qa:browser
 
 ## 双线路验收
 
-用隔离 DSH 启动测试网关，将 `scripts/public-entry-double.mjs` 的 `--target` 指向该网关。手机通过 ADB reverse 打开测试入口，并使用面板产生的配对票据。安卓真机直连通过同一 Wi-Fi 建立，测试入口通过 USB 转发，方便分别切断两条线路。
+用隔离 DSH 启动测试网关，将 `scripts/public-entry-double.mjs` 的 `--target` 指向该网关。手机通过 ADB reverse 打开测试入口，并使用面板产生的配对票据。安卓真机直连通过局域网建立，测试入口通过 USB 转发，方便分别切断两条线路。
 
 1. 选择公网优先，完成一次设备授权并打开一个会话。检查 Host 已建立备用直连。
 2. 停止测试入口。切到直连后在当前会话发送消息，并打开工作区预览。记录 Host 的直连请求计数。

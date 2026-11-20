@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Remote Control (dsh-carry)",
-    "description": "Continue a DSH session from a phone browser: scan to pair, then send messages, answer tool approvals and preview files over the same Wi-Fi or a self-hosted public node."
+    "description": "Continue a DSH session from a phone browser: scan to pair, then send messages, answer tool approvals and preview files over the same LAN or a self-hosted public node."
   }
 }
