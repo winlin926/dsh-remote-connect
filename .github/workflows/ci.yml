@@ -25,6 +25,11 @@ jobs:
       - run: npm --prefix remote-server run typecheck
       - run: pnpm test
       - run: npm --prefix remote-server test
+      - name: Publish test count badge
+        if: runner.os == 'Linux' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: node scripts/publish-test-count.mjs
       - run: pnpm build
       - run: npm pack --dry-run --ignore-scripts --json > package-manifest.json
       - run: node scripts/check-package.mjs package-manifest.json
