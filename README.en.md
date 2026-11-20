@@ -16,6 +16,8 @@
 
 `dsh-carry` lets you use the DeepSeek Harness (DSH) instance running on your computer from a phone browser. Scan a QR code to pair, then continue a conversation, approve tool requests, and view workspace files or HTML previews. Your phone connects to the computer’s DSH instance, so available sessions and tools depend on the host.
 
+**Setting up public access from scratch?** Follow the [SakuraFrp public-access walkthrough](docs/public-access-sakura.md) (in Chinese), from buying a domain to connecting your phone.
+
 ## 📦 Install and pair your phone
 
 Install the plugin on the computer you want to reach. In the **DSH desktop app**, open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. For **`dsh web`**, run this command.
