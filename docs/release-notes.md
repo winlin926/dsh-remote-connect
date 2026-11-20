@@ -26,6 +26,6 @@
 
 ## 升级
 
-`0.7.0` 的 `.tgz` 安装包可在本 Release 的附件中下载，暂未发布到 npm。安装后请重启 DSH。
+`0.7.0` 已发布到 npm，可以直接升级：`dsh plugin --profile <你的 profile> add @winlin926/dsh-carry@latest`，也可以在 DSH 的插件页点更新。`.tgz` 安装包仍可在本 Release 的附件中下载。安装后请重启 DSH。
 
 旧版自托管节点可以继续走公网。通过自托管节点使用双线路切换，需要同时升级插件和节点。
