@@ -74,7 +74,6 @@
     "typecheck": "tsc --noEmit",
     "build": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\" && tsc && tsdown",
     "test": "vitest run",
-    "test:badge": "node scripts/publish-test-count.mjs",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run build",
     "preview:boot": "node scripts/preview-boot.mjs",
