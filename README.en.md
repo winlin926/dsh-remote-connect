@@ -17,6 +17,11 @@
 
 **Setting up public access from scratch?** Follow the [SakuraFrp public-access walkthrough](docs/public-access-sakura.md) (in Chinese), from buying a domain to connecting your phone.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/demo.gif" width="320" alt="Screen recording: answering a question card, watching a tool run, and opening an HTML preview on a phone" />
+</p>
+<p align="center">Recorded on a phone: answer a question card, watch a tool run, open an HTML preview (26 s)</p>
+
 ## 📦 Install and pair your phone
 
 Install the plugin on the computer you want to reach. In the **DSH desktop app**, open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. For **`dsh web`**, run this command.
