@@ -14,33 +14,33 @@
   <a href="https://github.com/winlin926/dsh-carry/blob/main/README.md">简体中文</a> · English
 </p>
 
-`dsh-carry` lets you use the DeepSeek Harness (DSH) instance running on your computer from a phone browser. Scan a QR code to pair, then continue a conversation, approve tool requests, and view workspace files or HTML previews. Your phone connects to the computer’s DSH instance, so available sessions and tools depend on the host. Version 0.7.0 adds a verified LAN/public dual route: one QR code chooses the available entry point, public pairing shows the host fingerprint first, and an established session can switch between verified routes.
+`dsh-carry` is a DSH plugin. Scan a QR code from your phone to pair, then pick up any session on your computer — continue conversations, approve tool requests, and preview workspace files or HTML pages. Since 0.7.0, LAN and public routes share one QR code; the connection auto-selects the best entry and fails over without re-pairing.
 
 ## 📦 Install and pair your phone
 
-[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) provides a `.tgz` package. The npm install methods below do not install 0.7.0 yet.
+[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) provides a `.tgz` package; the npm command below still installs 0.6.5.
 
-Install the plugin on the computer you want to reach. In the **DSH desktop app**, open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. For **`dsh web`**, run this command.
+Install the plugin on the computer you want to reach. **DSH desktop app**: open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. **`dsh web`**:
 
 ```sh
 dsh plugin --profile web add @winlin926/dsh-carry@latest
 ```
 
-The desktop app and `dsh web` keep separate plugin profiles. If the Remote Control panel is missing, check which profile you installed the plugin in.
+The desktop app and `dsh web` have separate plugin directories. If the Remote Control panel is missing, check which profile the plugin ended up in.
 
-1. Put your phone and computer on the same LAN. On the computer, open **Remote Control** (远程控制), and enable the connection.
-2. Scan the QR code with your phone. Check the device shown on the computer and approve the pairing request.
-3. Open an existing session in your phone browser. To revoke access later, remove the phone from the authorized devices on your computer.
+1. Get your phone and computer on the same LAN. Open **Remote Control** on the computer and enable the connection.
+2. Scan the QR code on your phone; approve the device on your computer.
+3. Open an existing session — you're in. To revoke access later, remove the phone from the authorized-device list on the computer.
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="Remote Control panel on the computer with a pairing QR code and a list of authorized devices" /></p>
 
 ## 📱 What you can do from your phone
 
-| When… | On your phone |
+| When… | What to do |
 | --- | --- |
-| A task is still running when you leave your desk | Open the same conversation, read the reply, and send a follow-up. |
-| A tool is waiting for approval | Review the request in the host interface and decide whether to approve it. |
-| You want to inspect a generated file | Follow its workspace link to view the file or preview an HTML page in the browser. |
+| A task keeps running after you leave your desk | Open the same session, read the reply, keep talking. |
+| A tool is waiting for approval | Review the request, approve or reject. |
+| You want to see a generated file | Tap the file link and preview it. |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="Boot screen preview with a theme selector while DSH checks plugins" />
@@ -50,7 +50,7 @@ The desktop app and `dsh web` keep separate plugin profiles. If the Remote Contr
 <p align="center">Boot screen preview · New session · Ongoing conversation</p>
 
 <details>
-<summary>More phone screenshots — workspace tools, HTML preview, and settings</summary>
+<summary>More screenshots — workspace tools, HTML preview, settings</summary>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="30%" alt="Workspace tools on the phone" />
@@ -62,11 +62,11 @@ The desktop app and `dsh web` keep separate plugin profiles. If the Remote Contr
 
 ## 🌐 Connecting from another network
 
-Save a fixed HTTPS domain in connection settings or enable a self-hosted `remote-server` relay. Once the public entry is verified, the panel’s QR code opens that domain. During first-time public pairing, compare the host fingerprint on both devices.
+Add a fixed HTTPS domain in connection settings, or deploy the included `remote-server` relay. Once the public entry passes verification, the panel's QR code points to that domain. On first public pairing, both sides compare the host fingerprint.
 
-The open domain page attempts a direct LAN connection. When both routes are available, LAN is preferred by default and you can select public-first in connection settings. The page can reconnect through the verified backup route. If the public entry is unavailable, the desktop panel shows a LAN pairing code. On HTTPS pages with Service Worker support, an established direct route can also keep workspace HTML previews available during a temporary public-route outage.
+The opened page also tries a direct LAN connection. When both routes are up, LAN wins by default — you can flip this to public-first in connection settings. If one route drops, the page switches to the other. When the public entry is down, the panel falls back to a LAN QR code. On HTTPS pages with Service Worker support, an established direct connection can still open workspace HTML previews while the public route is temporarily out.
 
-**🔒 Approve only devices you trust.** A paired phone has privileges close to local access. Public nodes terminate TLS, so their operators can read forwarded content. Choose a node you run or an operator you trust. The project does not operate a public relay.
+**🔒 Only approve devices you trust.** A paired phone has near-local privileges. Public nodes terminate TLS, so their operators can read forwarded traffic — there is no end-to-end encryption. Use a node you run yourself or an operator you trust. The project does not run a public relay.
 
 [Self-hosting guide](docs/self-host.md) · [Public node protocol](docs/public-node.md) · [Plugin capabilities and host interfaces](docs/features.md) (guides in Chinese)
 

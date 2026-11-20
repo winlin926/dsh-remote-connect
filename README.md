@@ -14,33 +14,33 @@
   简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a>
 </p>
 
-　　`dsh-carry` 让你通过手机浏览器远程使用电脑上运行的 DeepSeek Harness（DSH）。扫码配对后，可以继续会话、审批工具请求，并查看工作区文件或 HTML 预览。手机连接的是电脑上的 DSH 实例，可用会话和工具由宿主提供。0.7.0 支持局域网与公网双线路：一张二维码会优先选择已验证的可用入口，首次公网配对会先核对主机指纹，连接建立后可在两条线路之间自动切换。
+　　`dsh-carry` 是一个 DSH 插件，手机扫码配对后就能接着用电脑上的会话、审批工具请求、查看工作区文件和 HTML 预览。0.7.0 起支持局域网与公网双线路，一张二维码自动选入口，断线自动切换，不用重新扫码。
 
 ## 📦 安装与首次连接
 
-　　[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) 提供 `.tgz` 安装包；下面的 npm 安装方式暂不会安装 0.7.0。
+　　[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) 提供 `.tgz` 安装包；下面的 npm 命令暂时还是 0.6.5。
 
-　　在要远程访问的电脑上安装插件。**桌面版**在 DSH 的「插件 → 添加插件」中搜索 `@winlin926/dsh-carry`。**使用 `dsh web`** 时，运行：
+　　在要远程访问的电脑上装插件。**桌面版**：「插件 → 添加插件」搜 `@winlin926/dsh-carry`。**`dsh web`**：
 
 ```sh
 dsh plugin --profile web add @winlin926/dsh-carry@latest
 ```
 
-　　桌面版和 `dsh web` 各自管理插件。如果电脑上找不到「远程控制」面板，先确认插件装在正在使用的那个 profile 中。
+　　桌面版和 `dsh web` 各有各的插件目录。找不到「远程控制」面板的话，看一下插件装到了哪个 profile。
 
-1. 双设备在同一局域网。在电脑上打开「远程控制」，点击「开启远程连接」。
-2. 用手机扫描面板上的二维码，在电脑上核对设备并批准配对。
-3. 在手机浏览器中打开已有会话。以后要收回权限，在电脑的已授权设备列表中撤销该手机即可。
+1. 手机和电脑连同一个局域网。电脑上打开「远程控制」，开启连接。
+2. 手机扫二维码，电脑核对设备、批准配对。
+3. 打开一个已有会话就能用了。想收回权限，去电脑的已授权设备列表里删掉那台手机。
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="电脑端远程控制面板，显示配对二维码和已授权设备列表" /></p>
 
 ## 📱 手机上能做什么
 
-| 场景 | 在手机上操作 |
+| 场景 | 操作 |
 | --- | --- |
-| 离开工位，任务还在跑 | 打开电脑上的会话，查看回复，继续发消息。 |
-| 工具请求正在等你确认 | 在宿主界面里查看请求，决定是否批准。 |
-| 想看刚生成的文件 | 点开工作区文件链接，在浏览器中查看文件或预览 HTML 页面。 |
+| 离开工位，任务还在跑 | 打开同一个会话，看回复、继续聊。 |
+| 工具请求等你确认 | 查看请求，批准或拒绝。 |
+| 想看刚生成的文件 | 点文件链接，直接预览。 |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="启动页预览，顶部可选主题，中央显示插件检查进度" />
@@ -50,7 +50,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 <p align="center">启动页预览 · 新会话 · 继续对话</p>
 
 <details>
-<summary>查看更多手机界面：工作区工具、HTML 预览与设置</summary>
+<summary>更多截图：工作区工具、HTML 预览、设置</summary>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="30%" alt="手机上的工作区工具入口" />
@@ -62,11 +62,11 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 ## 🌐 离开局域网后怎么连？
 
-　　在「连接设置」保存固定 HTTPS 域名，或启用自托管 `remote-server` 节点。公网入口验证可达后，面板上的二维码会指向该域名。首次公网配对时，在手机和电脑上核对主机指纹。
+　　在「连接设置」填一个固定 HTTPS 域名，或者自己部署仓库里的 `remote-server` 中继节点。公网入口验证通过后，面板的二维码会指向该域名。首次公网配对时双方核对主机指纹。
 
-　　已打开的域名页面会尝试建立局域网直连。两条线路都可用时默认局域网优先，可在「连接设置」改为公网优先。一条线路故障时会自动接到已验证的备用线路。公网入口不可用时，电脑面板显示局域网二维码。支持 Service Worker 的 HTTPS 页面还可以在公网暂时断开后，继续通过已建立的直连打开工作区 HTML 预览。
+　　打开的域名页面会顺便尝试局域网直连。两条路都通的时候默认走局域网，也可以在「连接设置」改成公网优先。某条线路断了会自动切到另一条。公网不可用时面板换回局域网二维码。HTTPS 页面支持 Service Worker 的话，公网暂时断了也能通过已有直连继续看工作区 HTML 预览。
 
-　　**🔒 只批准你信任的设备。** 已配对的手机拥有接近本机的操作权限。公网节点会终止 TLS，运营者可以看到转发内容。这条链路没有端到端加密，请使用自己部署或信任的节点。项目不运营公共节点。
+　　**🔒 只批准你信任的设备。** 配对后的手机权限接近本机操作。公网节点会终止 TLS，运营者能看到转发内容——没有端到端加密，请用自己部署或信任的节点。项目不运营公共节点。
 
 [自托管部署指南](docs/self-host.md) · [公网节点协议](docs/public-node.md) · [插件能力与宿主接口](docs/features.md)
 
