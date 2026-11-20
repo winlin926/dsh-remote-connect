@@ -17,8 +17,6 @@
 
 ## 📦 Install and pair your phone
 
-[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) provides a `.tgz` package; the npm command below still installs 0.6.5.
-
 Install the plugin on the computer you want to reach. **DSH desktop app**: open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. **`dsh web`**:
 
 ```sh

@@ -17,8 +17,6 @@
 
 ## 📦 安装与首次连接
 
-　　[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) 提供 `.tgz` 安装包；下面的 npm 命令暂时还是 0.6.5。
-
 　　在要远程访问的电脑上装插件。**桌面版**：「插件 → 添加插件」搜 `@winlin926/dsh-carry`。**`dsh web`**：
 
 ```sh
