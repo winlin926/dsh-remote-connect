@@ -49,16 +49,12 @@ The desktop app and `dsh web` have separate plugin directories. If the Remote Co
 </p>
 <p align="center">Boot screen preview · New session · Ongoing conversation</p>
 
-<details>
-<summary>More screenshots — workspace tools, HTML preview, settings</summary>
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="30%" alt="Workspace tools on the phone" />
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-html-preview.jpg" width="30%" alt="A workspace HTML preview on the phone" />
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" width="30%" alt="DSH general settings on the phone" />
 </p>
-
-</details>
+<p align="center">Workspace tools · HTML preview · Settings</p>
 
 ## 🌐 Connecting from another network
 

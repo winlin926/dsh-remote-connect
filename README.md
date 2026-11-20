@@ -49,16 +49,12 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 </p>
 <p align="center">启动页预览 · 新会话 · 继续对话</p>
 
-<details>
-<summary>更多截图：工作区工具、HTML 预览、设置</summary>
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="30%" alt="手机上的工作区工具入口" />
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-html-preview.jpg" width="30%" alt="手机上的工作区 HTML 预览" />
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" width="30%" alt="手机上的 DSH 通用设置" />
 </p>
-
-</details>
+<p align="center">工作区工具 · HTML 预览 · 设置</p>
 
 ## 🌐 离开局域网后怎么连？
 
