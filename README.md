@@ -18,6 +18,8 @@
 
 ## 📦 安装与首次连接
 
+　　[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) 提供 `.tgz` 安装包；下面的 npm 安装方式暂不会安装 0.7.0。
+
 　　在要远程访问的电脑上安装插件。**桌面版**在 DSH 的「插件 → 添加插件」中搜索 `@winlin926/dsh-carry`。**使用 `dsh web`** 时，运行：
 
 ```sh
@@ -42,7 +44,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="启动页预览，顶部可选主题，中央显示插件检查进度" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" width="30%" alt="手机浏览器中的 DSH 新会话" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.jpg" width="30%" alt="手机浏览器中的 DSH 新会话" />
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" width="30%" alt="手机上已有的对话和消息输入框" />
 </p>
 <p align="center">启动页预览 · 新会话 · 继续对话</p>

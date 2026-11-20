@@ -18,6 +18,8 @@
 
 ## 📦 Install and pair your phone
 
+[GitHub Release v0.7.0](https://github.com/winlin926/dsh-carry/releases/tag/v0.7.0) provides a `.tgz` package. The npm install methods below do not install 0.7.0 yet.
+
 Install the plugin on the computer you want to reach. In the **DSH desktop app**, open **Plugins → Add plugin** and search for `@winlin926/dsh-carry`. For **`dsh web`**, run this command.
 
 ```sh
@@ -42,7 +44,7 @@ The desktop app and `dsh web` keep separate plugin profiles. If the Remote Contr
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="Boot screen preview with a theme selector while DSH checks plugins" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.png" width="30%" alt="A new DSH session in the phone browser" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-session.jpg" width="30%" alt="A new DSH session in the phone browser" />
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-chat.jpg" width="30%" alt="An existing conversation with its message input on the phone" />
 </p>
 <p align="center">Boot screen preview · New session · Ongoing conversation</p>
