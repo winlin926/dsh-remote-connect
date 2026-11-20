@@ -17,10 +17,12 @@
 
 **想从零配置公网访问？** [阅读 SakuraFrp 公网连接教程](docs/public-access-sakura.md)，从购买域名、创建隧道到手机验证，一步一步完成设置。
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/demo.gif" width="320" alt="手机上回复提问卡片、查看工具执行结果并打开工作区 HTML 预览的实机录屏" />
-</p>
-<p align="center">实机录屏：在手机上回答提问卡片，查看工具输出，打开 HTML 预览（26 秒）</p>
+<details>
+<summary>查看实机录屏（26 秒 GIF）：回答提问卡片、查看工具输出、打开 HTML 预览</summary>
+
+<p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/demo.gif" width="320" alt="手机上回复提问卡片、查看工具执行结果并打开工作区 HTML 预览的实机录屏" /></p>
+
+</details>
 
 ## 📦 安装与首次连接
 
