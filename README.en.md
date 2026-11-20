@@ -24,8 +24,6 @@ Install the plugin on the computer you want to reach. **DSH desktop app**: open 
 dsh plugin --profile web add @winlin926/dsh-carry@latest
 ```
 
-The desktop app and `dsh web` have separate plugin directories. If the Remote Control panel is missing, check which profile the plugin ended up in.
-
 1. Get your phone and computer on the same LAN. Open **Remote Control** on the computer and enable the connection.
 2. Scan the QR code on your phone; approve the device on your computer.
 3. Open an existing session — you're in. To revoke access later, remove the phone from the authorized-device list on the computer.
