@@ -4,7 +4,7 @@ import * as Connection from '@deepseek-ai/dsh-client-connection'
 import * as Plugin from '../src/index.js'
 import { MANAGE_PATH } from '../src/gateway.js'
 import { Gateway } from '../src/gateway.js'
-import { PUBLIC_PORT } from '../src/public-access.js'
+import { PUBLIC_PORT, PublicAccess, type PublicUrlCheck } from '../src/public-access.js'
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { request as httpsRequest } from 'node:https'
@@ -93,6 +93,27 @@ it('keeps a waiting pairing request when the QR is refreshed', async () => withH
   expect((await command('refresh')).status).toBe(200)
 }))
 
+it('uses a confirmed public domain for the single QR and returns to LAN when it fails', async () => withHost(async command => {
+  let reachable = true
+  vi.spyOn(PublicAccess.prototype, 'checkDomain').mockImplementation(async function (this: PublicAccess) {
+    const result: PublicUrlCheck = reachable
+      ? { at: Date.now(), reachable: true, status: 200, failure: null, error: null }
+      : { at: Date.now(), reachable: false, status: null, failure: 'unreachable', error: 'QA tunnel unavailable' }
+    this.lastCheck = result
+    return result
+  })
+  await command('preferences', { mode: 'public', publicUrl: 'https://qa.example.com' })
+  const started = await command('start')
+  expect(started).toMatchObject({ entry: 'public', line: 'lan', links: [{ base: 'https://qa.example.com' }] })
+  const preferred = await command('preferences', { line: 'public' })
+  expect(preferred).toMatchObject({ entry: 'public', line: 'public', gatewayPort: started.gatewayPort, qr: started.qr })
+  reachable = false
+  const fallback = await command('checkPublicUrl')
+  expect(fallback).toMatchObject({ entry: 'lan', gatewayPort: started.gatewayPort, publicUrlCheck: { reachable: false } })
+  expect(fallback.links[0]?.url).toMatch(/^http:\/\/.+\/pair#pair=/)
+  expect(new URL(fallback.links[0].url).hash).toBe(new URL(started.links[0].url).hash)
+}))
+
 it('explicitly switches entries, invalidates the old entry, and can retry a failed switch', async () => withHost(async command => {
   await command('preferences', { mode: 'lan' }); const lan = await command('start')
   await command('preferences', { mode: 'public', publicUrl: 'https://dsh.example.com' }); const publicEntry = await command('switch')
@@ -100,7 +121,8 @@ it('explicitly switches entries, invalidates the old entry, and can retry a fail
   // Public mode always uses the frpc target port, not the temporary LAN port.
   expect(publicEntry.gatewayPort).toBe(PUBLIC_PORT)
   expect(publicEntry.publicPort).toBe(PUBLIC_PORT)
-  expect(publicEntry.links[0].base).toBe('https://dsh.example.com')
+  expect(publicEntry.links[0].base).toMatch(/^http:\/\//)
+  expect(publicEntry.entry).toBe('lan')
   expect(await fetch(`http://127.0.0.1:${lan.gatewayPort}/`).then(response => response.status, () => 0)).not.toBe(200)
   await command('preferences', { mode: 'lan' }); const switched = await command('switch')
   expect(switched).toMatchObject({ activeMode: 'lan', enabled: true, phase: 'ready' })
@@ -231,7 +253,8 @@ it('rejects an invalid LAN certificate before replacing a live public entry', as
   await command('preferences', { mode: 'lan' })
   expect((await command('switch')).status).toBe(400)
   const after = await command('status')
-  expect(after).toMatchObject({ enabled: true, activeMode: 'public', links: before.links, qr: before.qr, lanTls: { error: expect.any(String) } })
+  expect(after).toMatchObject({ enabled: true, activeMode: 'public', gatewayPort: before.gatewayPort, lanTls: { error: expect.any(String) } })
+  expect(new URL(after.links[0].url).hash).toBe(new URL(before.links[0].url).hash)
 }, { gatewayPort: 59396, lanTls: { hostname: 'lan.example.test', certFile: 'missing.pem', keyFile: 'missing.key' } }))
 
 it('publishes a fixed HTTPS entry, secures pairing and reloads certificates only locally', async () => {

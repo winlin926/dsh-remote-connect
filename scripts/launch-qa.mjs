@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { X509Certificate } from 'node:crypto'
-import { createRequire } from 'node:module'
+import { findPackageJSON } from 'node:module'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -28,8 +28,12 @@ if (tlsInputs.some(name => values[name] !== undefined)) {
 }
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const artifact = values.package ? { kind: 'package', ...inspectPackage(values.package) } : { kind: 'link', name: pkg.name, version: pkg.version, entries: entryHashes(root) }
-const require = createRequire(import.meta.url)
-const cliPackage = require.resolve('@deepseek-ai/dsh/package.json')
+function packageManifest(name) {
+  const path = findPackageJSON(name, import.meta.url)
+  if (!path) throw new Error(`Cannot find the local package manifest for ${name}`)
+  return path
+}
+const cliPackage = packageManifest('@deepseek-ai/dsh')
 const hostVersion = JSON.parse(readFileSync(cliPackage, 'utf8')).version
 if (hostVersion !== pkg.devDependencies['@deepseek-ai/dsh']) throw new Error('QA Host differs from the pinned DSH development version')
 const cli = join(dirname(cliPackage), 'lib', 'bin.js')
@@ -60,7 +64,7 @@ try {
   if (values.package) {
     if (!process.env.npm_execpath || !isAbsolute(process.env.npm_execpath)) throw new Error('Run package QA through pnpm qa:host --package <absolute.tgz>')
     for (const name of [...Object.keys(pkg.peerDependencies), ...Object.keys(pkg.dependencies)]) {
-      const version = JSON.parse(readFileSync(require.resolve(name + '/package.json'), 'utf8')).version
+      const version = JSON.parse(readFileSync(packageManifest(name), 'utf8')).version
       overrides[name] = version
       if (name in pkg.peerDependencies) dependencies[name] = version
     }

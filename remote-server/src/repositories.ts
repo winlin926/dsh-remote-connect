@@ -72,6 +72,7 @@ export interface DeviceSessionRow {
   credential_hash: string
   device_id: string
   bound_origin: string
+  bound_host_id: string | null
   created_at: number
   last_seen_at: number | null
   expires_at: number
@@ -356,6 +357,11 @@ export class Repositories {
       .all(clientDeviceId) as unknown as RelationshipRow[]
   }
 
+  listRevokedDevices(hostId: string): string[] {
+    return (this.db.prepare('SELECT client_device_id FROM relationships WHERE host_id = ? AND revoked_at IS NOT NULL').all(hostId) as Pick<RelationshipRow, 'client_device_id'>[])
+      .map(row => row.client_device_id)
+  }
+
   revokeRelationship(hostId: string, clientDeviceId: string, now: number): void {
     this.db
       .prepare(
@@ -370,15 +376,16 @@ export class Repositories {
     credentialHash: string
     deviceId: string
     boundOrigin: string
+    hostId: string
     now: number
     expiresAt: number
   }): void {
     this.db
       .prepare(
-        `INSERT INTO device_sessions (credential_hash, device_id, bound_origin, created_at, last_seen_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO device_sessions (credential_hash, device_id, bound_origin, bound_host_id, created_at, last_seen_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(session.credentialHash, session.deviceId, session.boundOrigin, session.now, session.now, session.expiresAt)
+      .run(session.credentialHash, session.deviceId, session.boundOrigin, session.hostId, session.now, session.now, session.expiresAt)
   }
 
   findSession(credentialHash: string): DeviceSessionRow | undefined {

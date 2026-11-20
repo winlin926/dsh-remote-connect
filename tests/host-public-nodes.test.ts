@@ -392,6 +392,7 @@ it('shows a service-node pairing QR from the ticket the node signs', async () =>
         expect(state.links[0].base).toBe(fake.origin)
         const url = new URL(state.links[0].url)
         expect(url.origin).toBe(fake.origin)
+        expect(url.pathname).toBe('/pair')
         const hash = new URLSearchParams(url.hash.slice(1))
         // The node's pairing page reads `v`, `ticket` and this Host's identity key from the hash.
         expect(hash.get('v')).toBe('1')
@@ -434,12 +435,11 @@ it('keeps the tunnel ready when the node refuses to sign a pairing QR', async ()
         await command('start')
         await vi.waitFor(async () => expect((await command('status')).serviceNode?.lastError).toBe('节点没有签发配对票据（HTTP 500）。'), { timeout: 8000 })
         const state = await command('status')
-        // The tunnel itself is healthy: a refused ticket must not become a plugin error or an empty QR.
+        // A healthy tunnel may fail to issue tickets. The LAN entry still has a usable QR.
         expect(state.phase).toBe('ready')
         expect(state.serviceNode.connected).toBe(true)
-        expect(state.qr).toBeUndefined()
-        expect(state.links[0]?.url).toBeUndefined()
-        expect(state.expiresAt).toBeUndefined()
+        expect(state).toMatchObject({ entry: 'lan', qr: expect.stringMatching(/^data:image\/png;base64,/), expiresAt: expect.any(Number) })
+        expect(state.links[0]?.url).toMatch(/^http:\/\/.+\/pair#pair=/)
         await command('stop')
       } finally {
         await command('stop').catch(() => undefined)

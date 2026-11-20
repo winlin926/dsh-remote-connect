@@ -42,6 +42,7 @@ interface HostConnection {
   ws: WebSocket
   hostId: string
   authenticated: boolean
+  direct?: boolean
   lastActivity: number
   helloDeadline: NodeJS.Timeout | null
 }
@@ -131,6 +132,8 @@ export class TunnelHub {
   isHostOnline(hostId: string): boolean {
     return this.hosts.has(hostId)
   }
+
+  supportsDirect(hostId: string): boolean { return this.hosts.get(hostId)?.direct === true }
 
   onlineHostIds(): string[] {
     return [...this.hosts.keys()]
@@ -304,6 +307,7 @@ export class TunnelHub {
       clearTimeout(connection.helloDeadline)
       connection.helloDeadline = null
     }
+    connection.direct = capabilities.includes('direct')
     connection.authenticated = true
     connection.lastActivity = Date.now()
 
@@ -315,6 +319,11 @@ export class TunnelHub {
       // The old Host process is gone: fail its in-flight exchanges instead of
       // letting them hang until the request timeout.
       this.notifyClose(connection.hostId)
+    }
+    if (connection.direct) {
+      for (const clientDeviceId of this.deps.repos.listRevokedDevices(connection.hostId)) {
+        this.sendHostFrame(connection.hostId, { t: 'pair.revoked', clientDeviceId })
+      }
     }
     this.deps.logger.info({ event: 'tunnel.authenticated', hostId: connection.hostId })
   }

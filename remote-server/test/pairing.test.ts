@@ -110,6 +110,7 @@ test('pairing needs the phone decision and the desktop decision before a cookie 
     assert.equal(sessionRow.credential_hash, sha256Hex(cookie.value), 'only the session token hash is stored')
     assert.notEqual(sessionRow.credential_hash, cookie.value)
     assert.equal(sessionRow.bound_origin, node.baseUrl)
+    assert.equal(sessionRow.bound_host_id, host.host.hostId)
 
     const relationship: any = node.app.db
       .prepare('SELECT * FROM relationships WHERE client_device_id = ?')

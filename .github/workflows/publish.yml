@@ -2,6 +2,13 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: Publish this version to npm
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: write
   id-token: write
@@ -33,6 +40,7 @@ jobs:
           TARBALL=$(node -p 'require("./package-manifest.json")[0].filename')
           node scripts/check-package.mjs "$PWD/$TARBALL"
       - name: Publish with npm Trusted Publisher
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_npm == true }}
         run: |
           PACKAGE=$(node -p 'require("./package.json").name')
           VERSION=$(node -p 'require("./package.json").version')

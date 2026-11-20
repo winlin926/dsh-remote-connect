@@ -238,7 +238,7 @@ export class PairingService {
     if (!this.repos.claimCookieIssuance(requestId, now)) return { status, cookie: null }
     const request = this.repos.findPairingRequest(requestId)
     if (!request) return { status, cookie: null }
-    const cookie = this.sessions.issue(request.client_device_id, origin, now)
+    const cookie = this.sessions.issue(request.client_device_id, origin, request.host_id, now)
     return { status, cookie }
   }
 

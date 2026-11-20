@@ -64,7 +64,7 @@ curl.exe -sS https://relay.example.com/v1/config
 curl.exe -sS https://relay.example.com/.well-known/dsh-remote
 ```
 
-`/healthz` 返回 `{"ok":true,"version":"0.6.5"}`。
+`/healthz` 返回 `{"ok":true,"version":"0.7.0"}`。
 
 `/.well-known/dsh-remote` 是 v2 统一节点契约，返回形如：
 
@@ -73,7 +73,7 @@ curl.exe -sS https://relay.example.com/.well-known/dsh-remote
   "protocol": 2,
   "kind": "service",
   "name": "My Public Node",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "<43 字符 base64url>",
@@ -93,7 +93,7 @@ curl.exe -sS https://relay.example.com/.well-known/dsh-remote
 1. 在 Host（电脑上的 DSH）的公网节点列表里填 `https://relay.example.com` 并添加。插件会请求
    发现文档，显示节点名称、类型（自托管服务）、协议版本（`v2`）与节点指纹（8 组 4 位大写）。
    核对指纹与第 3 节一致后保存。
-2. Host 生成配对二维码（`https://relay.example.com/#v=1&ticket=...&key=...`）。
+2. Host 生成配对二维码（`https://relay.example.com/pair#v=1&ticket=...&key=...`）。
 3. 手机扫码打开 `/pair` 落地页，页面展示节点名称、节点类型与**目标主机指纹**（8 组 4 位大写）。
    页面不再显示 8 位比较码。
 4. 手机点「确认」，Host 端本地点「批准」——**两个独立决定都完成、且两端显示的指纹一致**后才

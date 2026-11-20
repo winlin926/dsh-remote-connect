@@ -1,7 +1,8 @@
 /** Runs before the remote app and the Host's client modules. No device or Host credential is embedded. */
 import { localFilePath } from './local-file.js'
 import { createBootScreen } from './boot-screen.js'
-import { createDirectLink, directRuntimeSource } from './boot-direct.js'
+import { remoteDirect } from './boot-direct.js'
+import { PREVIEW_WORKER_PATH } from './preview-worker.js'
 
 /** The same computer's LAN entry, injected only into a paired device's public page. */
 export interface LanFallback {
@@ -16,13 +17,15 @@ export interface LanFallback {
 export interface BootDirect { signal: string; preference: 'lan' | 'public' }
 export interface BootContext { fallback?: LanFallback; direct?: BootDirect }
 
-function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null, createScreen: typeof createBootScreen, createLink: typeof createDirectLink): void {
+function remoteBoot(parseLocalFile: (href: string) => string | undefined, context: BootContext | null, createScreen: typeof createBootScreen, createLink: typeof remoteDirect, previewWorkerPath: string): void {
   const globals = window as unknown as Record<string, any>
   globals.__DSH_REMOTE_CONTROL__ = true
   // The Host owns the document language, theme colour and keyboard policy since 0.2.2: a phone
   // gets its mobile layout from the Host itself. Only the browser's translate offer is ours to
   // refuse, because the app's own copy is what the reader is looking at.
   document.documentElement.setAttribute('translate', 'no')
+  let reconnecting = false
+  let pendingRoute = ''
   // A page reached through the same-host fallback says so once, then drops the marker from the address.
   if (new URLSearchParams(location.search || '').get('rc') === 'lan') {
     try {
@@ -30,7 +33,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
       clean.searchParams.delete('rc')
       window.history?.replaceState?.(null, '', clean.pathname + clean.search + clean.hash)
     } catch { /* the notice still shows if the address cannot be rewritten */ }
-    notice('已切换到局域网')
+    connectionStatus('已切换到局域网')
   }
   const transport = globals.__DSH_TRANSPORT__ ?? {}
   globals.__DSH_TRANSPORT__ = transport
@@ -38,31 +41,77 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   // The direct line is prepared in the background from the first paint: the page keeps using the
   // entry it arrived through until the channel has proven it carries traffic in both directions.
   const direct = context?.direct
+  let currentRoute: 'direct' | 'upstream' = 'upstream'
   const link = direct ? createLink({
     signalPath: direct.signal,
-    fetch: (url: string, init?: RequestInit) => originalFetch(url, init),
-    WebSocket: window.WebSocket,
+    fetch: (url: RequestInfo | URL, init?: RequestInit) => originalFetch(url, init),
     // Bound: the browser's timer functions throw "Illegal invocation" when called off the window.
     setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
     clearTimeout: (handle: number) => clearTimeout(handle),
     setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
     clearInterval: (handle: number) => clearInterval(handle),
-    random: () => String(crypto.randomUUID?.() ?? Math.random()),
     baseUrl: () => location.href,
+    visible: () => !document.hidden,
     preference: () => direct.preference,
-    onState: state => { if (state.ready) notice('已启用直连线路'); else if (state.reason) notice(state.reason) },
-    log: line => { try { console.debug('[rc-direct] ' + line) } catch { /* a missing console is not a failure */ } },
+    onState: state => {
+      if (state.line === currentRoute) return
+      currentRoute = state.line
+      pendingRoute = currentRoute === 'direct' ? '已切换到局域网直连' : '已切换到公网'
+      if (currentRoute === 'direct' && !reconnecting) {
+        connectionStatus(pendingRoute)
+        pendingRoute = ''
+      } else {
+        showReconnect()
+      }
+      setTimeout(moveSockets, 0)
+    },
+    log: (line: string) => { try { console.debug('[rc-direct] ' + line) } catch { /* a missing console is not a failure */ } },
   }) : undefined
   /** Every same-origin call the app makes: uploads, streaming and previews take the live line. */
   const routedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
-    if (link?.ready) return link.fetch(url, init).catch(() => originalFetch(input, init))
-    return originalFetch(input, init)
+    let sameOrigin = false
+    try { sameOrigin = new URL(url, location.href).origin === location.origin } catch { return originalFetch(input, init) }
+    if (!sameOrigin || !link?.ready) return originalFetch(input, init)
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+    const safeRead = method === 'GET' || method === 'HEAD'
+    if (link.line === 'direct') return link.fetch(input, init).catch(error => {
+      if (!safeRead || (init?.signal ?? (input instanceof Request ? input.signal : undefined))?.aborted) throw error
+      return originalFetch(input, init)
+    })
+    if (!safeRead) return link.preferDirectForWrite().then(useDirect => useDirect ? link.fetch(input, init) : originalFetch(input, init))
+    return originalFetch(input, init).then(response => {
+      if (safeRead && link.ready && [502, 503, 504].includes(response.status)) return link.fetch(input, init)
+      return response
+    }, error => {
+      if (!safeRead || (init?.signal ?? (input instanceof Request ? input.signal : undefined))?.aborted || !link.ready) throw error
+      return link.fetch(input, init)
+    })
   }
   globals.__DSH_FILE_UPLOAD__ = { fetch: routedFetch }
   // Read-only diagnostics: a phone that cannot reach its own line is otherwise undebuggable.
   if (link) globals.__DSH_DIRECT__ = { state: () => link.state(), ready: () => link.ready }
-  if (link) setTimeout(() => { void link.start() }, 0)
+  if (link) {
+    setTimeout(() => { void link.start() }, 0)
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) link.checkLines() })
+    if (window.isSecureContext && navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener('message', event => {
+        const port = event.ports[0]
+        const source = event.source as ServiceWorker | null
+        if (!port || source?.scriptURL !== new URL(previewWorkerPath, location.href).href || event.data?.type !== 'dsh-preview') return
+        if (link.line !== 'direct') { port.postMessage(null); return }
+        void (async () => {
+          const target = new URL(String(event.data.url), location.href)
+          if (target.origin !== location.origin || !/^\/rc\/workspace-preview\/[A-Za-z0-9_-]{43}\//.test(target.pathname)) return null
+          const response = await link.fetch(target)
+          return { status: response.status, headers: [...response.headers], body: response.body }
+        })().then(result => {
+          try { port.postMessage(result, result?.body ? [result.body] : []) } catch { port.postMessage(null) }
+        }, () => port.postMessage(null))
+      })
+      void navigator.serviceWorker.register(previewWorkerPath, { scope: '/' }).catch(() => {})
+    }
+  }
   function notice(message: string): void {
     const existing = document.getElementById('dsh-rc-notice')
     if (existing) existing.remove()
@@ -81,13 +130,26 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
       // Both are documents; the gateway serves them under a sandbox CSP, so a blob URL
       // (which would inherit the gateway origin and drop that header) is never used.
       const address = '/rc/workspace-file?p=' + encodeURIComponent(path)
+      if (link?.line === 'direct' && navigator.serviceWorker?.controller) {
+        const preview = window.open('about:blank', '_blank')
+        if (preview) preview.opener = null
+        try {
+          const response = await link.fetch(address + '&preview=1')
+          const locationHeader = response.headers.get('location')
+          const target = locationHeader && new URL(locationHeader, location.href)
+          if (response.status !== 303 || !target || target.origin !== location.origin || !target.pathname.startsWith('/rc/workspace-preview/')) throw new Error('预览不可用。')
+          if (preview) preview.location.replace(target.href)
+          else location.assign(target.href)
+        } catch { preview?.close(); notice('无法打开文件预览。') }
+        return
+      }
       const preview = window.open(address, '_blank')
       if (preview) preview.opener = null
       else location.assign(address)
       return
     }
     try {
-      const response = await originalFetch('/rc/workspace-file?p=' + encodeURIComponent(path), { cache: 'no-store' })
+      const response = await routedFetch('/rc/workspace-file?p=' + encodeURIComponent(path), { cache: 'no-store' })
       if (!response.ok) {
         const data = await response.json().catch(() => null)
         notice((data as { error?: string } | null)?.error ?? `无法读取文件（HTTP ${response.status}）。`)
@@ -384,39 +446,138 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   window.addEventListener('unhandledrejection', () => { recordError('unhandled-rejection') })
   updateBoot()
   scheduleReport(8000)
-  function disconnected(message: string): void {
+  function disconnected(title: string, canRetry = false): void {
     if (document.getElementById('dsh-rc-disconnected')) return
-    const notice = document.createElement('div'); notice.id = 'dsh-rc-disconnected'; notice.setAttribute('role', 'dialog'); notice.setAttribute('aria-modal', 'true')
-    // The Host states its theme through color-scheme on the root element; fall back to the media query when it states none.
-    const declared = getComputedStyle(document.documentElement).colorScheme.trim()
-    const dark = declared === 'dark' || (declared !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
-    notice.style.cssText = `position:fixed;inset:0;z-index:2147483647;background:${dark ? 'rgba(36,35,33,.97)' : 'rgba(250,249,245,.97)'};display:flex;align-items:center;justify-content:center;padding:24px;font:16px/1.7 system-ui,sans-serif;text-align:center;color:${dark ? '#F0EEE8' : '#292724'}`
-    const box = document.createElement('div'), text = document.createElement('p'), retry = document.createElement('button')
-    text.id = 'dsh-rc-disconnected-text'; text.textContent = message; retry.textContent = '重新连接'; retry.onclick = () => location.reload()
-    notice.setAttribute('aria-labelledby', text.id)
-    retry.style.cssText = 'padding:12px 20px;border:0;border-radius:999px;background:#D97757;color:#fff;font:inherit'
-    box.append(text, retry); notice.append(box); (document.body ?? document.documentElement).append(notice)
-    // The overlay covers the page, so the keyboard and the screen reader start on its only action.
-    retry.focus()
+    connectionStatus('')
+    const dialog = document.createElement('dialog')
+    dialog.id = 'dsh-rc-disconnected'
+    dialog.setAttribute('aria-labelledby', 'dsh-rc-disconnected-title')
+    dialog.setAttribute('aria-describedby', 'dsh-rc-disconnected-text')
+    dialog.addEventListener('cancel', event => event.preventDefault())
+    const style = document.createElement('style')
+    style.textContent = `
+#dsh-rc-disconnected {
+  box-sizing: border-box;
+  width: min(340px, calc(100% - 32px));
+  padding: 20px;
+  border: 1px solid var(--dsw-alias-border-l2, color-mix(in srgb, CanvasText 16%, Canvas));
+  border-radius: 12px;
+  background: var(--dsw-alias-background-primary, Canvas);
+  color: var(--dsw-alias-label-primary, CanvasText);
+  font: inherit;
+}
+#dsh-rc-disconnected::backdrop { background: rgb(0 0 0 / 25%); }
+#dsh-rc-disconnected h2 { margin: 0; font-size: 16px; font-weight: 600; }
+#dsh-rc-disconnected p { margin: 8px 0 0; font-size: 14px; line-height: 1.55; }
+#dsh-rc-disconnected button {
+  display: block;
+  margin: 12px 0 0 auto;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2, color-mix(in srgb, CanvasText 16%, Canvas));
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}`
+    const heading = document.createElement('h2')
+    heading.id = 'dsh-rc-disconnected-title'
+    heading.textContent = title
+    const instructions = document.createElement('p')
+    instructions.id = 'dsh-rc-disconnected-text'
+    instructions.textContent = '在电脑上打开 DSH 的「远程控制」，用手机扫描新的二维码，并在电脑上确认。'
+    dialog.append(style, heading, instructions)
+    if (canRetry) {
+      const retry = document.createElement('button')
+      retry.type = 'button'
+      retry.textContent = '重试当前入口'
+      retry.onclick = () => location.reload()
+      dialog.append(retry)
+    }
+    ;(document.body ?? document.documentElement).append(dialog)
+    dialog.showModal()
   }
-  /** A restarted or sleeping Host closes the socket; without this line the phone simply looks frozen. */
-  function connectionBanner(offline: boolean): void {
-    const existing = document.getElementById('dsh-rc-reconnecting')
-    if (!offline) { existing?.remove(); return }
-    if (existing) return
-    const bar = document.createElement('div'); bar.id = 'dsh-rc-reconnecting'; bar.setAttribute('role', 'status'); bar.setAttribute('aria-live', 'polite')
-    bar.style.cssText = 'position:fixed;left:50%;top:0;transform:translateX(-50%);z-index:2147483646;display:flex;gap:10px;align-items:center;padding:6px 14px;border-radius:0 0 12px 12px;background:#B45309;color:#fff;font:12px/1.6 system-ui,sans-serif'
-    const text = document.createElement('span'); text.textContent = '与电脑的连接已断开，正在重连…'
-    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '立即重试'
-    retry.style.cssText = 'padding:2px 10px;border:1px solid currentColor;border-radius:999px;background:transparent;color:inherit;font:inherit'
-    retry.onclick = () => location.reload()
-    bar.append(text, retry); (document.body ?? document.documentElement).append(bar)
+  function connectionStatus(message: string, retry = false): void {
+    document.getElementById('dsh-rc-connection-status')?.remove()
+    if (!message || document.getElementById('dsh-rc-disconnected')) return
+    const bar = document.createElement('div')
+    bar.id = 'dsh-rc-connection-status'
+    const style = document.createElement('style')
+    style.textContent = `
+#dsh-rc-connection-status {
+  position: fixed;
+  inset-inline: 52px;
+  top: calc(env(safe-area-inset-top, 0px) + 3px);
+  z-index: 2147483646;
+  display: grid;
+  justify-items: center;
+  pointer-events: none;
+}
+#dsh-rc-connection-status button + [role="status"] {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#dsh-rc-connection-status .connection-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 44px;
+  max-inline-size: 100%;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary, CanvasText);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+#dsh-rc-connection-status button { cursor: pointer; pointer-events: auto; }
+#dsh-rc-connection-status .connection-line::before {
+  content: '';
+  flex: none;
+  inline-size: 14px;
+  block-size: 14px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.2' stroke-linecap='round'%3E%3Cpath d='M1.3 5.3a11 11 0 0 1 13.4 0M3.6 7.8a7.2 7.2 0 0 1 8.8 0M5.8 10.2a3.6 3.6 0 0 1 4.4 0M8 12.7h.01'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+#dsh-rc-connection-status button:focus-visible { outline: 1px solid currentColor; outline-offset: -5px; border-radius: 6px; }`
+    const status = document.createElement('span')
+    status.setAttribute('role', 'status')
+    bar.append(style)
+    if (retry) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'connection-line'
+      button.textContent = message
+      button.title = '重试连接电脑'
+      button.setAttribute('aria-label', '正在重新连接，点击重试')
+      button.onclick = () => location.reload()
+      bar.append(button)
+    } else {
+      status.className = 'connection-line'
+    }
+    bar.append(status)
+    ;(document.body ?? document.documentElement).append(bar)
+    status.textContent = retry ? '正在重新连接电脑…' : message
+    if (!retry) setTimeout(() => bar.remove(), 2600)
+  }
+  function showReconnect(): void {
+    if (reconnecting) return
+    reconnecting = true
+    connectionStatus('正在重新连接…', true)
   }
   /** A public entry that dies must not strand the phone on a dead page. */
   const lanFallback = context?.fallback
   let fallbackTried = false
   let fallbackTimer: ReturnType<typeof setTimeout> | undefined
-  const rescan = (): void => disconnected('无法自动切换到局域网。请在电脑上打开远程控制面板，扫描新的二维码重新配对。')
+  const rescan = (): void => disconnected('暂时无法切换到局域网', true)
   /**
    * Offered only when this same gateway answers that the LAN entry is the same Host, and the answer
    * must carry the identity this page was given. Anything else asks for a fresh QR code instead of
@@ -441,18 +602,24 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
         same = data?.sameHost === true && expected !== null && answer !== null && answer.id === expected.id && answer.fingerprint === expected.fingerprint && found.origin === wanted.origin && found.protocol === wanted.protocol
       } catch { same = false }
       if (!same) { rescan(); return }
-      notice('已切换到局域网')
       location.replace(new URL('/?rc=lan', target).href)
     } catch { rescan() }
   }
   window.addEventListener('dsh-rc-offline', () => {
-    connectionBanner(true)
+    showReconnect()
+    if (link) { void link.probe(); return }
     if (!lanFallback || fallbackTried) return
     // One short grace period: a reconnect that succeeds clears this timer.
     clearTimeout(fallbackTimer)
     fallbackTimer = setTimeout(() => { void switchToLan() }, 1500)
   })
-  window.addEventListener('dsh-rc-online', () => { connectionBanner(false); clearTimeout(fallbackTimer) })
+  window.addEventListener('dsh-rc-online', () => {
+    clearTimeout(fallbackTimer)
+    if (!reconnecting) return
+    reconnecting = false
+    connectionStatus(pendingRoute)
+    pendingRoute = ''
+  })
 
   /** The gateway's own refusal. A 403 from the Host (a path it will not read, say) is an ordinary error. */
   async function unpaired(response: Response): Promise<boolean> {
@@ -460,8 +627,8 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
     try { return (await response.clone().json())?.code === 'unpaired' } catch { return false }
   }
   window.fetch = async (...args) => {
-    const response = await routedFetch(args[0] as RequestInfo, args[1])
-    if (new URL(String(args[0] instanceof Request ? args[0].url : args[0]), location.href).origin === location.origin && await unpaired(response)) disconnected('设备授权已失效或撤销，请重新扫码并在电脑上确认。')
+    const response = await routedFetch(args[0], args[1])
+    if (new URL(String(args[0] instanceof Request ? args[0].url : args[0]), location.href).origin === location.origin && await unpaired(response)) disconnected('设备授权已失效')
     return response
   }
   const OriginalSocket = window.WebSocket
@@ -470,16 +637,31 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
   const probeAuthorization = (): void => {
     if (probing) return
     probing = originalFetch('/api/dsh-remote-connect/manage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'status' }) }).then(async response => {
-      if (await unpaired(response)) disconnected('设备授权已撤销，远程连接已断开。请重新扫码。')
+      if (await unpaired(response)) disconnected('设备授权已失效')
     }).catch(() => window.dispatchEvent(new Event('dsh-rc-offline'))).finally(() => { probing = undefined })
+  }
+  // Sockets that opened before the direct line was usable: when it becomes usable they are closed
+  // so the app's own reconnect logic opens them again on the direct channel. Without this the
+  // stream carrier stays on the entry the page arrived through, and dies with it.
+  const upstream = new Set<WebSocket>()
+  const moveSockets = (): void => {
+    if (link?.line !== 'direct') { link?.reconnectSockets(); return }
+    for (const socket of upstream) socket.close()
+    upstream.clear()
   }
   globals.WebSocket = class extends OriginalSocket {
     constructor(url: string | URL, protocols?: string | string[]) {
       // A same-origin socket rides the direct line while it is up; anything else is a plain socket.
-      if (link?.ready) {
-        try { if (new URL(String(url), location.href).origin === location.origin) return link.socket(String(url), protocols) as unknown as WebSocket } catch { /* fall through */ }
+      const target = new URL(String(url), location.href)
+      const localSocket = target.host === location.host && (target.protocol === 'wss:' ? location.protocol === 'https:' : target.protocol === 'ws:' ? location.protocol === 'http:' : target.origin === location.origin)
+      if (link?.line === 'direct' && localSocket) {
+        const socket = link.socket(String(url), protocols)
+        socket.addEventListener('open', () => window.dispatchEvent(new Event('dsh-rc-online')))
+        return socket as unknown as WebSocket
       }
       super(url, protocols)
+      if (localSocket) upstream.add(this as unknown as WebSocket)
+      this.addEventListener('close', () => { upstream.delete(this as unknown as WebSocket) })
       // Only a socket that reached the Host says anything about the authorization, and the SSE
       // carrier reconnects by design, so probing it would be a heartbeat request of its own.
       const carrier = /\/rc\/sse(?:[?#]|$)/.test(String(url))
@@ -521,7 +703,11 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
       const socket = this.socket = new NativeSocket(url)
       socket.onmessage = event => {
         const frame = JSON.parse(event.data)
-        if (frame.type === 'ready') { this.readyState = 1; this.backoff = 0; this.emit('open', new Event('open')); return }
+        if (frame.type === 'ready') {
+          this.readyState = 1; this.backoff = 0
+          window.dispatchEvent(new Event('dsh-rc-online'))
+          this.emit('open', new Event('open')); return
+        }
         if (frame.type === 'error') { this.close(); this.emit('error', new Event('error')); return }
         if (frame.type !== 'chunk') return
         this.buffer += frame.data
@@ -543,7 +729,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
       // A sleeping computer or a restarting Host comes back in minutes, not in one fixed interval:
       // every failed attempt waits twice as long as the one before, up to 30s, and a live
       // connection resets the wait.
-      socket.onclose = () => { if (this.readyState !== 2) { this.readyState = 0; this.buffer = ''; this.backoff = Math.min(30000, this.backoff ? this.backoff * 2 : this.retry); this.timer = setTimeout(() => this.connect(), this.backoff) } }
+      socket.onclose = () => { if (this.readyState !== 2) { this.readyState = 0; this.buffer = ''; this.backoff = Math.min(30000, this.backoff ? this.backoff * 2 : this.retry); if (link) void link.probe(); this.timer = setTimeout(() => this.connect(), this.backoff) } }
     }
     close(): void { this.readyState = 2; clearTimeout(this.timer); this.socket?.close() }
   }
@@ -551,7 +737,7 @@ function remoteBoot(parseLocalFile: (href: string) => string | undefined, contex
 }
 /** The Host reads this same string every request, so it stays one self-contained function. */
 export function bootScript(context?: BootContext): string {
-  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()},${directRuntimeSource()});`
+  return `(${remoteBoot.toString()})(${localFilePath.toString()},${JSON.stringify(context ?? null)},${createBootScreen.toString()},${remoteDirect.toString()},${JSON.stringify(PREVIEW_WORKER_PATH)});`
 }
 /** The boot script is a same-origin file, not an inline script, so a Host CSP cannot block it. */
 export const BOOT_PATH = '/rc/boot.js'

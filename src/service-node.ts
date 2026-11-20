@@ -20,6 +20,9 @@ import {
   decodeTunnelFrame, encodeTunnelFrame, splitTunnelPayload,
   type TunnelFrame, type TunnelHeaders,
 } from './remote/tunnel-protocol.js'
+import { safePath } from './gateway.js'
+import { RELAY_MARK } from './direct/protocol.js'
+import type { TunnelRelayDevice } from './remote/tunnel-protocol.js'
 import { upstreamRequestHeaders } from './upstream-http.js'
 
 /** The durable per-node credential file inside the plugin storage directory. */
@@ -71,6 +74,10 @@ export interface ServiceNodeOptions {
   log?: ServiceNodeLogger
   /** Called after every successful tunnel handshake (initial connect and reconnects). */
   onConnected?: () => void
+  /** Only upgraded relay nodes send device identity on a frame. */
+  relayTarget?: (device: TunnelRelayDevice) => { port: number; mark: string } | undefined
+  relayPairComplete?: (clientId: string) => void
+  relayPairRevoked?: (clientId: string) => void
   now?: () => number
   reconnect?: ServiceNodeReconnect
 }
@@ -295,7 +302,7 @@ export class ServiceNode {
   private readonly wsCalls = new Map<string, WsCall>()
   private readonly pairings = new Map<string, { deviceName: string; expiresAt: number }>()
 
-  constructor(options: ServiceNodeOptions) {
+  constructor(private readonly options: ServiceNodeOptions) {
     this.origin = options.origin
     this.hostId = options.hostId
     this.identityKey = options.identityKey
@@ -396,7 +403,7 @@ export class ServiceNode {
       if (!ticket || expiresAt === undefined) throw new ServiceNodeError('节点返回的配对票据格式不正确。')
       const hash = new URLSearchParams({ v: '1', ticket, key: this.identityKey })
       this.lastError = undefined
-      return { url: `${this.origin}/#${hash.toString()}`, expiresAt }
+      return { url: `${this.origin}/pair#${hash.toString()}`, expiresAt }
     } catch (failure) {
       this.lastError = failure instanceof Error && failure.message ? failure.message : '签发配对票据失败。'
       this.log('service-node-error', { origin: this.origin, hostId: this.hostId, message: this.lastError })
@@ -475,7 +482,7 @@ export class ServiceNode {
         this.lastError = undefined
         this.lastFrameAt = this.now()
         this.startHeartbeat()
-        this.send({ t: 'hello', hostId: this.hostId, version: this.clientVersion, capabilities: ['http', 'ws', 'assets'] })
+        this.send({ t: 'hello', hostId: this.hostId, version: this.clientVersion, capabilities: this.options.relayTarget ? ['http', 'ws', 'assets', 'direct'] : ['http', 'ws', 'assets'] })
         this.log('service-node-connect', { origin: this.origin, hostId: this.hostId })
         void this.touchConnectedAt()
         try { this.onConnected?.() } catch (failure) { this.log('service-node-error', { origin: this.origin, hostId: this.hostId, message: failure instanceof Error ? failure.message : '服务节点连接回调失败。' }) }
@@ -657,15 +664,16 @@ export class ServiceNode {
     switch (frame.t) {
       case 'ping': this.send({ t: 'pong', at: frame.at }); break
       case 'pong': break
-      case 'http.request': this.openHttp(frame.id, frame.method, frame.path, frame.headers); break
+      case 'http.request': this.openHttp(frame.id, frame.method, frame.path, frame.headers, frame.relayDevice); break
       case 'http.body': this.writeHttp(frame.id, payload); break
       case 'http.body.end': this.endHttp(frame.id); break
       case 'http.cancel': this.cancelHttp(frame.id); break
-      case 'ws.open': this.openWs(frame.id, frame.path, frame.headers, frame.protocol); break
+      case 'ws.open': this.openWs(frame.id, frame.path, frame.headers, frame.protocol, frame.relayDevice); break
       case 'ws.frame': this.deliverWs(frame.id, frame.binary, payload); break
       case 'ws.close': this.closeWs(frame.id, frame.code, frame.reason); break
       case 'pair.request': this.addPairing(frame.requestId, frame.clientName, frame.expiresAt); break
-      case 'pair.complete':
+      case 'pair.revoked': this.options.relayPairRevoked?.(frame.clientDeviceId); break
+      case 'pair.complete': this.options.relayPairComplete?.(frame.clientDeviceId); this.pairings.delete(frame.requestId); break
       case 'pair.reject': this.pairings.delete(frame.requestId); break
       // Node-bound frame types never travel to the Host; a peer sending one is simply ignored.
       default: break
@@ -674,17 +682,32 @@ export class ServiceNode {
 
   // ── HTTP forwarding ─────────────────────────────────────────────────────────────────────────
 
-  private openHttp(id: string, method: string, path: string, headers: TunnelHeaders): void {
+  private target(headers: TunnelHeaders, device?: TunnelRelayDevice): { port: number; headers: TunnelHeaders } | undefined {
+    if (device !== undefined && this.options.relayTarget) {
+      const target = this.options.relayTarget(device)
+      if (!target) return undefined
+      const outgoing = upstreamRequestHeaders({ headers }, { upstreamPort: target.port, cookie: '' })
+      delete outgoing.cookie
+      return { port: target.port, headers: { ...outgoing, [RELAY_MARK]: target.mark } }
+    }
+    return { port: this.upstreamPort, headers: upstreamRequestHeaders({ headers }, { upstreamPort: this.upstreamPort, cookie: this.upstreamCookie() }) }
+  }
+
+  private openHttp(id: string, method: string, path: string, headers: TunnelHeaders, device?: TunnelRelayDevice): void {
     if (this.httpCalls.size >= TUNNEL_MAX_REQUESTS_PER_HOST) {
       this.send({ t: 'http.error', id, code: 'TOO_MANY_REQUESTS', message: '同时进行的远程请求过多，请稍后再试。' })
       return
     }
     let request: ClientRequest
     try {
-      request = httpRequest({
-        hostname: '127.0.0.1', port: this.upstreamPort, path, method,
-        headers: upstreamRequestHeaders({ headers }, { upstreamPort: this.upstreamPort, cookie: this.upstreamCookie() }),
-      })
+      const target = safePath(path) ? this.target(headers, device) : undefined
+      if (!target) {
+        this.send({ t: 'http.response', id, status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } })
+        this.send({ t: 'http.chunk', id }, Buffer.from('{"code":"unpaired"}'))
+        this.send({ t: 'http.end', id })
+        return
+      }
+      request = httpRequest({ hostname: '127.0.0.1', port: target.port, path, method, headers: target.headers })
     } catch {
       this.send({ t: 'http.error', id, code: 'UPSTREAM_FAILED', message: '本机 DSH 没有接受这个请求。' })
       return
@@ -753,14 +776,15 @@ export class ServiceNode {
 
   // ── WebSocket forwarding ────────────────────────────────────────────────────────────────────
 
-  private async openWs(id: string, path: string, headers: TunnelHeaders, protocol?: string): Promise<void> {
+  private async openWs(id: string, path: string, headers: TunnelHeaders, protocol?: string, device?: TunnelRelayDevice): Promise<void> {
     const ws = await this.loadWs().catch(() => undefined)
     if (!ws) { this.send({ t: 'ws.ack', id, ok: false, status: 502, message: '本机 WebSocket 客户端不可用。' }); return }
-    const outgoing = upstreamRequestHeaders({ headers }, { upstreamPort: this.upstreamPort, cookie: this.upstreamCookie() })
-    delete outgoing['sec-websocket-protocol']
     let socket: TunnelSocket
     try {
-      socket = new ws.WebSocket(`ws://127.0.0.1:${this.upstreamPort}${path}`, protocol ? [protocol] : [], { headers: outgoing, handshakeTimeout: HANDSHAKE_TIMEOUT_MS, maxPayload: 32 * 1024 * 1024 })
+      const target = safePath(path) ? this.target(headers, device) : undefined
+      if (!target) { this.send({ t: 'ws.ack', id, ok: false, status: 403, message: '设备未授权。' }); return }
+      delete target.headers['sec-websocket-protocol']
+      socket = new ws.WebSocket(`ws://127.0.0.1:${target.port}${path}`, protocol ? [protocol] : [], { headers: target.headers, handshakeTimeout: HANDSHAKE_TIMEOUT_MS, maxPayload: 32 * 1024 * 1024 })
     } catch {
       this.send({ t: 'ws.ack', id, ok: false, status: 502, message: '本机 WebSocket 服务没有接受连接。' })
       return

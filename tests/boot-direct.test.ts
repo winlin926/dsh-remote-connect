@@ -1,15 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { chooseLine, controlBytes, createDirectLink, decodeDirect, encodeDirect, readControlBytes } from '../src/boot-direct.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { remoteDirect } from '../src/boot-direct.js'
 
-/** One fake DataChannel; frames are read back with the same codec the page uses. */
+/** One fake DataChannel: what the page sends, and a way to hand frames back. */
 function fakePeer() {
-  const sent: Array<{ t: string; id: string; payload: Uint8Array }> = []
+  const sent: Array<{ t: number; id: string; payload: Uint8Array }> = []
   const channel = {
     readyState: 'connecting' as string,
     onmessage: null as ((event: { data: ArrayBuffer }) => void) | null,
     onopen: null as (() => void) | null,
     onclose: null as (() => void) | null,
-    send(data: Uint8Array) { sent.push(decodeDirect(data)) },
+    send(data: Uint8Array) { sent.push({ t: data[0]!, id: '', payload: data }) },
     close() { this.readyState = 'closed' },
   }
   class Peer {
@@ -21,118 +21,128 @@ function fakePeer() {
     async createOffer() { return { type: 'offer', sdp: 'v=0' } }
     async setLocalDescription() { this.localDescription = { sdp: 'v=0\r\n' } }
     async setRemoteDescription() {}
+    close() {}
   }
-  // The page reads the global when it opens the peer, exactly as a browser provides it.
   ;(globalThis as Record<string, unknown>).RTCPeerConnection = Peer as never
-  return {
-    channel,
-    sent,
-    open() { channel.readyState = 'open'; channel.onopen?.() },
-    deliver(frame: { t: string; id: string; payload: Uint8Array }) {
-      const bytes = encodeDirect(frame.t, frame.id, frame.payload)
-      channel.onmessage?.({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer })
-    },
-  }
+  return { channel, sent }
 }
+
+const TYPES = ['open', 'body', 'end', 'result', 'chunk', 'done', 'fail', 'cancel', 'ws.open', 'ws.ack', 'ws.text', 'ws.bin', 'ws.cont', 'ws.close', 'ping', 'pong', 'hello']
+const encode = (t: string, id: string, payload: Uint8Array) => {
+  const out = new Uint8Array(3 + id.length + payload.length)
+  out[0] = TYPES.indexOf(t) + 1
+  out[1] = id.length >> 8; out[2] = id.length & 0xff
+  for (let i = 0; i < id.length; i++) out[3 + i] = id.charCodeAt(i)
+  out.set(payload, 3 + id.length)
+  return out
+}
+const control = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
+const readId = (bytes: Uint8Array) => {
+  const length = (bytes[1]! << 8) | bytes[2]!
+  let id = ''
+  for (let i = 0; i < length; i++) id += String.fromCharCode(bytes[3 + i]!)
+  return id
+}
+const readType = (bytes: Uint8Array) => TYPES[bytes[0]! - 1]!
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
-async function link(peer: ReturnType<typeof fakePeer>, preference: 'lan' | 'public' = 'lan') {
-  const created = createDirectLink({
-    signalPath: '/rc/direct/signal',
-    fetch: async () => new Response(JSON.stringify({ sessionId: 'session-1', sdp: 'v=0\r\n' }), { status: 200, headers: { 'content-type': 'application/json' } }),
-    WebSocket: class {} as never,
-    setTimeout: ((fn: () => void, ms: number) => setTimeout(fn, ms)) as never,
-    clearTimeout: ((handle: never) => clearTimeout(handle)) as never,
-    setInterval: (() => 0) as never,
-    clearInterval: (() => {}) as never,
-    random: () => 'unit-test-id',
-    baseUrl: () => 'http://127.0.0.1:8443/?x=1',
-    preference: () => preference,
-  })
-  await created.start()
-  peer.open()
-  await settle()
-  return created
-}
-
-describe('direct frame codec', () => {
-  it('round-trips a control frame and a body frame', () => {
-    const control = encodeDirect('open', 'abc_1', controlBytes({ method: 'GET', path: '/api/x' }))
-    const decoded = decodeDirect(control)
-    expect(decoded.t).toBe('open')
-    expect(decoded.id).toBe('abc_1')
-    expect(readControlBytes(decoded.payload)).toMatchObject({ method: 'GET', path: '/api/x' })
-    const body = encodeDirect('body', 'abc_1', new Uint8Array([1, 2, 3]))
-    expect(Array.from(decodeDirect(body).payload!)).toEqual([1, 2, 3])
-  })
-
-  it('refuses an oversized frame and an invalid id', () => {
-    expect(() => encodeDirect('body', 'ok', new Uint8Array(16 * 1024 + 1))).toThrow()
-    expect(() => encodeDirect('body', 'bad id', new Uint8Array(1))).toThrow()
-  })
-})
-
-describe('line choice', () => {
-  it('uses the direct line only when it is ready and this phone prefers the LAN line', () => {
-    expect(chooseLine({ directReady: true, preferred: 'lan' })).toBe('direct')
-    expect(chooseLine({ directReady: true, preferred: 'public' })).toBe('upstream')
-    expect(chooseLine({ directReady: false, preferred: 'lan' })).toBe('upstream')
-  })
-})
-
-describe('direct link', () => {
+describe('phone direct client', () => {
   afterEach(() => { delete (globalThis as Record<string, unknown>).RTCPeerConnection })
 
-  it('is not usable until the channel answers a probe, then carries one whole request', async () => {
+  it('opens only after a probe answers, then carries a whole request over the channel', async () => {
     const peer = fakePeer()
-    const created = await link(peer)
+    const created = remoteDirect({
+      signalPath: '/rc/direct/signal',
+      baseUrl: () => 'http://127.0.0.1:18443/',
+      preference: () => 'lan',
+      fetch: async (_input, init) => init?.method === 'GET' ? new Response(null, { status: 204 }) : new Response(JSON.stringify({ sessionId: 's-1', sdp: 'v=0' }), { status: 200 }),
+      setTimeout: (fn, ms) => setTimeout(fn, ms) as never,
+      clearTimeout: handle => clearTimeout(handle),
+      setInterval: () => 0 as never,
+      clearInterval: () => {},
+    })
+    await created.start()
     expect(created.ready).toBe(false)
-    // The page sent its hello first; a pong for the probe that followed makes the line usable.
-    expect(peer.sent[0]!.t).toBe('hello')
-    peer.deliver({ t: 'pong', id: 'probe', payload: controlBytes({ at: Date.now() - 4 }) })
+    peer.channel.readyState = 'open'
+    peer.channel.onopen?.()
+    await settle()
+    const hello = peer.sent.find(frame => readType(frame.payload) === 'hello')
+    expect(hello).toBeDefined()
+    // A pong for the probe is what makes the line usable; a channel that merely exists is not.
+    peer.channel.onmessage?.({ data: encode('pong', readId(peer.sent.find(frame => readType(frame.payload) === 'ping')!.payload), new Uint8Array()).buffer as ArrayBuffer })
     expect(created.ready).toBe(true)
     expect(created.line).toBe('direct')
-    const pending = created.fetch('/api/hello?x=1', { method: 'POST', body: 'ping-body' })
+    const pending = created.fetch('/api/hello?x=1', { method: 'POST', body: 'body-bytes' })
     await settle()
-    const types = peer.sent.map(frame => frame.t)
-    expect(types).toContain('open')
-    expect(types).toContain('body')
-    expect(types).toContain('end')
-    const open = peer.sent.find(frame => frame.t === 'open')!
-    expect(readControlBytes(open.payload)).toMatchObject({ method: 'POST', path: '/api/hello?x=1' })
-    peer.deliver({ t: 'result', id: open.id, payload: controlBytes({ status: 200, headers: { 'content-type': 'text/plain' } }) })
-    peer.deliver({ t: 'chunk', id: open.id, payload: new TextEncoder().encode('hello ') })
-    peer.deliver({ t: 'chunk', id: open.id, payload: new TextEncoder().encode('world') })
-    peer.deliver({ t: 'done', id: open.id, payload: new Uint8Array() })
+    const open = peer.sent.find(frame => readType(frame.payload) === 'open')!
+    expect(readId(open.payload)).toBeTruthy()
+    const requestId = readId(open.payload)
+    peer.channel.onmessage?.({ data: encode('result', requestId, control({ status: 200, headers: { 'content-type': 'text/plain' } })).buffer as ArrayBuffer })
+    peer.channel.onmessage?.({ data: encode('chunk', requestId, new TextEncoder().encode('hello ')).buffer as ArrayBuffer })
+    peer.channel.onmessage?.({ data: encode('chunk', requestId, new TextEncoder().encode('world')).buffer as ArrayBuffer })
+    peer.channel.onmessage?.({ data: encode('done', requestId, new Uint8Array()).buffer as ArrayBuffer })
     const response = await pending
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('hello world')
   })
 
-  it('drops the line after two missed probes and reports the reason', async () => {
+  it('goes back to the upstream line when the channel closes', async () => {
     const peer = fakePeer()
-    const reasons: string[] = []
-    const created = createDirectLink({
+    const created = remoteDirect({
       signalPath: '/rc/direct/signal',
-      fetch: async () => new Response(JSON.stringify({ sessionId: 's', sdp: 'v=0' }), { status: 200 }),
-      WebSocket: class {} as never,
-      setTimeout: ((fn: () => void, ms: number) => setTimeout(fn, ms)) as never,
-      clearTimeout: ((handle: never) => clearTimeout(handle)) as never,
-      setInterval: (() => 0) as never,
-      clearInterval: (() => {}) as never,
-      random: () => 'unit',
-      baseUrl: () => 'http://127.0.0.1:8443/',
+      baseUrl: () => 'http://127.0.0.1:18443/',
       preference: () => 'lan',
-      onState: state => { if (state.reason) reasons.push(state.reason) },
+      fetch: async (_input, init) => init?.method === 'GET' ? new Response(null, { status: 204 }) : new Response(JSON.stringify({ sessionId: 's', sdp: 'v=0' }), { status: 200 }),
+      setTimeout: (fn, ms) => setTimeout(fn, ms) as never,
+      clearTimeout: handle => clearTimeout(handle),
+      setInterval: () => 0 as never,
+      clearInterval: () => {},
     })
     await created.start()
-    peer.open()
-    await settle()
-    peer.deliver({ t: 'pong', id: 'probe', payload: controlBytes({ at: Date.now() }) })
-    expect(created.ready).toBe(true)
-    created.stop()
+    peer.channel.readyState = 'open'
+    peer.channel.onopen?.()
+    peer.channel.onmessage?.({ data: encode('pong', readId(peer.sent.find(frame => readType(frame.payload) === 'ping')!.payload), new Uint8Array()).buffer as ArrayBuffer })
+    expect(created.line).toBe('direct')
+    peer.channel.onclose?.()
     expect(created.ready).toBe(false)
-    expect(reasons.join('')).toContain('直连已关闭')
+    expect(created.line).toBe('upstream')
+    created.stop()
   })
+
+  it('keeps public preference through one bad probe, fails over, and waits before returning', async () => {
+    vi.useFakeTimers()
+    const peer = fakePeer()
+    let available = true
+    const link = remoteDirect({
+      signalPath: '/rc/direct/signal', baseUrl: () => 'https://example.test/', preference: () => 'public',
+      fetch: async (_input, init) => init?.method === 'POST'
+        ? Response.json({ sessionId: 's', sdp: 'v=0' })
+        : new Response(null, { status: available ? 204 : 503 }),
+      setTimeout, clearTimeout, setInterval, clearInterval,
+    })
+    const answer = () => {
+      const ping = peer.sent.findLast(frame => readType(frame.payload) === 'ping')!
+      peer.channel.onmessage?.({ data: encode('pong', readId(ping.payload), new Uint8Array()).buffer as ArrayBuffer })
+    }
+    try {
+      await link.start()
+      peer.channel.readyState = 'open'
+      peer.channel.onopen?.()
+      answer()
+      await link.probe()
+      expect(link.line).toBe('upstream')
+      available = false
+      await link.probe()
+      expect(link.line).toBe('upstream')
+      await link.probe()
+      expect(link.line).toBe('direct')
+      available = true
+      await link.probe()
+      expect(link.line).toBe('direct')
+      for (let i = 0; i < 6; i++) { await vi.advanceTimersByTimeAsync(5000); answer() }
+      expect(link.line).toBe('upstream')
+    } finally { link.stop(); vi.useRealTimers() }
+  })
+
 })

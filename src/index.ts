@@ -218,15 +218,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         return upstreamIndex(credential)
       }
     }
-    const baseURLs = () => {
-      if (!enabled || !gateway) return []
-      if (activeMode === 'public') {
-        const record = currentNode()
-        // A service node is its own public origin; a gateway node still rides on the saved domain.
-        if (record?.kind === 'service') return [record.url]
-        return access?.domain ? [access.domain] : []
-      }
-      return lanTls ? [lanTls.origin] : lanAddresses().map(ip => `http://${ip}:${gateway!.port}`)
+    const lanURLs = () => {
+      const port = gateway?.port
+      if (!enabled || !port) return []
+      return lanTls ? [lanTls.origin] : lanAddresses().map(ip => `http://${ip}:${port}`)
     }
     // The system's proxy is looked up at most every 15 seconds; the panel asks for status far more often.
     let detected: { at: number; value: SystemProxy | null } | undefined
@@ -268,6 +263,13 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       log: message => { try { ready.logger?.warn?.('[direct] ' + message) } catch { /* logging must never break a connection */ } },
     }))
     let serviceNode: ServiceNode | undefined
+    let relayMark = ''
+    const relayDevices = new Set<string>()
+    const clearRelay = () => {
+      relayMark = ''
+      for (const id of relayDevices) gateway?.revoke(id)
+      relayDevices.clear()
+    }
     // A service node's QR is a one-time ticket the node signs for this Host; it expires on its own.
     let serviceQr: { url: string; expiresAt: number } | undefined
     let serviceQrInflight: Promise<void> | undefined
@@ -316,13 +318,25 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         const previous = serviceNode
         serviceNode = undefined
         serviceQr = undefined
+        clearRelay()
         await previous.stop()
       }
-      if (!wanted) { serviceQr = undefined; return }
+      if (!wanted) { serviceQr = undefined; clearRelay(); return }
       if (serviceNode || disposed) return
+      const scope = record?.node?.id ?? record?.fingerprint ?? wanted
+      const mark = relayMark = randomUUID() + ':'
       const node = new ServiceNode({
         origin: wanted, hostId: hostIdentity.hostId, identityKey: hostIdentity.publicKey, clientVersion: NODE_VERSION,
         upstreamPort, upstreamCookie: () => credential, storage, log: logServiceNode,
+        relayTarget: device => {
+          if (relayMark !== mark || !gateway || currentNode()?.identityChange !== null) return undefined
+          const id = pairing.admitRelay(scope, device)
+          if (!id) return undefined
+          relayDevices.add(id)
+          return { port: gateway.port, mark: mark + id }
+        },
+        relayPairComplete: id => { if (relayMark === mark) pairing.confirmRelay(scope, id) },
+        relayPairRevoked: id => { if (relayMark === mark) pairing.revokeRelay(scope, id) },
         onConnected: () => { serviceUnregisterNotice = undefined; void ensureServiceQr() },
       })
       serviceNode = node
@@ -340,9 +354,17 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       // An expired ticket is not a usable link: the panel shows its updating state until the next
       // connect or refresh issues one.
       const serviceTicket = !identityBlocked && record?.kind === 'service' && serviceQr && serviceQr.expiresAt > Date.now() ? serviceQr : undefined
-      const links = identityBlocked ? [] : record?.kind === 'service'
-        ? baseURLs().map(base => ({ base, url: serviceTicket?.url }))
-        : baseURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
+      const publicBase = !identityBlocked && enabled && activeMode === 'public'
+        ? record?.kind === 'service' ? record.url : access?.domain : undefined
+      const publicReachable = !!publicBase && (record?.kind === 'service'
+        ? !!serviceTicket && tunnel?.connected === true
+        : access?.lastCheck?.reachable === true)
+      const entry = publicReachable ? 'public' : 'lan'
+      const lanLinks = lanURLs().map(base => ({ base, url: qr ? `${base}/pair#pair=${qr.token}` : undefined }))
+      const publicUrl = publicReachable && publicBase
+        ? record?.kind === 'service' ? serviceTicket?.url : qr ? `${publicBase}/pair#pair=${qr.token}` : undefined
+        : undefined
+      const links = publicBase && publicUrl ? [{ base: publicBase, url: publicUrl }] : lanLinks
       const active = new Set(gateway?.onlineIds() ?? [])
       const devices = pairing.list()
       const publicNodeList = publicNodes?.list() ?? []
@@ -373,7 +395,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       // The panel shows one failure string; the contract names it `lastError` while the panel reads `error`.
       const lastError = identityBlocked ? IDENTITY_CHANGE_ERROR : error
       return {
-        enabled, busy, mode: preferences.mode, line: preferences.line, activeMode, autoStart: preferences.autoStart,
+        enabled, busy, mode: preferences.mode, line: preferences.line, entry, activeMode, autoStart: preferences.autoStart,
         proxyConfigured: !!preferences.proxy, proxyMode: preferences.proxyMode, manualProxy: local ? preferences.proxy : undefined,
         systemProxy: preferences.proxyMode === 'system' && preferences.mode === 'public' ? await systemProxy() : undefined,
         publicUrl: access?.domain, publicPort: PUBLIC_PORT,
@@ -389,17 +411,17 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         phase, error: lastError, lastError, version: NODE_VERSION, gatewayPort: gateway?.port ?? 0, local,
         // Read by the panel and by the acceptance harness: one row per live direct channel.
         direct: directHost?.state() ?? [],
-        expiresAt: identityBlocked ? undefined : record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
+        expiresAt: entry === 'public' && record?.kind === 'service' ? serviceTicket?.expiresAt : qr?.expiresAt,
         links, qr: links[0]?.url ? await qrImage(links[0].url) : undefined,
         requests: local ? pairing.requests() : [],
         devices: devices.map(({ host, via: pairedVia, ...device }) => ({
-          ...device, via: pairedVia ?? (host && access?.domain && host.toLowerCase() === new URL(access.domain).host.toLowerCase() ? 'public' : 'lan'), online: active.has(device.id)
+          ...device, via: pairedVia ?? (host && access?.domain && host.toLowerCase() === new URL(access.domain).host.toLowerCase() ? 'public' : 'lan'), online: active.has(device.id), route: active.has(device.id) ? gateway?.route(device.id) : undefined
         })),
         lanHint: config.lanTls ? '手机需在同一局域网，并将 HTTPS 域名解析到电脑的局域网地址。证书需由手机信任；插件不修改 DNS、防火墙或证书信任。' : '手机需与电脑处于同一局域网。若连接被防火墙阻断，请手动允许网关端口；插件不会修改防火墙。',
       }
     }
     // A QR is useless when the public entry is down. Probe it when public access starts and
-    // every two minutes after, so the panel can say why a phone cannot open the link.
+    // while it is open, so the panel can replace a bad public QR with a LAN QR.
     let monitor: ReturnType<typeof setInterval> | undefined
     let probing = false
     const stopMonitor = () => { if (monitor) clearInterval(monitor); monitor = undefined }
@@ -414,7 +436,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       } catch { /* the check reports its own failures */ }
       finally { probing = false }
     }
-    const startMonitor = () => { stopMonitor(); monitor = setInterval(() => void probe(), 120_000); monitor.unref(); void probe() }
+    const startMonitor = () => { stopMonitor(); monitor = setInterval(() => void probe(), 30_000); monitor.unref(); void probe() }
     const stop = async () => {
       ++generation
       enabled = false; activeMode = undefined; access?.setActive(false); qr = undefined; pairing.invalidate()
@@ -468,6 +490,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           websocketCompression: config.websocketCompression !== false,
           // The direct line answers offers here and resolves its channels back to devices, so a
           // direct request is admitted by the same rules as a request that came through a tunnel.
+          relayDevice: mark => relayMark && mark.startsWith(relayMark) ? mark.slice(relayMark.length) : undefined,
           direct: {
             offer: (deviceId, sdp) => direct().offer(deviceId, sdp),
             resolve: mark => directHost?.mark(mark),
@@ -495,7 +518,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         if (disposed || ticket !== generation) { await next.close(); return }
         gateway = next
         if (tls) lanTls = tls
-        enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = serviceNodeMode ? undefined : pairing.issue(); serviceQr = undefined
+        enabled = true; activeMode = mode; access?.setActive(mode === 'public'); qr = pairing.issue(); serviceQr = undefined
         if (mode === 'public') startMonitor(); else stopMonitor()
         // The tunnel is an extra outbound connection on top of the gateway; its failure is reported in
         // status().serviceNode.lastError and retried by the instance, never as a plugin error.
@@ -545,14 +568,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         }
         case 'stop': if (local) await stop(); else { ++generation; setTimeout(() => { void stop() }, 75) }; return { stopped: true }
         case 'refresh': {
-          // An identity change outranks "not started": there is nothing to refresh until it is confirmed.
-          if (currentNode()?.identityChange) throw new Error(IDENTITY_CHANGE_ERROR)
+          if (currentNode()?.identityChange && !enabled) throw new Error(IDENTITY_CHANGE_ERROR)
           if (!enabled) throw new Error('请先开启远程连接。')
-          if (currentNode()?.kind === 'service') {
-            if (!serviceNode) throw new Error('当前没有连接自托管公网节点。')
+          if (serviceNode?.status().connected && serviceQr && serviceQr.expiresAt > Date.now()) {
             // A failed issuance keeps the connecting state and its reason in serviceNode.lastError.
             await issueServiceQr()
-            return status(local)
+            if (serviceQr && serviceQr.expiresAt > Date.now()) return status(local)
           }
           if (pairing.outstanding()) throw new Error('还有配对请求在等待确认，请先处理后再刷新二维码。')
           qr = pairing.issue(); return status(local)
@@ -597,6 +618,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
             const nextDomain = normalizePublicUrl(String(input.publicUrl))
             if (enabled && activeMode === 'public' && nextDomain !== access?.domain) throw new Error('请先关闭远程连接，再修改公网域名。')
             await access?.saveDomain(String(input.publicUrl))
+            if (input.enablePublic === true) next.mode = nextDomain ? 'public' : 'lan'
           }
           if (input.proxy !== undefined) {
             const value = String(input.proxy).trim()
@@ -614,7 +636,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           }
           if (previous.proxy !== next.proxy || previous.proxyMode !== next.proxyMode) await access?.resetOutbound()
           if (previous.mode !== next.mode) await reconcileServiceNode()
-          if (input.publicUrl !== undefined) migrateDevices()
+          if (input.publicUrl !== undefined) {
+            migrateDevices()
+            if (input.enablePublic === true && enabled && next.mode !== activeMode && !pairing.outstanding()) await start()
+          }
           return status(local)
         }
         case 'checkPublicUrl': {
@@ -761,7 +786,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
             // local credential is what lets a later re-add register instead of hitting a 409.
             serviceUnregisterNotice = undefined
             const live = serviceNode?.status().origin === removed.origin ? serviceNode : undefined
-            if (live) { serviceNode = undefined; serviceQr = undefined; await live.stop() }
+            if (live) { serviceNode = undefined; serviceQr = undefined; clearRelay(); await live.stop() }
             try {
               if (live) await live.unregister()
               else await unregisterServiceNode(storage, removed.origin, { hostId: hostIdentity.hostId })

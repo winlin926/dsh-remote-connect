@@ -22,10 +22,10 @@ export class SessionService {
     private readonly config: Config,
   ) {}
 
-  issue(deviceId: string, boundOrigin: string, now = Date.now()): IssuedSession {
+  issue(deviceId: string, boundOrigin: string, hostId: string, now = Date.now()): IssuedSession {
     const { token, hash } = createToken(32)
     const expiresAt = now + this.config.sessionTtlMs
-    this.repos.insertSession({ credentialHash: hash, deviceId, boundOrigin, now, expiresAt })
+    this.repos.insertSession({ credentialHash: hash, deviceId, boundOrigin, hostId, now, expiresAt })
     this.repos.touchSession(hash, now)
     return { token, expiresAt }
   }

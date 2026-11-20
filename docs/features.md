@@ -15,12 +15,12 @@
 | 公网入口 | 固定域名 + 节点发现 | 只接受 HTTPS origin；连通性检测校验 `kind`、`protocol` 与主机指纹，失败分类为不可达 / 非本机 / 证书域名错误 |
 | 自托管节点 | `remote-server` + `/v1/tunnel` | Host 主动连出，按主机与设备授权转发 HTTP/SSE/WebSocket；服务节点身份与主机身份分离 |
 | 插件更新 | 官方插件管理器 | 仅本机面板检查与安装兼容正式版；重启要求由管理器结果决定 |
-| 同机回退 | `/rc/fallback` | 公网断开后先确认本机局域网入口的发现文档指纹一致，才跳转；否则提示重新扫码 |
+| 双线路重连 | 同源探测、WebRTC DataChannel | 在已授权页面协商直连并验证可达性。HTTP、WebSocket、SSE 使用当前线路，切换时恢复宿主连接。无公共 STUN/TURN 依赖 |
 | 证书 | ACME HTTP-01、SakuraFrp 目录约定 | 并发操作复用同一申请；只写证书文件，签发和部署前复核域名与端口 |
 | 本机管理 | `MANAGE_PATH`（仅回环 + 宿主认证） | 带 `REMOTE_MARK` 的请求一律拒绝；配对批准、域名和证书管理只允许本机 |
 | 桌面面板 | `slots`（`settings.section`、`settings.section.icon`、`sidebar.footer.action`） | 官方侧栏底部按钮；宽屏双列、窄屏单列，不搬移宿主 DOM |
 | 自动化 | 宿主界面与原生接口 | 手机直接使用宿主的自动化管理；插件不另设创建任务的桥接接口 |
-| 手机文件预览 | `/rc/workspace-file` + 预览站点 | HTML 使用沙箱站点；其他普通文件先检查 48 MiB 上限再流式返回，断开后停止读取 |
+| 手机文件预览 | `/rc/workspace-file` + 预览站点 | HTML 使用沙箱站点。在支持 Service Worker 的 HTTPS 页面上，已打开的手机会话可以通过直连传输沙箱预览。普通文件发送前检查 48 MiB 上限 |
 | boot 脚本 | `/rc/boot.js`（同源，非内联） | 本机文件链接、断线 / 撤销遮罩、boot 报告、拒绝浏览器翻译提示 |
 | 自有页面 | `pages.ts` | 配对页、拒绝页沿用宿主 0.2.2 的设计 token（#FFFFFF / #0F1115 / 12px 圆角等），只让主操作使用固定的陶土橙 `#D97757` |
 

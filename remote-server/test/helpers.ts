@@ -253,7 +253,7 @@ export class TestHost {
     })
   }
 
-  static async connect(node: TestNode, host: RegisteredHost): Promise<TestHost> {
+  static async connect(node: TestNode, host: RegisteredHost, direct = false): Promise<TestHost> {
     const ws = new WebSocket(`${node.baseUrl.replace(/^http/u, 'ws')}/v1/tunnel`, {
       headers: { authorization: `Bearer ${host.credential}` },
     })
@@ -266,7 +266,7 @@ export class TestHost {
       t: 'hello',
       hostId: host.host.hostId,
       version: 'test',
-      capabilities: ['http', 'ws', 'assets'],
+      capabilities: direct ? ['http', 'ws', 'assets', 'direct'] : ['http', 'ws', 'assets'],
     }
     testHost.send(hello)
     const deadline = Date.now() + 5_000

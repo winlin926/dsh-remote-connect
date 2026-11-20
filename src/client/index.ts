@@ -30,8 +30,8 @@ export interface PublicNode {
 export interface ServicePairing { requestId: string; deviceName: string; expiresAt: number }
 export interface ServiceNodeState { origin: string; connected: boolean; lastError?: string; pendingPairings: ServicePairing[] }
 interface Status {
-  enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null
-  publicUrl?: string | null; publicPort: number
+  enabled: boolean; busy: boolean; mode: 'public' | 'lan'; activeMode?: 'public' | 'lan'; line?: 'public' | 'lan'; entry?: 'public' | 'lan'; autoStart: boolean; proxyConfigured: boolean; proxyMode?: 'system' | 'manual' | 'off'; manualProxy?: string; systemProxy?: { url: string; source: string } | null
+  publicUrl?: string | null; publicPort: number; currentRoute?: Way
   /** What the public pairing page shows and what the panel confirms: the same name and fingerprint. */
   node: { name: string; kind: 'gateway' | 'service'; protocol: number; fingerprint: string; fingerprintGroups: string }
   /** Why the last pairing attempt was rejected; the panel is the place that has to explain it. */
@@ -43,7 +43,7 @@ interface Status {
   lanTls?: { origin?: string; expiresAt?: number; error?: string }
   phase: string; error?: string; gatewayPort: number; local: boolean; expiresAt?: number; qr?: string
   links: Array<{ base: string; url?: string }>; requests: Array<{ id: string; name: string; via: 'lan' | 'public'; nodeConfirmed: boolean; expiresAt: number }>
-  devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public'; requiresRepair?: boolean }>; lanHint: string
+  devices: Array<{ id: string; name: string; createdAt: number; lastSeenAt: number; online: boolean; via?: 'lan' | 'public'; route?: 'lan' | 'public'; requiresRepair?: boolean }>; lanHint: string
   /** Public entries recorded on this Host; the panel adds, probes and chooses among them. */
   publicNodes?: { current: string | null; list: PublicNode[]; pendingReview: boolean }
   /** Present only while this Host is connected through a self-hosted public node. */
@@ -99,23 +99,9 @@ export const WAYS: Array<{ mode: Way; name: string; text: string }> = [
 ]
 const wayName = (mode: string | undefined) => WAYS.find(way => way.mode === mode)?.name ?? ''
 function icon(): React.ReactNode { return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, 'aria-hidden': true }, h('rect', { x: 7, y: 2, width: 10, height: 20, rx: 3 }), h('path', { d: 'M10 5h4M11 19h2' })) }
-function WayIcon({ mode }: { mode: Way }): React.ReactElement {
-  return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
-    mode === 'lan'
-      ? h(React.Fragment, null, h('path', { d: 'M3 9a14 14 0 0 1 18 0M6 13a9 9 0 0 1 12 0M9.5 16.5a4 4 0 0 1 5 0' }), h('circle', { cx: 12, cy: 20, r: .8, fill: 'currentColor', stroke: 0 }))
-      : h(React.Fragment, null, h('circle', { cx: 12, cy: 12, r: 9 }), h('path', { d: 'M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18' })))
-}
 function UpdateIcon(): React.ReactElement {
   return h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
     h('path', { d: 'M12 3v11m0 0 4-4m-4 4-4-4' }), h('path', { d: 'M4 16v2a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-2' }))
-}
-function moveRadio(event: React.KeyboardEvent<HTMLButtonElement>, index: number, count: number, choose: (index: number) => void): void {
-  const offset = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 0
-  if (!offset && event.key !== 'Home' && event.key !== 'End') return
-  event.preventDefault()
-  const next = event.key === 'Home' ? 0 : event.key === 'End' ? count - 1 : (index + offset + count) % count
-  choose(next)
-  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role=radio]')[next]?.focus()
 }
 export const when = (time: number) => new Date(time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const address = (value: string) => {
@@ -226,7 +212,7 @@ function DeviceRow({ device, disabled, act }: { device: Status['devices'][number
     block('span', 'dsrc-avatar', [(device.name.trim().charAt(0) || '·').toUpperCase()], { 'data-tone': avatarTone(device.id), 'aria-hidden': true }),
     block('div', 'dsrc-device-main', [
       name === null ? block('div', 'dsrc-device-name', [device.name,
-        device.via ? h('span', { className: 'dsrc-tag', 'data-way': device.via }, wayName(device.via)) : null,
+        device.route ? h('span', { className: 'dsrc-tag', 'data-way': device.route }, wayName(device.route)) : null,
         device.requiresRepair ? h('span', { className: 'dsrc-tag dsrc-pending' }, '需重新配对') : null,
         device.online ? h('span', { className: 'dsrc-tag dsrc-online' }, '在线') : null])
         : h('input', { className: 'dsrc-rename', 'aria-label': `重命名 ${device.name}`, autoFocus: true, maxLength: 40, value: name, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value), onBlur: () => finish(true), onKeyDown: (event: React.KeyboardEvent) => { if (event.nativeEvent.isComposing || event.keyCode === 229) return; if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); finish(event.key === 'Enter') } } }),
@@ -251,10 +237,15 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
   const [nodeError, setNodeError] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const [copyFallback, setCopyFallback] = React.useState<string | null>(null)
-  const [toast, setToast] = React.useState('')
-  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const say = (text: string) => { setToast(text); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 2200) }
-  React.useEffect(() => () => clearTimeout(toastTimer.current), [])
+  const [feedback, setFeedback] = React.useState<{ target: string; text: string } | null>(null)
+  const feedbackTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const confirmAction = (target: string, text: string) => {
+    clearTimeout(feedbackTimer.current)
+    setFeedback({ target, text })
+    feedbackTimer.current = setTimeout(() => setFeedback(null), 2200)
+  }
+  React.useEffect(() => () => clearTimeout(feedbackTimer.current), [])
+  const actionFeedback = (target: string) => h('span', { className: 'dsrc-action-feedback', role: 'status' }, feedback?.target === target ? feedback.text : null)
   const mounted = React.useRef(true), pending = React.useRef(false)
   const revision = React.useRef(0), acting = React.useRef(false)
   const refresh = React.useCallback(async () => {
@@ -319,8 +310,9 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
       return false
     } finally { acting.current = false; setWorkingAction(''); setWorkingNode('') }
   }
-  const copy = async (url: string, message = '已复制配对链接') => {
-    if (await copyText(url)) { setCopyFallback(null); setNotice(''); say(message); return }
+  const copy = async (url: string, target: string) => {
+    setFeedback(null)
+    if (await copyText(url)) { setCopyFallback(null); setNotice(''); confirmAction(target, '已复制'); return }
     setCopyFallback(url)
     setNotice('浏览器不允许自动复制，请选中下方内容手动复制。')
   }
@@ -357,7 +349,6 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
     const ticket = ++revision.current
     void command({ action: 'refresh' }).then(data => { if (mounted.current && ticket === revision.current) setState(data) }, () => {}).finally(() => { renewing.current = false })
   }, [state, expired, workingAction])
-  const [asking, setAsking] = React.useState<Way | null>(null)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const domainInput = React.useRef<HTMLInputElement>(null)
   const openSettings = React.useCallback((focus = false) => {
@@ -367,30 +358,18 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
       domainInput.current?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     }, 60)
   }, [])
-  const shown = state?.enabled ? state.activeMode : state?.mode
+  const shown = state?.enabled ? state.entry ?? state.activeMode : state?.mode
   const currentNode = state?.publicNodes?.list.find(entry => entry.id === state?.publicNodes?.current) ?? null
   const identityChangePending = currentNode?.identityChange ?? null
-  const domainBlocked = shown === 'public' && !publicUrl
+  const domainBlocked = state?.mode === 'public' && !publicUrl && currentNode?.kind !== 'service'
   React.useEffect(() => { if (domainBlocked) setSettingsOpen(true) }, [domainBlocked])
-  const choose = (mode: Way) => {
-    if (!state || disabled) return
-    if (mode === 'public' && !publicUrl) {
-      setAsking(null)
-      setNotice(state.enabled ? '先保存固定公网域名，再切换到“公网连接”。' : '选择已保留。请填写固定公网域名，然后开启连接。')
-      if (!state.enabled) void act('preferences', { mode })
-      openSettings(true)
-      return
-    }
-    if (!state.enabled) { void act('preferences', { mode }); return }
-    setAsking(mode === state.activeMode ? null : mode)
-  }
-  const change = async (mode: Way) => {
-    setAsking(null)
-    if (mode === 'public' && !publicUrl) { openSettings(true); return }
-    if (await act('preferences', { mode })) await act('switch')
+  const setPublicEnabled = async (publicEnabled: boolean) => {
+    const mode = publicEnabled ? 'public' : 'lan'
+    if (publicEnabled && !publicUrl && currentNode?.kind !== 'service') { openSettings(true); return }
+    if (await act('preferences', { mode }) && state?.enabled) await act('switch')
   }
   const start = () => {
-    if (domainBlocked || domainDirty || domainInvalid) {
+    if (domainBlocked) {
       setNotice(domainBlocked ? '请先填写并保存固定公网域名。' : '请先保存固定公网域名。')
       openSettings(true)
       return
@@ -406,7 +385,8 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
   /** A new ticket drops every request waiting for approval, so refresh waits for them. */
   const refreshCode = () => {
     if (state?.requests.length) { setNotice('还有配对请求在等待确认，请先处理后再刷新二维码。'); return }
-    void act('refresh').then(saved => { if (saved) say('二维码已刷新') })
+    setFeedback(null)
+    void act('refresh').then(saved => { if (saved) confirmAction('qr', '已刷新') })
   }
   /** A phone that closes the gateway has no way back; the computer can always open it again. */
   const stopConnection = () => {
@@ -524,18 +504,14 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
       block('div', '', [h('h3', null, statusError ? '暂时无法读取状态' : '正在读取远程连接'), h('p', { className: 'dsrc-note' }, statusError || '正在获取连接方式、二维码与授权设备…')]),
       statusError ? h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void refresh() } }, '重试') : null,
     ], { 'aria-busy': !statusError, role: 'status' })
-    const modeButtons = block('div', 'dsrc-ways', WAYS.map((way, index) => h('button', {
-      key: way.mode, type: 'button', role: 'radio', 'data-mode': way.mode, className: 'dsrc-way', 'aria-checked': shown === way.mode, title: way.text,
-      tabIndex: shown === way.mode || !shown && index === 0 ? 0 : -1, disabled, onClick: () => choose(way.mode),
-      onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => moveRadio(event, index, WAYS.length, next => choose(WAYS[next]!.mode)),
-    }, h('span', { className: 'dsrc-way-icon' }, h(WayIcon, { mode: way.mode })),
-    block('span', 'dsrc-way-copy', [block('span', 'dsrc-way-name', [way.name, state.enabled && state.activeMode === way.mode ? h('span', { className: 'dsrc-tag dsrc-online' }, '使用中') : null])]))), { role: 'radiogroup', 'aria-label': '连接方式' })
     const code = block('div', 'dsrc-scan', [
-      state.qr && !expired ? block('div', 'dsrc-code', [h('img', { src: state.qr, alt: `${wayName(shown)}远程控制配对二维码`, draggable: false })], { 'data-ready': true })
+      state.qr && !expired ? block('div', 'dsrc-code', [h('img', { src: state.qr, alt: '远程连接配对二维码', draggable: false })], { 'data-ready': true })
         : block('div', 'dsrc-code', [block('div', 'dsrc-placeholder', [expired ? '正在更新二维码…' : state.busy ? '连接就绪后显示二维码' : domainBlocked ? '配置域名并开启后显示二维码' : '开启连接后显示配对二维码'])]),
-      state.qr && !expired ? h('button', { type: 'button', className: 'dsrc-button dsrc-ghost dsrc-code-refresh', disabled, onClick: refreshCode }, workingAction === 'refresh' ? '正在刷新…' : '刷新二维码') : null,
-      shown === 'public' && state.local && state.publicUrlCheck && !state.publicUrlCheck.reachable ? h('p', { className: 'dsrc-error', role: 'alert' }, state.publicUrlCheck.error ?? '公网节点不可达，请确认隧道客户端正在运行，或检查域名配置。') : null,
-      block('div', 'dsrc-steps', ['手机相机扫码', shown === 'public' ? state.node.kind === 'gateway' ? '核对指纹，本机确认' : '核对节点，本机确认' : '在本机确认配对', '继续会话与审批'].map((step, index) => block('span', 'dsrc-step', [h('span', { className: 'dsrc-number' }, String(index + 1)), h('span', null, step)], { key: step }))),
+      state.qr && !expired ? block('div', 'dsrc-action-with-feedback', [
+        h('button', { type: 'button', className: 'dsrc-button dsrc-ghost dsrc-code-refresh', disabled, onClick: refreshCode }, workingAction === 'refresh' ? '正在刷新…' : '刷新二维码'),
+        actionFeedback('qr'),
+      ]) : null,
+      state.enabled && state.qr && !expired ? h('p', { className: 'dsrc-note' }, state.entry === 'public' ? '公网入口' : '局域网入口') : null,
     ])
     const brief = block('div', 'dsrc-brief', [
       block('div', 'dsrc-connection-state', [
@@ -548,24 +524,24 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
         lanCertificate.error || (lanCertificateDue ? '局域网证书即将到期，请在外部续期后，在本机连接设置中重载。' : '使用局域网 HTTPS。请将域名解析到电脑的局域网地址，并使用手机信任的证书。')) : null,
       state.error && !identityChangePending ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, state.error)]) : null,
       state.pairingFailure ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'danger' }, `配对被拒绝${state.pairingFailure.name ? `（${state.pairingFailure.name}）` : ''}：${state.pairingFailure.reason}`)]) : null,
-      shown === 'public' && state.publicUrlCheck && !state.publicUrlCheck.reachable ? block('div', 'dsrc-pane-message', [h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, state.publicUrlCheck.error ?? '公网节点不可达，请确认隧道客户端正在运行，或检查域名配置。')]) : null,
+      state.activeMode === 'public' && state.entry === 'lan' && !identityChangePending ? h(InlineNotice, { tone: 'warn', action: { label: '检查设置', onClick: () => openSettings() } }, state.publicUrlCheck?.error ?? state.serviceNode?.lastError ?? '正在检测公网入口。当前二维码可在同一 Wi‑Fi 使用。') : null,
       block('div', 'dsrc-connection-actions', [state.enabled ? h('button', { type: 'button', className: 'dsrc-button dsrc-stop', disabled, onClick: stopConnection }, workingAction === 'stop' ? '正在关闭…' : '关闭远程连接')
         : h('button', { type: 'button', className: 'dsrc-button dsrc-primary dsrc-start', disabled, onClick: start }, state.busy || workingAction === 'start' ? '正在开启…' : domainBlocked ? '先配置域名' : '开启远程连接')]),
       h('label', { className: 'dsrc-toggle' }, h('input', { type: 'checkbox', checked: state.autoStart, disabled, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void act('preferences', { autoStart: event.target.checked }) } }), '随 DSH 自动开启'),
       firstURL && !expired ? block('div', 'dsrc-pair-link', [
         h('code', { className: 'dsrc-link', title: address(firstURL) }, address(firstURL)),
-        h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void copy(firstURL) } }, '复制链接'),
+        block('div', 'dsrc-action-with-feedback', [
+          h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void copy(firstURL, firstURL) } }, '复制链接'),
+          actionFeedback(firstURL),
+        ]),
       ]) : null,
       state.links.length > 1 ? h('details', { className: 'dsrc-networks' }, h('summary', null, `其他网卡（${state.links.length - 1}）`),
-        block('div', 'dsrc-alt-links', state.links.slice(1).map(link => h('button', { key: link.base, type: 'button', className: 'dsrc-button dsrc-address-button', title: '复制此网卡的完整配对链接', disabled: !link.url, onClick: () => { if (link.url) void copy(link.url) } }, address(link.base))))) : null,
+        block('div', 'dsrc-alt-links', state.links.slice(1).map(link => block('div', 'dsrc-action-with-feedback', [
+          h('button', { type: 'button', className: 'dsrc-button dsrc-address-button', title: '复制此网卡的完整配对链接', disabled: !link.url, onClick: () => { if (link.url) void copy(link.url, link.base) } }, address(link.base)),
+          actionFeedback(link.base),
+        ], { key: link.base })))) : null,
     ])
     return block('section', 'dsrc-surface dsrc-workspace', [
-      modeButtons,
-      asking ? block('div', 'dsrc-confirm', [
-        h('p', null, `切换到“${wayName(asking)}”？已连接的手机会断开，需要重新配对。`),
-        block('div', 'dsrc-actions', [h('button', { type: 'button', className: 'dsrc-button', disabled, onClick: () => setAsking(null) }, '取消'),
-          h('button', { type: 'button', className: 'dsrc-button dsrc-primary', disabled, onClick: () => { void change(asking) } }, '切换连接')]),
-      ], { role: 'alertdialog', 'aria-label': '更换连接方式' }) : null,
       block('div', 'dsrc-stage', [code, brief]),
       nodes(),
       statusError ? block('div', 'dsrc-panel-message', [h('span', null, `状态更新失败，当前显示上次结果。${statusError}`), h('button', { type: 'button', className: 'dsrc-button', onClick: () => { void refresh() } }, '重试')], { 'data-tone': 'warn', role: 'alert' }) : null,
@@ -614,11 +590,24 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
     ], { 'aria-label': '局域网 HTTPS' }) : null
     const publicSettings = block('section', 'dsrc-setting-group', [
       block('div', 'dsrc-setting-heading', [h('h3', null, '公网连接'), h('span', { className: 'dsrc-setting-kicker' }, '固定域名与证书')]),
+      (publicUrl || currentNode?.kind === 'service') ? h('label', { className: 'dsrc-check' },
+        h('input', { type: 'checkbox', checked: state.mode === 'public', disabled: disabled || !state.local,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => { void setPublicEnabled(event.target.checked) } }),
+        '启用公网入口') : null,
+      state.mode === 'public' ? block('div', 'dsrc-field', [
+        h('label', { htmlFor: 'dsrc-line-preference' }, '线路偏好'),
+        h('select', { id: 'dsrc-line-preference', value: state.line ?? 'lan', disabled: disabled || !state.local,
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => { void act('preferences', { line: event.target.value }) } },
+        h('option', { value: 'lan' }, '局域网优先'), h('option', { value: 'public' }, '公网优先')),
+      ]) : null,
+      state.mode === 'public' && currentNode?.kind === 'service'
+        ? h('p', { className: 'dsrc-note' }, '升级后的自托管节点支持局域网直连和公网自动切换。') : null,
+
       block('div', 'dsrc-field dsrc-domain-field', [
         h('label', { htmlFor: 'dsrc-public-url' }, '固定公网域名'),
         block('div', 'dsrc-input', [
           h('input', { id: 'dsrc-public-url', ref: domainInput, type: 'url', value: domainDraft, placeholder: 'https://dsh.example.com', spellCheck: false, autoComplete: 'off', disabled: disabled || !state.local || state.activeMode === 'public', 'aria-invalid': domainInvalid, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDomain(event.target.value) }),
-          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !domainDirty || domainInvalid || state.activeMode === 'public', onClick: () => { void act('preferences', { publicUrl: domainDraft.trim() }).then(saved => { if (saved) setDomain(null) }) } }, '保存'),
+          h('button', { type: 'button', className: 'dsrc-button', disabled: disabled || !state.local || !domainDirty || domainInvalid || state.activeMode === 'public', onClick: () => { void act('preferences', { publicUrl: domainDraft.trim(), enablePublic: true }).then(saved => { if (saved) setDomain(null) }) } }, '保存'),
         ]),
         domainInvalid ? h('p', { className: 'dsrc-error' }, '请输入不带路径、账号或密码的 https:// 域名。') : null,
         h('p', { className: 'dsrc-note' }, !state.local ? '域名只能在连接到此电脑的本机面板修改。' : state.activeMode === 'public' ? '如需修改域名，请先关闭远程连接。' : `将 frpc 的 80 / 443 转发到本机端口 ${state.publicPort}。`),
@@ -693,7 +682,7 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
     ]),
     state.devices.length ? block('div', 'dsrc-device-list', state.devices.map(device => h(DeviceRow, { key: device.id, device, disabled, act }))) : h('p', { className: 'dsrc-empty' }, '暂无设备，扫码确认后会显示在这里。'),
     state.repairRequired ? h(InlineNotice, { tone: 'warn' }, `有 ${state.repairRequired} 台设备是通过旧公网入口授权的，升级后已标记为需要重新配对；旧授权不再放行。`) : null,
-    h('p', { className: 'dsrc-note' }, '不同连接方式分别记录授权；连续 30 天未使用的授权会过期。'),
+    h('p', { className: 'dsrc-note' }, '连续 30 天未使用的设备授权会过期。'),
   ], { 'data-section': 'devices' }) : null
   /** Devices waiting on this Host to confirm a pairing with the self-hosted public node. */
   const servicePairings = () => {
@@ -719,13 +708,12 @@ export function RemoteControlPanel({ manager }: PanelProps): React.ReactElement 
     ], { 'data-section': 'service-pairings' })
   }
   return block('div', 'dsrc', [
-    h('header', { className: 'dsrc-head' }, block('div', '', [h('h2', null, '远程控制'), h('p', { className: 'dsrc-sub' }, '用手机浏览器继续电脑上的会话与审批。')]),
+    h('header', { className: 'dsrc-head' }, block('div', '', [h('h2', null, '远程控制'), h('p', { className: 'dsrc-sub' }, state?.currentRoute ? `当前线路 · ${state.currentRoute === 'lan' ? '局域网直连' : '公网'}` : '用手机浏览器继续电脑上的会话与审批。')]),
       h('span', { className: 'dsrc-badge', 'data-state': connectionState, role: 'status' }, h('span', { className: 'dsrc-dot' }), connectionLabel)),
     block('div', 'dsrc-layout', [
       block('div', 'dsrc-col dsrc-col-main', [main(), updateSection()]),
       block('div', 'dsrc-col dsrc-col-rail', [requests(), servicePairings(), devices(), settings()]),
     ]),
-    toast ? block('div', 'dsrc-toast', [h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, h('path', { d: 'm5 12 5 5 9-10' })), toast], { role: 'status', 'aria-live': 'polite' }) : null,
   ], { 'data-dsh-plugin': 'dsh-remote-connect' })
 }
 interface Waiting { enabled: boolean; node: { name: string; fingerprint: string; fingerprintGroups: string }; requests: Array<{ id: string; name: string; via: 'lan' | 'public'; nodeConfirmed: boolean; expiresAt: number }> }

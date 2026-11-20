@@ -14,7 +14,7 @@
   简体中文 · <a href="https://github.com/winlin926/dsh-carry/blob/main/README.en.md">English</a>
 </p>
 
-　　`dsh-carry` 让你通过手机浏览器远程使用电脑上运行的 DeepSeek Harness（DSH）。扫码配对后，可以继续会话、审批工具请求，并查看工作区文件或 HTML 预览。手机连接的是电脑上的 DSH 实例，可用会话和工具由宿主提供。
+　　`dsh-carry` 让你通过手机浏览器远程使用电脑上运行的 DeepSeek Harness（DSH）。扫码配对后，可以继续会话、审批工具请求，并查看工作区文件或 HTML 预览。手机连接的是电脑上的 DSH 实例，可用会话和工具由宿主提供。0.7.0 支持局域网与公网双线路：一张二维码会优先选择已验证的可用入口，首次公网配对会先核对主机指纹，连接建立后可在两条线路之间自动切换。
 
 ## 📦 安装与首次连接
 
@@ -26,7 +26,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 　　桌面版和 `dsh web` 各自管理插件。如果电脑上找不到「远程控制」面板，先确认插件装在正在使用的那个 profile 中。
 
-1. 让手机和电脑连接同一 Wi-Fi。在电脑上打开「远程控制」，选择「同一 Wi-Fi」并开启连接。
+1. 让手机和电脑连接同一 Wi-Fi。在电脑上打开「远程控制」，点击「开启远程连接」。
 2. 用手机扫描面板上的二维码，在电脑上核对设备并批准配对。
 3. 在手机浏览器中打开已有会话。以后要收回权限，在电脑的已授权设备列表中撤销该手机即可。
 
@@ -48,18 +48,21 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 <p align="center">启动页预览 · 新会话 · 继续对话</p>
 
 <details>
-<summary>查看更多手机界面：工作区工具与设置</summary>
+<summary>查看更多手机界面：工作区工具、HTML 预览与设置</summary>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="32%" alt="手机上的工作区工具入口" />
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" width="32%" alt="手机上的 DSH 通用设置" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-tools.jpg" width="30%" alt="手机上的工作区工具入口" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-html-preview.jpg" width="30%" alt="手机上的工作区 HTML 预览" />
+  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-settings.png" width="30%" alt="手机上的 DSH 通用设置" />
 </p>
 
 </details>
 
 ## 🌐 离开同一 Wi-Fi 后怎么连？
 
-　　同一局域网内，手机可以直连电脑。换成移动数据或其他 Wi-Fi 时，可使用固定域名的 HTTPS 隧道网关，或自行部署仓库里的 `remote-server` 中继节点。公网配对时，在手机与电脑上核对主机指纹，确认连接的是自己的电脑。
+　　在「连接设置」保存固定 HTTPS 域名，或启用自托管 `remote-server` 节点。公网入口验证可达后，面板上的二维码会指向该域名。首次公网配对时，在手机和电脑上核对主机指纹。
+
+　　已打开的域名页面会尝试建立局域网直连。两条线路都可用时默认局域网优先，可在「连接设置」改为公网优先。一条线路故障时会自动接到已验证的备用线路。公网入口不可用时，电脑面板显示局域网二维码。支持 Service Worker 的 HTTPS 页面还可以在公网暂时断开后，继续通过已建立的直连打开工作区 HTML 预览。
 
 　　**🔒 只批准你信任的设备。** 已配对的手机拥有接近本机的操作权限。公网节点会终止 TLS，运营者可以看到转发内容。这条链路没有端到端加密，请使用自己部署或信任的节点。项目不运营公共节点。
 

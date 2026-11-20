@@ -57,7 +57,7 @@
   "protocol": 2,
   "kind": "gateway",
   "name": "DeepSeek Harness",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "BuP9j9opu2CrWVV95h7bCuzbIxE0vjDnW0Vfjht5L6k",
@@ -76,7 +76,7 @@
   "protocol": 2,
   "kind": "service",
   "name": "我的节点",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "capabilities": ["pairing", "cache", "official-ui"],
   "node": {
     "id": "Di6lw5vsvhdLKYAG4LFOoPgX6mIfMoYOQ2Tz3oECWs0",
@@ -101,7 +101,7 @@
 | `protocol` | number | 必须**等于数字 2**（不是 `"2"`） | 协议版本。客户端拒绝其它值，不做兼容猜测；升版即破坏性变更。 |
 | `kind` | string | 精确小写 `"gateway"` 或 `"service"` | 节点类型。大小写敏感，不接受其他拼写。 |
 | `name` | string | 1–64 个 **Unicode 码点**；不得含 C0 控制符（U+0000–U+001F）或 DEL（U+007F） | 人类可读名称，仅用于展示，**不参与身份判断**。gateway 固定用 `DeepSeek Harness`（不暴露计算机名）。 |
-| `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.6.5`、`1.2.0-rc.3`。 |
+| `version` | string | 正则 `^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$`，即 1–32 个 ASCII 字符，首字符为字母或数字 | 节点**软件**版本（不是协议版本），semver 可直接使用，如 `0.7.0`、`1.2.0-rc.3`。 |
 | `capabilities` | string[] | 非空数组；每项精确小写、取值必须属于 `pairing` `cache` `official-ui`；元素唯一；**必须包含 `"pairing"`** | 节点能力广告；未知能力即失败（新增能力必须升 protocol）。见 2.3。 |
 | `node` | object | v2 必填；`node` 缺失或任一子字段非法即 `bad-identity` | 节点身份，见 2.4。 |
 | `node.id` | string | 正则 `^[A-Za-z0-9_-]{43}$`，**恰好 43 个字符** | `base64url(sha256(SPKI DER))`，无 `=` 填充。 |
@@ -118,7 +118,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 | `cache` | 否 | 节点提供带 `rev` 的可缓存静态资源，并按 `hid`/`rev` 正确分区。 |
 | `official-ui` | 否 | 节点提供官方 DSH 界面外壳（gateway 通常有）。 |
 
-节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.6.5 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
+节点只能广告**实际实现**的能力，不能为了「看起来完整」而填。0.7.0 的两类节点只允许宣告 `pairing`、`cache`、`official-ui`；协议里没有 relay/turn 能力，新增能力必须升 protocol。
 
 ### 2.4 身份来源
 
@@ -144,7 +144,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
 
 ## 3. v1 兼容规则
 
-新插件（0.6.5）的检测结果分三种：
+新插件（0.7.0）的检测结果分三种：
 
 | 文档 | 处理 |
 | --- | --- |
@@ -231,7 +231,7 @@ v1 文档的扁平 `hostId`/`fingerprint` 字段规则保持不变：`hostId` �
       "url": "https://node.example.com",
       "kind": "service",
       "name": "我的节点",
-      "version": "0.6.5",
+      "version": "0.7.0",
       "protocol": 2,
       "capabilities": ["pairing", "cache", "official-ui"],
       "node": { "id": "…", "fingerprint": "…", "publicKey": "…" },
@@ -297,7 +297,7 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 - 手机配对页展示：节点名称、节点类型（隧道网关/自托管服务）、**目标主机指纹**（8 组 4 位大写十六进制，来自二维码里的 `key`，本地计算，不经节点转发）、「确认是本机」按钮。
 - 电脑确认页展示：请求设备名、**本机主机指纹**（8 组 4 位大写）、「批准」/「拒绝」。
 - 授权条件：手机确认 + 电脑批准 + 指纹一致，三者缺一不可；任一端拒绝、票据过期、重放（同一票据二次 claim）都不得产生设备授权。
-- 二维码参数保持现状：`https://<origin>/#v=1&ticket=<43 位>&key=<host SPKI DER base64url>`；`v` 是页面票据格式版本，与节点协议版本无关。
+- 配对二维码：`https://<origin>/pair#v=1&ticket=<43 位>&key=<host SPKI DER base64url>`；`v` 是页面票据格式版本，与节点协议版本无关。
 - 通过 v2 网关配对与通过 v2 服务节点配对使用同一套双端确认；旧版节点仍按 v1 配对流程处理。
 
 ## 8. 主机身份（`host-identity.json`）
@@ -349,7 +349,8 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 
 - 浏览器按 origin 隔离响应；固定域名网关透传宿主资源 URL 与缓存头，`/rc/boot.js` 使用内容 ETag 重新验证。
 - 服务节点接收 Host 上传的资源，数据库与 `/assets/:hostId/:revision/*` 路径同时按主机、revision 和资源路径隔离；HTML 不缓存，普通资源可用 immutable 与 ETag。
-- 普通手机 HTTP/SSE/WebSocket 请求通过 Host 反向隧道转发。
+- 普通手机 HTTP/SSE/WebSocket 请求通过已授权的 Host 反向隧道转发。新版节点把会话绑定到配对的 Host。迁移前的会话有唯一有效关系时继续使用。
+- 支持直连的 Host 在隧道 `hello` 声明 `direct` 能力。中继转发时附加会话认证得出的设备身份，Host 经同一网关处理该设备的信令和业务请求。节点在撤销时通知已连接 Host，并在 Host 重新连接时同步暂停期间的撤销。旧节点沿用公网隧道。
 - 不引入 Service Worker，不预下载另一份前端，不改宿主模块加载器的重试、去重与回退职责。
 
 ## 12. 面板与文案
@@ -375,4 +376,4 @@ API（`PublicNodeConfig`）：`current`（getter）、`list()`、`add(input)`、
 - `protocol` 升级 = 破坏性变更；客户端遇到非 `1`/`2` 直接失败，不做降级猜测。仅支持 v1 的客户端无法添加 v2 服务节点；v2 网关保留扁平字段，旧客户端仍可添加网关节点。
 - 响应中**多出的字段被忽略**，服务端可先行添加新字段（但新能力必须等待 protocol 升级）。
 - 未知 `capabilities` 项导致客户端拒绝，因此能力白名单只能随 protocol 升版扩展。
-- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.6.5 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.6.5`。
+- 文档版本：v2（`protocol: 2`）；v1 规则见第 3 节。本文档随 0.7.0 发布：插件 `version` 与 `remote-server` 的 `nodeVersion` 均为 `0.7.0`。

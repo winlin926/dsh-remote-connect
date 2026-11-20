@@ -1,7 +1,7 @@
 import { request as httpRequest } from 'node:http'
 import type { ClientRequest, IncomingMessage } from 'node:http'
-import { connect as netConnect } from 'node:net'
-import type { Duplex } from 'node:stream'
+import { WebSocket } from 'ws'
+import { safePath, closeCode } from '../gateway.js'
 import {
   DIRECT_MAX_FRAME, DIRECT_REQUEST_TIMEOUT_MS, DIRECT_MARK, DirectFrameError,
   controlPayload, decodeDirectFrame, encodeDirectFrame, readControl, type DirectFrame,
@@ -25,6 +25,8 @@ export interface DirectBridgeOptions {
 }
 
 export interface DirectStats { requests: number; sockets: number; received: number; sent: number }
+const MAX_SOCKET_MESSAGE = 32 * 1024 * 1024
+const MAX_EXCHANGES = 32
 
 /** Headers a frame may not control: they describe this hop, not the phone's request. */
 const BLOCKED = new Set([
@@ -35,6 +37,7 @@ const BLOCKED = new Set([
 ])
 
 interface HttpCall { req: ClientRequest; res?: IncomingMessage; timer?: ReturnType<typeof setTimeout>; ended?: boolean }
+interface SocketMessage { binary: boolean; chunks: Buffer[]; size: number }
 
 /**
  * One direct connection's traffic, carried as frames and replayed against the computer's own
@@ -43,7 +46,8 @@ interface HttpCall { req: ClientRequest; res?: IncomingMessage; timer?: ReturnTy
  */
 export class DirectBridge {
   private readonly calls = new Map<string, HttpCall>()
-  private readonly sockets = new Map<string, Duplex>()
+  private readonly sockets = new Map<string, WebSocket>()
+  private readonly socketMessages = new Map<string, SocketMessage>()
   private disposed = false
   private readonly stats: DirectStats = { requests: 0, sockets: 0, received: 0, sent: 0 }
 
@@ -65,28 +69,31 @@ export class DirectBridge {
 
     return {
       handle: (data: Uint8Array): void => {
+        if (this.disposed) return
         this.stats.received += data.length
         let frame: DirectFrame
         try { frame = decodeDirectFrame(data) } catch (failure) { this.options.log?.('直连帧被拒绝：' + describe(failure)); return }
-        switch (frame.t) {
+        try { switch (frame.t) {
           case 'ping': reply('pong', frame.id, readControl(frame)); return
           case 'pong': return
           case 'open': this.open(frame.id, readControl(frame), send, fail); return
           case 'body': this.write(frame.id, frame.payload); return
           case 'end': this.endCall(frame.id); return
           case 'cancel': this.cancel(frame.id); return
-          case 'ws.open': void this.openSocket(frame.id, readControl(frame), reply, send); return
-          case 'ws.text': this.sockets.get(frame.id)?.write(Buffer.from(frame.payload).toString('utf8')); return
-          case 'ws.bin': this.sockets.get(frame.id)?.write(Buffer.from(frame.payload)); return
+          case 'ws.open': this.openSocket(frame.id, readControl(frame), reply, send); return
+          case 'ws.text': this.startSocketMessage(frame.id, false, frame.payload); return
+          case 'ws.bin': this.startSocketMessage(frame.id, true, frame.payload); return
+          case 'ws.cont': this.continueSocketMessage(frame.id, frame.payload); return
           case 'ws.close': this.closeSocket(frame.id, readControl(frame)); return
           default: return
-        }
+        } } catch { fail(frame.id, 'INVALID_REQUEST', '直连请求格式不合法。') }
       },
       dispose: (): void => {
         this.disposed = true
         for (const id of [...this.calls.keys()]) this.cancel(id)
-        for (const id of [...this.sockets.keys()]) this.sockets.get(id)?.destroy()
+        for (const id of [...this.sockets.keys()]) this.sockets.get(id)?.terminate()
         this.sockets.clear()
+        this.socketMessages.clear()
       },
     }
   }
@@ -107,9 +114,9 @@ export class DirectBridge {
   }
 
   private open(id: string, input: Record<string, unknown>, send: (frame: DirectFrame) => void, fail: (id: string, code: string, message: string) => void): void {
-    if (this.calls.has(id)) { fail(id, 'DUPLICATE', '该请求已存在。'); return }
+    if (this.calls.has(id) || this.sockets.has(id) || this.calls.size + this.sockets.size >= MAX_EXCHANGES) { fail(id, 'BUSY', '直连请求数量达到上限或请求重复。'); return }
     const method = typeof input.method === 'string' ? input.method.toUpperCase() : 'GET'
-    const path = typeof input.path === 'string' && input.path.startsWith('/') ? input.path : undefined
+    const path = typeof input.path === 'string' && safePath(input.path) ? input.path : undefined
     if (!path) { fail(id, 'BAD_PATH', '直连请求路径不合法。'); return }
     const port = this.options.port()
     if (!port) { fail(id, 'NO_GATEWAY', '本机网关未开启。'); return }
@@ -117,10 +124,11 @@ export class DirectBridge {
     const req = httpRequest({ host: '127.0.0.1', port, method, path, headers: this.headers(input, port) })
     const call: HttpCall = { req }
     this.calls.set(id, call)
-    call.timer = setTimeout(() => { this.finish(id); fail(id, 'TIMEOUT', '直连请求超时。') }, this.options.requestTimeoutMs ?? DIRECT_REQUEST_TIMEOUT_MS)
+    call.timer = setTimeout(() => { this.cancel(id); fail(id, 'TIMEOUT', '直连请求超时。') }, this.options.requestTimeoutMs ?? DIRECT_REQUEST_TIMEOUT_MS)
     if (call.timer.unref) call.timer.unref()
     req.on('response', res => {
       call.res = res
+      if (call.timer) clearTimeout(call.timer)
       const headers: Record<string, string | string[]> = {}
       for (const [name, value] of Object.entries(res.headers)) {
         if (value === undefined || name === 'connection' || name === 'transfer-encoding' || name === 'keep-alive' || name === 'set-cookie') continue
@@ -135,7 +143,7 @@ export class DirectBridge {
       res.on('end', () => { send({ t: 'done', id, payload: new Uint8Array() }); this.finish(id) })
       res.on('error', error => { fail(id, 'RESPONSE_ERROR', describe(error)); this.finish(id) })
     })
-    req.on('error', error => { fail(id, 'REQUEST_ERROR', describe(error)); this.finish(id) })
+    req.on('error', error => { if (this.calls.get(id) === call) { fail(id, 'REQUEST_ERROR', describe(error)); this.finish(id) } })
     // A GET or HEAD body never arrives, so waiting for an `end` frame would hold the request open
     // for its whole timeout. Every other method waits for the phone to say the body is complete.
     if (method === 'GET' || method === 'HEAD') this.endCall(id)
@@ -150,7 +158,8 @@ export class DirectBridge {
 
   private write(id: string, payload: Uint8Array): void {
     const call = this.calls.get(id)
-    if (!call || call.res) return
+    if (!call || call.res || call.ended) return
+    if (call.req.writableLength > 16 * 1024 * 1024) { this.cancel(id); throw new Error('Upload queue full') }
     call.req.write(Buffer.from(payload))
   }
 
@@ -158,7 +167,7 @@ export class DirectBridge {
     const call = this.calls.get(id)
     if (call) { call.res?.destroy(); call.req.destroy(); this.finish(id) }
     const socket = this.sockets.get(id)
-    if (socket) { this.sockets.delete(id); socket.destroy() }
+    if (socket) { this.socketMessages.delete(id); socket.terminate() }
   }
 
   private finish(id: string): void {
@@ -168,64 +177,89 @@ export class DirectBridge {
     this.calls.delete(id)
   }
 
-  private async openSocket(id: string, input: Record<string, unknown>, reply: (t: DirectFrame['t'], id: string, value: unknown) => void, send: (frame: DirectFrame) => void): Promise<void> {
-    const path = typeof input.path === 'string' && input.path.startsWith('/') ? input.path : undefined
-    if (!path) { reply('ws.ack', id, { ok: false, message: '直连 WebSocket 路径不合法。' }); return }
+  private startSocketMessage(id: string, binary: boolean, payload: Uint8Array): void {
+    if (this.sockets.get(id)?.readyState !== WebSocket.OPEN) return
+    if (!payload.length || payload[0] !== 0 && payload[0] !== 1 || this.socketMessages.has(id)) { this.sockets.get(id)?.close(1002); return }
+    this.appendSocketMessage(id, { binary, chunks: [], size: 0 }, payload)
+  }
+
+  private continueSocketMessage(id: string, payload: Uint8Array): void {
+    const message = this.socketMessages.get(id)
+    if (!message || !payload.length || payload[0] !== 0 && payload[0] !== 1) { this.sockets.get(id)?.close(1002); return }
+    this.appendSocketMessage(id, message, payload)
+  }
+
+  private appendSocketMessage(id: string, message: SocketMessage, payload: Uint8Array): void {
+    const end = payload[0] === 1
+    const chunk = Buffer.from(payload.subarray(1))
+    message.size += chunk.length
+    if (message.size > MAX_SOCKET_MESSAGE) {
+      this.socketMessages.delete(id)
+      this.sockets.get(id)?.close(1009, 'message too large')
+      return
+    }
+    message.chunks.push(chunk)
+    if (!end) { this.socketMessages.set(id, message); return }
+    this.socketMessages.delete(id)
+    const socket = this.sockets.get(id)
+    if (socket?.readyState === WebSocket.OPEN) socket.send(Buffer.concat(message.chunks), { binary: message.binary })
+  }
+
+  private sendSocketMessage(id: string, data: Buffer, binary: boolean, send: (frame: DirectFrame) => void): void {
+    const type = binary ? 'ws.bin' : 'ws.text'
+    const limit = DIRECT_MAX_FRAME - 1
+    let offset = 0
+    do {
+      const end = Math.min(offset + limit, data.length)
+      const payload = new Uint8Array(end - offset + 1)
+      payload[0] = end === data.length ? 1 : 0
+      payload.set(data.subarray(offset, end), 1)
+      send({ t: offset === 0 ? type : 'ws.cont', id, payload })
+      offset = end
+    } while (offset < data.length)
+  }
+
+  private openSocket(id: string, input: Record<string, unknown>, reply: (t: DirectFrame['t'], id: string, value: unknown) => void, send: (frame: DirectFrame) => void): void {
+    const path = typeof input.path === 'string' && safePath(input.path) ? input.path : undefined
+    if (!path || this.sockets.has(id) || this.calls.has(id) || this.calls.size + this.sockets.size >= MAX_EXCHANGES) { reply('ws.ack', id, { ok: false, message: '直连 WebSocket 路径不合法或连接数量达到上限。' }); return }
     const port = this.options.port()
     if (!port) { reply('ws.ack', id, { ok: false, message: '本机网关未开启。' }); return }
-    const protocols = Array.isArray(input.protocols) ? input.protocols.filter((item): item is string => typeof item === 'string') : undefined
-    // A WebSocket upgrade is the one request the gateway's HTTP handler cannot carry, so this hop
-    // performs the handshake itself with the same envelope the bridge stamps on plain requests.
-    const key = Buffer.from(Array.from({ length: 16 }, () => Math.floor(Math.random() * 256))).toString('base64')
-    const headers = ['GET ' + path + ' HTTP/1.1', 'Host: 127.0.0.1:' + port, 'Upgrade: websocket', 'Connection: Upgrade',
-      'Sec-WebSocket-Key: ' + key, 'Sec-WebSocket-Version: 13', 'Origin: http://127.0.0.1:' + port,
-      'Sec-Fetch-Site: same-origin', DIRECT_MARK + ': ' + this.options.mark()]
-    if (protocols?.length) headers.push('Sec-WebSocket-Protocol: ' + protocols.join(', '))
-    const socket = netConnect({ host: '127.0.0.1', port })
+    const protocols = Array.isArray(input.protocols) ? input.protocols.filter((item): item is string => typeof item === 'string') : []
+    const host = '127.0.0.1:' + port
+    const socket = new WebSocket('ws://' + host + path, protocols.length ? protocols : undefined, {
+      headers: { host, origin: 'http://' + host, 'sec-fetch-site': 'same-origin', [DIRECT_MARK]: this.options.mark() },
+      maxPayload: MAX_SOCKET_MESSAGE,
+      perMessageDeflate: false,
+      handshakeTimeout: 10_000,
+    })
     this.sockets.set(id, socket)
     this.stats.sockets += 1
-    let buffer = Buffer.alloc(0)
-    const settle = (value: boolean, message?: string): void => {
-      socket.removeAllListeners('data')
-      socket.removeAllListeners('error')
-      socket.removeAllListeners('connect')
-      if (!value) { this.sockets.delete(id); socket.destroy(); reply('ws.ack', id, { ok: false, message }); return }
-      reply('ws.ack', id, { ok: true, ...(protocols?.length ? { protocol: protocols[0] } : {}) })
-      socket.on('data', (chunk: Buffer) => {
-        for (let offset = 0; offset < chunk.length; offset += DIRECT_MAX_FRAME) {
-          send({ t: 'ws.bin', id, payload: new Uint8Array(chunk.subarray(offset, offset + DIRECT_MAX_FRAME)) })
-        }
-      })
-      socket.on('error', () => { send({ t: 'ws.close', id, payload: controlPayload({ code: 1011 }) }); this.sockets.delete(id) })
-      socket.on('close', () => { this.sockets.delete(id); send({ t: 'ws.close', id, payload: controlPayload({ code: 1000 }) }) })
-    }
-    socket.on('error', error => settle(false, describe(error)))
-    socket.on('close', () => { if (this.sockets.has(id)) { this.sockets.delete(id); reply('ws.ack', id, { ok: false, message: '网关关闭了连接。' }) } })
-    socket.once('connect', () => socket.write(headers.join('\r\n') + '\r\n\r\n'))
-    socket.on('data', (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk])
-      const end = buffer.indexOf('\r\n\r\n')
-      if (end < 0 || !this.sockets.has(id)) return
-      const head = buffer.subarray(0, end).toString('utf8').split('\r\n')
-      const status = Number((head[0] ?? '').split(' ')[1])
-      const rest = buffer.subarray(end + 4)
-      if (status !== 101) { settle(false, '网关拒绝了直连 WebSocket（HTTP ' + status + '）。'); return }
-      settle(true)
-      if (rest.length) send({ t: 'ws.bin', id, payload: new Uint8Array(rest) })
+    let opened = false
+    socket.once('open', () => {
+      opened = true
+      reply('ws.ack', id, { ok: true, protocol: socket.protocol })
+    })
+    socket.on('message', (data, binary) => this.sendSocketMessage(id, toBuffer(data), binary, send))
+    socket.once('close', (code, reason) => {
+      this.sockets.delete(id)
+      this.socketMessages.delete(id)
+      if (opened) reply('ws.close', id, { code, reason: reason.toString('utf8') })
+      else reply('ws.ack', id, { ok: false, message: '网关关闭了 WebSocket 连接。' })
+    })
+    socket.on('error', failure => {
+      if (opened) return
+      reply('ws.ack', id, { ok: false, message: describe(failure) })
     })
   }
 
   private closeSocket(id: string, input: Record<string, unknown>): void {
     const socket = this.sockets.get(id)
     if (!socket) return
-    this.sockets.delete(id)
-    try {
-      const code = typeof input.code === 'number' ? input.code : 1000
-      const payload = Buffer.alloc(2); payload.writeUInt16BE(code)
-      if (typeof input.reason === 'string' && input.reason) socket.write(Buffer.concat([Buffer.from([0x88, payload.length + input.reason.length]), payload, Buffer.from(input.reason, 'utf8')]))
-      else socket.write(Buffer.from([0x88, 2, payload[0]!, payload[1]!]))
-    } catch { /* a socket already gone needs no frame */ }
-    socket.end()
+    this.socketMessages.delete(id)
+    const code = typeof input.code === 'number' ? input.code : 1000
+    const reason = typeof input.reason === 'string' ? input.reason : ''
+    try { socket.close(closeCode(code), reason) }
+    catch { socket.terminate() }
   }
 }
 
@@ -233,4 +267,10 @@ function describe(failure: unknown): string {
   if (failure instanceof DirectFrameError) return failure.message
   const node = failure as NodeJS.ErrnoException | undefined
   return node?.code ? node.code : failure instanceof Error ? failure.message : '未知错误'
+}
+
+function toBuffer(data: Buffer | ArrayBuffer | Buffer[]): Buffer {
+  if (Buffer.isBuffer(data)) return data
+  if (Array.isArray(data)) return Buffer.concat(data)
+  return Buffer.from(data)
 }

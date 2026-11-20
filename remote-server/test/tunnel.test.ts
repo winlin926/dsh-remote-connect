@@ -14,6 +14,7 @@ import {
   completePairing,
   delay,
   randomIdentityKey,
+  registerHost,
   hostIdentityFromKey,
   hostRegistration,
   startNode,
@@ -311,6 +312,44 @@ test('an offline Host produces the exact "no local response" 503', async () => {
     assert.equal(response.status, 503)
     assert.equal(response.json.error.code, 'HOST_OFFLINE')
     assert.equal(response.json.error.message, '公网节点已连接，但本机没有响应。请确认 DSH 正在运行。')
+  } finally {
+    await node.stop()
+  }
+})
+
+test('a device cannot reach a different online Host after its paired Host disconnects', async () => {
+  const node = await startNode()
+  try {
+    const paired = await completePairing(node)
+    paired.hostClient.close()
+    await paired.hostClient.waitOffline()
+    const unrelated = await registerHost(node, hostRegistration())
+    await TestHost.connect(node, unrelated)
+    const response = await api(node.baseUrl, 'GET', '/api/hello', { cookie: paired.cookie })
+    assert.equal(response.status, 503)
+    assert.equal(response.json.error.code, 'HOST_OFFLINE')
+  } finally { await node.stop() }
+})
+
+test('upgraded Host receives the authenticated relay identity and revocation after reconnect', async () => {
+  const node = await startNode()
+  try {
+    const paired = await completePairing(node)
+    paired.hostClient.close()
+    await paired.hostClient.waitOffline()
+    const host = await TestHost.connect(node, paired.host, true)
+    const pending = api(node.baseUrl, 'GET', '/rc/direct/signal', { cookie: paired.cookie })
+    const request = requestFrame(await host.nextOfType('http.request'))
+    assert.deepEqual(request.relayDevice, { id: paired.client.deviceId, name: paired.client.name })
+    sendResponse(host, request.id, { status: 204 })
+    assert.equal((await pending).status, 204)
+    host.close()
+    await host.waitOffline()
+    const revoke = await api(node.baseUrl, 'DELETE', `/v1/hosts/${paired.hostId}/devices/${paired.client.deviceId}`, { cookie: paired.cookie })
+    assert.equal(revoke.status, 200)
+    const reconnected = await TestHost.connect(node, paired.host, true)
+    const notice = await reconnected.nextOfType('pair.revoked')
+    assert.deepEqual(notice.frame, { t: 'pair.revoked', clientDeviceId: paired.client.deviceId })
   } finally {
     await node.stop()
   }

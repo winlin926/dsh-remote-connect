@@ -13,28 +13,27 @@
  * 16 KiB is the largest payload this side ever sends, so no peer has to fragment SCTP.
  */
 
-export const DIRECT_PROTOCOL = 1
+export const DIRECT_PROTOCOL = 2
 /** Same-origin route the phone posts its offer to and polls for the answer. */
 export const DIRECT_SIGNAL_PATH = '/rc/direct/signal'
 /** Set by the bridge on every loopback request it makes; the gateway resolves it to a device. */
 export const DIRECT_MARK = 'x-dsh-direct'
+export const RELAY_MARK = 'x-dsh-relay'
 /** Largest payload carried by one frame. */
 export const DIRECT_MAX_FRAME = 16 * 1024
 /** A request that the phone stops reading may not hold the channel forever. */
 export const DIRECT_REQUEST_TIMEOUT_MS = 120_000
 /** How long an unanswered offer stays usable. */
 export const DIRECT_SIGNAL_TTL_MS = 60_000
-/** One channel that says nothing for this long is considered gone. */
-export const DIRECT_IDLE_TIMEOUT_MS = 90_000
 
 export type DirectFrameType =
   | 'open' | 'body' | 'end' | 'result' | 'chunk' | 'done' | 'fail' | 'cancel'
-  | 'ws.open' | 'ws.ack' | 'ws.text' | 'ws.bin' | 'ws.close'
+  | 'ws.open' | 'ws.ack' | 'ws.text' | 'ws.bin' | 'ws.cont' | 'ws.close'
   | 'ping' | 'pong' | 'hello'
 
 const TYPES: DirectFrameType[] = [
   'open', 'body', 'end', 'result', 'chunk', 'done', 'fail', 'cancel',
-  'ws.open', 'ws.ack', 'ws.text', 'ws.bin', 'ws.close',
+  'ws.open', 'ws.ack', 'ws.text', 'ws.bin', 'ws.cont', 'ws.close',
   'ping', 'pong', 'hello',
 ]
 const CODES = new Map<DirectFrameType, number>(TYPES.map((type, index) => [type, index + 1]))
@@ -91,9 +90,4 @@ export function readControl(frame: DirectFrame): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
     return value as Record<string, unknown>
   } catch { return {} }
-}
-
-/** A new opaque id for one request or socket on the channel. */
-export function directId(): string {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)
 }

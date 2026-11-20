@@ -9,7 +9,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { pipeline, type Duplex } from 'node:stream'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { PairingService, Device } from './pairing.js'
-import { body, cookie, gzipFor, json, sameOrigin } from './http.js'
+import { body, cookie, gzipFor, isLoopback, json, sameOrigin } from './http.js'
 import { constants, createGzip } from 'node:zlib'
 import { deniedPage, pairingPage, unavailablePage, type PairingNode } from './pages.js'
 import { ACME_CHALLENGE_PREFIX } from './acme-certificate.js'
@@ -19,7 +19,8 @@ import { PREVIEW_MIME, PREVIEW_PREFIX, WorkspacePreviews, previewEntry } from '.
 import type { LanTlsMaterial } from './lan-tls.js'
 import { fingerprintGroupsOf } from './host-identity.js'
 import { PUBLIC_NODE_PATH, PUBLIC_NODE_PROTOCOL_V2, isPublicNodeProtocol, nodeIdentityOf, type PublicNodeDiscovery, type PublicNodeIdentityFields } from './public-node.js'
-import { DIRECT_MARK, DIRECT_SIGNAL_PATH } from './direct/protocol.js'
+import { PREVIEW_WORKER_PATH, previewWorkerScript } from './preview-worker.js'
+import { DIRECT_MARK, DIRECT_SIGNAL_PATH, RELAY_MARK } from './direct/protocol.js'
 
 export const MANAGE_PATH = '/api/dsh-remote-connect/manage'
 /** The paired browser asks this same-host route whether the LAN entry is the same computer. */
@@ -60,6 +61,7 @@ export interface GatewayOptions {
    * The direct line. Its offer is answered here, and the bridge's mark is resolved back to the
    * device it was bound to, so a direct request is admitted by the same rules as a remote one.
    */
+  relayDevice?: (mark: string) => string | undefined
   direct?: {
     offer: (deviceId: string, sdp: string) => Promise<{ sessionId: string; sdp: string }>
     resolve: (mark: string) => string | undefined
@@ -93,6 +95,7 @@ export class Gateway {
   private lanTls?: LanTlsMaterial
   private readonly sockets = new Set<Duplex>()
   private readonly active = new Map<string, Set<() => void>>()
+  private readonly routes = new Map<string, 'lan' | 'public'>()
   // `ws` is loaded when the gateway is opened, not when the plugin is: most Host starts never open one.
   private ws!: typeof import('ws')
   private wss!: WebSocketServer
@@ -137,6 +140,7 @@ export class Gateway {
   }
   private sameOrigin(req: IncomingMessage): boolean { return sameOrigin(req, this.lanTls?.origin) }
   private publicRequest(req: IncomingMessage): boolean {
+    if (this.relayDevice(req)) return true
     if (this.lanTls) return false
     const access = this.options.public?.()
     if (!access?.domain) return false
@@ -159,8 +163,19 @@ export class Gateway {
     return () => { set!.delete(cancel); if (!set!.size) this.active.delete(deviceId) }
   }
   onlineIds(): string[] { return [...this.active.keys()] }
-  revoke(id: string): void { this.previews.revoke(id); this.options.direct?.closeDevice?.(id); for (const cancel of [...this.active.get(id) ?? []]) cancel(); this.active.delete(id) }
-  private device(req: IncomingMessage): Device | undefined { return this.options.pairing.authenticate(cookie(req)) }
+  route(id: string): 'lan' | 'public' | undefined { return this.routes.get(id) }
+  revoke(id: string): void { this.routes.delete(id); this.previews.revoke(id); this.options.direct?.closeDevice?.(id); for (const cancel of [...this.active.get(id) ?? []]) cancel(); this.active.delete(id) }
+  private markedDevice(req: IncomingMessage, header: string, resolve?: (mark: string) => string | undefined): Device | undefined {
+    const mark = req.headers[header]
+    if (typeof mark !== 'string' || !isLoopback(req.socket.remoteAddress)) return undefined
+    const id = resolve?.(mark)
+    return id ? this.options.pairing.authenticateDevice(id) : undefined
+  }
+  private directDevice(req: IncomingMessage): Device | undefined { return this.markedDevice(req, DIRECT_MARK, this.options.direct?.resolve) }
+  private relayDevice(req: IncomingMessage): Device | undefined { return this.markedDevice(req, RELAY_MARK, this.options.relayDevice) }
+  private device(req: IncomingMessage): Device | undefined {
+    return this.directDevice(req) ?? this.relayDevice(req) ?? this.options.pairing.authenticate(cookie(req))
+  }
   private cookieHeader(credential: string, secure: boolean): string {
     // Trust forwarded protocol only after fixed-domain Host admission; frpc targets this private port.
     // Lax, not Strict: a link opened from another app (a QR scanner, a chat, a home-screen shortcut) is a
@@ -234,11 +249,9 @@ export class Gateway {
       return actual !== null && actual.id === expected.id && actual.fingerprint === expected.fingerprint
     } catch { return false }
   }
-  private bootContext(): BootContext | undefined {
+  private bootContext(offerDirect: boolean): BootContext | undefined {
     const identity = this.hostIdentity(), lan = this.lanFallback()
-    // The direct line is offered on every entry that has one; the LAN fallback only exists while a
-    // public entry runs beside this computer's own address.
-    const direct = this.options.direct ? { signal: DIRECT_SIGNAL_PATH, preference: this.options.direct.preference?.() ?? 'lan' } : undefined
+    const direct = offerDirect && this.options.direct && !this.lanTls ? { signal: DIRECT_SIGNAL_PATH, preference: this.options.direct.preference?.() ?? 'lan' } : undefined
     if (!direct && (!identity || !lan)) return undefined
     return { ...(identity && lan ? { fallback: { node: identity, hostId: identity.id, fingerprint: identity.fingerprint, url: lan } } : {}), ...(direct ? { direct } : {}) }
   }
@@ -314,13 +327,9 @@ export class Gateway {
       await this.previews.serve(preview, req, res)
       return
     }
-    // A direct request arrives over loopback from the bridge, which stamps the mark of the channel
-    // that carried it; everything else authenticates with the device's own cookie. A mark is only
-    // ever resolved through the live channel registry, so a forged header on a loopback request
-    // can only name a channel that already exists.
-    const mark = req.headers[DIRECT_MARK]
-    const marked = typeof mark === 'string' ? this.options.direct?.resolve(mark) : undefined
-    const device = marked ? this.options.pairing.find(marked) : this.device(req)
+    const directDevice = this.directDevice(req)
+    const relayDevice = this.relayDevice(req)
+    const device = directDevice ?? relayDevice ?? this.options.pairing.authenticate(cookie(req))
     if (!device) {
       if (req.headers.accept?.includes('text/html') && req.method === 'GET') {
         // A fallback landing without a LAN authorization is told to scan again on this same computer.
@@ -351,7 +360,10 @@ export class Gateway {
     // unpaired browser cannot create a channel at all.
     if (url.pathname === DIRECT_SIGNAL_PATH) {
       if (!this.options.direct) { json(res, 404, { error: '直连未启用。' }); return }
-      if (req.method !== 'POST' || !this.sameOrigin(req)) { json(res, 403, { error: '需要同源 POST 请求。' }); return }
+      if (req.method === 'GET') {
+        res.writeHead(204, { 'cache-control': 'no-store', 'x-dsh-line-preference': this.options.direct.preference?.() ?? 'lan' }); res.end(); return
+      }
+      if (req.method !== 'POST' || directDevice) { json(res, 403, { error: '需要浏览器同源配对会话。' }); return }
       if (!this.rate(req)) { json(res, 429, { error: '请求过于频繁，请稍后再试。' }); return }
       try {
         const input = await body(req)
@@ -360,12 +372,18 @@ export class Gateway {
       } catch (error) { json(res, 400, { error: error instanceof Error ? error.message : '直连协商失败。' }) }
       return
     }
+    this.routes.set(device.id, directDevice || !publicRequest ? 'lan' : 'public')
     // Renew the browser expiry along with the durable 30-day idle authorization.
-    if (!marked) res.setHeader('set-cookie', this.cookieHeader(cookie(req)!, !!this.lanTls || publicRequest))
+    if (!directDevice && !relayDevice) res.setHeader('set-cookie', this.cookieHeader(cookie(req)!, !!this.lanTls || publicRequest))
     const untrack = this.track(device.id, () => { req.destroy(); res.destroy() }); res.once('close', untrack)
     if (decodeURIComponent(url.pathname) === MANAGE_PATH) {
       if (req.method !== 'POST') { json(res, 405, { error: 'POST only' }); return }
-      try { json(res, 200, await this.options.manage(await body(req), false)) }
+      try {
+        const input = await body(req)
+        const result = await this.options.manage(input, false)
+        const route = this.routes.get(device.id)
+        json(res, 200, input.action === 'status' && result && typeof result === 'object' ? { ...result, currentRoute: route } : result)
+      }
       catch (error) { json(res, 400, { error: error instanceof Error ? error.message : '操作失败。' }) }
       return
     }
@@ -376,10 +394,10 @@ export class Gateway {
       const requested = url.searchParams.get('p') ?? ''
       const cleaned = requested.replace(/^\/+(?=[a-zA-Z]:[\\/])/, '').replace(/\0/g, '')
       if (!cleaned || !validLocalPath(cleaned)) { json(res, 400, { error: '文件路径不正确。' }); return }
-      if (/\.html?$/i.test(cleaned)) {
+      if (/\.html?$/i.test(cleaned) || directDevice && /\.svg$/i.test(cleaned) && url.searchParams.get('preview') === '1') {
         try {
           const path = await realpath(cleaned)
-          if (!(await stat(path)).isFile()) { json(res, 404, { error: '请选择 HTML 文件。' }); return }
+          if (!(await stat(path)).isFile()) { json(res, 404, { error: '请选择普通文件。' }); return }
           const token = randomBytes(32).toString('base64url')
           this.previews.add(token, device.id, dirname(path))
           const location = PREVIEW_PREFIX + token + '/' + previewEntry(path)
@@ -404,11 +422,17 @@ export class Gateway {
       } catch { json(res, 404, { error: '文件不存在或无法读取，可能已被移动或删除。' }) }
       return
     }
+    if (url.pathname === PREVIEW_WORKER_PATH && this.options.direct && !this.lanTls && !directDevice) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { error: 'GET only' }); return }
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store', 'service-worker-allowed': '/' })
+      res.end(req.method === 'HEAD' ? undefined : previewWorkerScript())
+      return
+    }
     if (url.pathname === BOOT_PATH) {
       if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { error: 'GET only' }); return }
       // This is a blocking script in the page head, so a phone that already holds this exact
       // build must be able to revalidate it instead of downloading it again on every cold start.
-      const script = this.options.boot(this.bootContext())
+      const script = this.options.boot(this.bootContext(publicRequest || isLoopback(req.socket.remoteAddress)))
       const etag = '"' + createHash('sha256').update(script).digest('base64url').slice(0, 22) + '"'
       if (req.headers['if-none-match'] === etag) { res.writeHead(304, { 'cache-control': 'private, no-cache', etag }); res.end(); return }
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-cache', etag, 'x-content-type-options': 'nosniff' })
@@ -473,6 +497,7 @@ export class Gateway {
     const device = this.device(req)
     if (!device || !this.validHost(req) || !this.sameOrigin(req) || !safePath(req.url ?? '/')) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return }
     const url = new URL(req.url ?? '/', 'http://gateway.invalid')
+    this.routes.set(device.id, this.directDevice(req) || !this.publicRequest(req) ? 'lan' : 'public')
     if (url.pathname === '/rc/sse') {
       const target = url.searchParams.get('path') ?? ''
       if (!safePath(target) || target.startsWith('/rc/') || decodeURIComponent(target.split('?')[0]!) === MANAGE_PATH) { socket.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return }

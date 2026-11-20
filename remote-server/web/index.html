@@ -215,7 +215,8 @@
         $('confirm').hidden = true
         $('idle').hidden = true
         $('done').hidden = false
-        $('done-status').textContent = '配对完成，已建立加密通道。'
+        $('done-status').textContent = '配对完成，正在打开电脑上的 DSH。'
+        location.replace('/')
       }
 
       function showFailure(message) {

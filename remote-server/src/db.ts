@@ -96,6 +96,9 @@ const MIGRATIONS: Migration[] = [
       )`,
     ],
   },
+  { version: 2, name: 'bind-sessions-to-host', statements: [
+    'ALTER TABLE device_sessions ADD COLUMN bound_host_id TEXT REFERENCES hosts(host_id) ON DELETE CASCADE',
+  ] },
 ]
 
 export class Database {

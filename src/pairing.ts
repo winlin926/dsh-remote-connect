@@ -73,6 +73,7 @@ function hostName(value: string): string | undefined {
 /** Only hashes of device secrets reach disk. Pending claims live in memory. */
 export class PairingService {
   private readonly devices = new Map<string, Device>()
+  private readonly revokedRelays = new Set<string>()
   private readonly pending = new Map<string, Pending>()
   private token?: { hash: string; expiresAt: number }
   private failureState?: PairingFailure
@@ -88,6 +89,10 @@ export class PairingService {
         if (!row || typeof row.id !== 'string' || typeof row.name !== 'string' || !/^[a-f0-9]{64}$/.test(row.hash) || !Number.isFinite(row.lastSeenAt) || !Number.isFinite(row.createdAt) || (row.host !== undefined && typeof row.host !== 'string') || (row.via !== undefined && row.via !== 'lan' && row.via !== 'public') || (row.requiresRepair !== undefined && typeof row.requiresRepair !== 'boolean')) throw new Error('设备授权记录损坏。')
         this.devices.set(row.id, row)
       }
+      if ('revokedRelays' in input) {
+        if (!Array.isArray(input.revokedRelays) || input.revokedRelays.some(id => typeof id !== 'string' || !/^relay-[a-f0-9]{64}$/.test(id))) throw new Error('公网节点撤销记录损坏。')
+        for (const id of input.revokedRelays) this.revokedRelays.add(id)
+      }
       this.expire()
     }
   }
@@ -95,7 +100,7 @@ export class PairingService {
     mkdirSync(dirname(this.options.file), { recursive: true })
     const temporary = `${this.options.file}.${randomUUID()}.tmp`
     try {
-      writeFileSync(temporary, JSON.stringify({ version: 1, devices: [...this.devices.values()] }), { mode: 0o600 })
+      writeFileSync(temporary, JSON.stringify({ version: 1, devices: [...this.devices.values()], ...(this.revokedRelays.size ? { revokedRelays: [...this.revokedRelays] } : {}) }), { mode: 0o600 })
       renameSync(temporary, this.options.file)
     } catch (error) { if (existsSync(temporary)) unlinkSync(temporary); throw error }
   }
@@ -147,13 +152,13 @@ export class PairingService {
     claim.credential = credential
     this.failureState = undefined
   }
-  private registerDevice(name: string, host?: string, via?: PairingEntry): string {
+  private registerDevice(name: string, host?: string, via?: PairingEntry, deviceId: string = randomUUID()): string {
     let replaced: Device | undefined
     if (this.devices.size >= MAX_DEVICES) {
-      replaced = [...this.devices.values()].filter(d => !this.options.isOnline?.(d.id)).sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
+      replaced = [...this.devices.values()].filter(d => !d.id.startsWith('relay-') && !this.options.isOnline?.(d.id)).sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
       if (!replaced) throw new Error(`已有 ${MAX_DEVICES} 台设备在线，请先撤销不再使用的设备。`)
     }
-    const deviceId = randomUUID(), secret = random(), now = this.now()
+    const secret = random(), now = this.now()
     const device: Device = { id: deviceId, name, hash: hash(secret), createdAt: now, lastSeenAt: now, ...(host ? { host: host.toLowerCase() } : {}), ...(via ? { via } : {}) }
     if (replaced) this.devices.delete(replaced.id)
     this.devices.set(deviceId, device)
@@ -178,8 +183,25 @@ export class PairingService {
     else if (claim.state === 'rejected') this.pending.delete(id)
     return result
   }
-  /** One device row by id, for a caller that already proved who it is (a live direct channel). */
-  find(id: string): Device | undefined { this.expire(); return this.devices.get(id) }
+  private relayId(scope: string, clientId: string): string { return 'relay-' + hash(JSON.stringify([scope, clientId])) }
+  admitRelay(scope: string, input: { id: string; name: string }): string | undefined {
+    if (typeof input?.id !== 'string' || !/^[a-zA-Z0-9_-]{16,64}$/.test(input.id) || typeof input.name !== 'string' || !input.name.trim()) return undefined
+    this.expire()
+    const id = this.relayId(scope, input.id)
+    if (this.revokedRelays.has(id)) return undefined
+    if (!this.devices.has(id)) this.registerDevice(input.name.trim().slice(0, 80), undefined, 'public', id)
+    return id
+  }
+  revokeRelay(scope: string, clientId: string): void { this.revoke(this.relayId(scope, clientId)) }
+  confirmRelay(scope: string, clientId: string): void {
+    const id = this.relayId(scope, clientId)
+    if (!this.revokedRelays.delete(id)) return
+    try { this.save() } catch (error) { this.revokedRelays.add(id); throw error }
+  }
+  authenticateDevice(id: string): Device | undefined {
+    this.expire()
+    return this.touch(this.devices.get(id))
+  }
   authenticate(credential: string | undefined): Device | undefined {
     this.expire()
     if (!credential || credential.length > 128) return undefined
@@ -188,6 +210,10 @@ export class PairingService {
     const device = this.devices.get(id)
     // An old public-entry authorization is readable in the panel but never lets the browser in.
     if (!device || device.requiresRepair || !matches(secret, device.hash)) return undefined
+    return this.touch(device)
+  }
+  private touch(device: Device | undefined): Device | undefined {
+    if (!device || device.requiresRepair) return undefined
     // Bound disk writes while preserving sliding idle expiry across restarts.
     if (this.now() - device.lastSeenAt >= 60_000) {
       const previous = device.lastSeenAt
@@ -199,9 +225,15 @@ export class PairingService {
   list(): Array<Omit<Device, 'hash'>> { this.expire(); return [...this.devices.values()].map(({ hash: _hash, ...device }) => device) }
   revoke(id: string): void {
     const previous = this.devices.get(id)
-    if (!previous) return
+    const relay = /^relay-[a-f0-9]{64}$/.test(id) && !this.revokedRelays.has(id)
+    if (!previous && !relay) return
+    if (relay) this.revokedRelays.add(id)
     this.devices.delete(id)
-    try { this.save() } catch (error) { this.devices.set(id, previous); throw error }
+    try { this.save() } catch (error) {
+      if (previous) this.devices.set(id, previous)
+      if (relay) this.revokedRelays.delete(id)
+      throw error
+    }
     this.disconnectDevice(id)
   }
   private disconnectDevice(id: string): void {
@@ -249,8 +281,14 @@ export class PairingService {
   }
   revokeAll(): void {
     const previous = [...this.devices.values()]
+    const revoked = previous.filter(device => device.id.startsWith('relay-')).map(device => device.id)
+    for (const id of revoked) this.revokedRelays.add(id)
     this.devices.clear()
-    try { this.save() } catch (error) { for (const device of previous) this.devices.set(device.id, device); throw error }
+    try { this.save() } catch (error) {
+      for (const id of revoked) this.revokedRelays.delete(id)
+      for (const device of previous) this.devices.set(device.id, device)
+      throw error
+    }
     for (const device of previous) this.disconnectDevice(device.id)
     this.invalidate()
   }

@@ -7,6 +7,9 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
+import { Gateway } from '../src/gateway.js'
+import { PairingService } from '../src/pairing.js'
+import { RELAY_MARK } from '../src/direct/protocol.js'
 import { identityOfPublicKey } from '../src/host-identity.js'
 import { SERVICE_NODES_FILE, ServiceNode, unregisterServiceNode, type ServiceNodeOptions } from '../src/service-node.js'
 import { TUNNEL_FRAME_PAYLOAD_MAX, TUNNEL_PATH, decodeTunnelFrame, encodeTunnelFrame, type TunnelFrame } from '../src/remote/tunnel-protocol.js'
@@ -330,6 +333,43 @@ describe('service node tunnel', () => {
     expect(fake.tunnels).toHaveLength(2)
   })
 
+  it('delivers upgraded relay requests to the device-authorized gateway', async () => {
+    const storage = await folder()
+    const fake = await startFakeNode()
+    const upstream = await startUpstream()
+    const pairing = new PairingService({ file: join(storage, 'devices.json') })
+    const peer = { id: '01JABCDEF0123456789ABCDEFG', name: 'Android Edge' }
+    let mark: string | undefined
+    const gateway = new Gateway({
+      pairing, upstreamPort: upstream.port, upstreamCookie: () => 'session=host-cookie-secret',
+      manage: async () => ({}), index: async () => '<head></head>', boot: () => '',
+      relayDevice: value => value === 'bound-mark' ? mark : undefined,
+      direct: { offer: async () => { throw new Error('Unexpected offer') }, resolve: () => undefined },
+    })
+    await gateway.listen('127.0.0.1')
+    cleanups.push(() => gateway.close())
+    const fixture = serviceNode(fake.origin, storage, upstream.port, {
+      relayTarget: device => {
+        mark = pairing.admitRelay(fake.origin, device)
+        return mark ? { port: gateway.port, mark: 'bound-mark' } : undefined
+      },
+      relayPairRevoked: id => pairing.revokeRelay(fake.origin, id),
+    })
+    await fixture.start()
+    const tunnel = await fake.waitTunnel()
+    const probe = (id: string) => {
+      tunnel.send({ t: 'http.request', id, method: 'GET', path: '/rc/direct/signal', relayDevice: peer, headers: { [RELAY_MARK]: 'untrusted-header' } })
+      tunnel.send({ t: 'http.body.end', id })
+    }
+    probe('before')
+    expect((await tunnel.waitFrame('http.response')).frame).toMatchObject({ id: 'before', status: 204 })
+    expect(pairing.list()).toHaveLength(1)
+    tunnel.send({ t: 'pair.revoked', clientDeviceId: peer.id })
+    probe('after')
+    expect((await tunnel.waitFrame('http.response')).frame).toMatchObject({ id: 'after', status: 403 })
+    expect(pairing.list()).toHaveLength(0)
+  })
+
   it('forwards a POST body and rewrites the request headers for the loopback Host', async () => {
     const storage = await folder()
     const fake = await startFakeNode()
@@ -544,6 +584,7 @@ describe('service node tunnel', () => {
     expect(issued.expiresAt).toBe(expiresAt)
     const url = new URL(issued.url)
     expect(url.origin).toBe(fake.origin)
+    expect(url.pathname).toBe('/pair')
     const hash = new URLSearchParams(url.hash.slice(1))
     // The node's pairing page reads `v`, `ticket` and this Host's identity key from the hash.
     expect(hash.get('v')).toBe('1')

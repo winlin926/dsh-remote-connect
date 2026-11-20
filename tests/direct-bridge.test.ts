@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -70,13 +70,28 @@ async function fixture(mark = 'mark-1') {
   const wire = channel()
   const session = bridge.attach(wire.transport)
   wire.wire(session)
-  return { gateway, bridge, wire, session, deviceId, credential, seen }
+  return { gateway, bridge, wire, session, deviceId, credential, seen, folder }
 }
 
 const open = (wire: ReturnType<typeof channel>, id: string, method: string, path: string, headers: Record<string, string> = {}) =>
   wire.send({ t: 'open', id, payload: controlPayload({ method, path, headers }) })
 
 describe('direct bridge', () => {
+  it('opens a direct SVG preview at a sandboxed capability URL', async () => {
+    const f = await fixture()
+    const image = join(f.folder, 'preview.svg')
+    writeFileSync(image, '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    open(f.wire, 'resolve', 'GET', '/rc/workspace-file?p=' + encodeURIComponent(image) + '&preview=1')
+    const frames = await f.wire.until(items => items.some(frame => frame.id === 'resolve' && frame.t === 'done'))
+    const resolved = JSON.parse(Buffer.from(frames.find(frame => frame.id === 'resolve' && frame.t === 'result')!.payload).toString())
+    expect(resolved.status).toBe(303)
+    expect(resolved.headers.location).toMatch(/^\/rc\/workspace-preview\/.+\/preview\.svg$/)
+    open(f.wire, 'preview', 'GET', resolved.headers.location)
+    const preview = await f.wire.until(items => items.some(frame => frame.id === 'preview' && frame.t === 'done'))
+    const result = JSON.parse(Buffer.from(preview.find(frame => frame.id === 'preview' && frame.t === 'result')!.payload).toString())
+    expect(result).toMatchObject({ status: 200, headers: { 'content-security-policy': 'sandbox' } })
+  })
+
   it('carries a Host response over frames, admitted by the channel mark alone', async () => {
     const f = await fixture()
     open(f.wire, 'r1', 'GET', '/api/hello', { accept: 'application/json' })

@@ -179,7 +179,7 @@ export class TunnelProxy implements TunnelFrameHandler {
   /** Proxy one HTTP request for an already-authenticated paired device. */
   async handleRequest(req: IncomingMessage, res: ServerResponse, url: URL, session: SessionContext): Promise<void> {
     const deviceId = session.device.device_id
-    const hostId = this.selectHost(deviceId)
+    const hostId = this.selectHost(session)
     this.assertCapacity(deviceId, hostId)
     const id = randomUUID()
     const exchange: HttpExchange = {
@@ -206,6 +206,7 @@ export class TunnelProxy implements TunnelFrameHandler {
       method: req.method ?? 'GET',
       path: req.url ?? url.pathname,
       headers: toTunnelHeaders(req.headers),
+      ...(this.deps.hub.supportsDirect(hostId) ? { relayDevice: { id: deviceId, name: session.device.name } } : {}),
     }
     if (!this.deps.hub.sendHostFrame(hostId, frame)) {
       this.settleHttp(exchange)
@@ -241,7 +242,7 @@ export class TunnelProxy implements TunnelFrameHandler {
         return
       }
       const deviceId = session.device.device_id
-      const hostId = this.selectHost(deviceId)
+      const hostId = this.selectHost(session)
       this.assertCapacity(deviceId, hostId)
 
       const id = randomUUID()
@@ -267,6 +268,7 @@ export class TunnelProxy implements TunnelFrameHandler {
         id,
         path: req.url ?? url.pathname,
         headers: toTunnelHeaders(req.headers),
+        ...(this.deps.hub.supportsDirect(hostId) ? { relayDevice: { id: deviceId, name: session.device.name } } : {}),
       }
       const protocol = protocols[0]
       if (protocol !== undefined) frame.protocol = protocol
@@ -383,15 +385,11 @@ export class TunnelProxy implements TunnelFrameHandler {
 
   // --- Host selection and limits -------------------------------------------------
 
-  private selectHost(deviceId: string): string {
-    const online = this.deps.hub.onlineHostIds()
-    if (online.length === 0) throw hostOfflineError()
-    if (online.length === 1) return online[0]
-    const onlineSet = new Set(online)
-    for (const relationship of this.deps.repos.listRelationshipsForDevice(deviceId)) {
-      if (onlineSet.has(relationship.host_id)) return relationship.host_id
-    }
-    throw hostOfflineError()
+  private selectHost({ session, device }: SessionContext): string {
+    const relationships = this.deps.repos.listRelationshipsForDevice(device.device_id)
+    const hostId = session.bound_host_id ?? (relationships.length === 1 ? relationships[0]?.host_id : undefined)
+    if (!hostId || !relationships.some(row => row.host_id === hostId) || !this.deps.hub.isHostOnline(hostId)) throw hostOfflineError()
+    return hostId
   }
 
   private assertCapacity(deviceId: string, hostId: string): void {

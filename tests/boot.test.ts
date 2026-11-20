@@ -75,6 +75,7 @@ class StandInElement {
   replaceChildren(...nodes: StandInElement[]): void { for (const child of this.children) child.parentElement = null; this.children = []; this.append(...nodes) }
   remove(): void { if (this.parentElement) { this.parentElement.children = this.parentElement.children.filter(child => child !== this); this.parentElement = null } }
   focus(): void { this.focused = true }
+  showModal(): void { this.setAttribute('open', '') }
   addEventListener(type: string, listener: () => void): void { this.listeners.set(type, [...this.listeners.get(type) ?? [], listener]) }
   fire(type: string): void { for (const listener of this.listeners.get(type) ?? []) listener() }
   querySelector(selector: string): StandInElement | null {
@@ -117,18 +118,19 @@ function bootPage(
 ) {
   StandInSocket.all = []
   const requests: Array<{ url: string; body?: string; method?: string }> = []
-  const waiting: Array<(response: Response) => void> = []
+  const waiting: Array<{ resolve: (response: Response) => void; reject: (error: Error) => void }> = []
   const clock = { now: 0 }
   const frames: Array<() => void> = []
   const timers: Array<{ delay: number; due: number; run: () => void; cancelled: boolean }> = []
   const listeners = new Map<string, Array<(event: unknown) => void>>()
+  const fire = (type: string, event: unknown) => { for (const listener of listeners.get(type) ?? []) listener(event) }
   const replacements: string[] = []
   const historyReplacements: string[] = []
   const NativeEventSource = class { constructor(readonly url: string, readonly init?: EventSourceInit) {} }
   const window: Record<string, any> = {
-    fetch: (input: unknown, init?: { body?: string; method?: string }) => { requests.push({ url: String(input), body: init?.body, method: init?.method }); return new Promise<Response>(resolve => waiting.push(resolve)) },
+    fetch: (input: unknown, init?: { body?: string; method?: string }) => { requests.push({ url: String(input), body: init?.body, method: init?.method }); return new Promise<Response>((resolve, reject) => waiting.push({ resolve, reject })) },
     addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, [...listeners.get(type) ?? [], listener]) },
-    dispatchEvent: () => true, WebSocket: StandInSocket, EventSource: NativeEventSource, __DSH_TRANSPORT__: transport,
+    dispatchEvent: (event: Event) => { fire(event.type, event); return true }, WebSocket: StandInSocket, EventSource: NativeEventSource, __DSH_TRANSPORT__: transport,
     __DSH_BOOT__: session.boot, __ModuleLoader__: session.loader, localStorage: session.store,
     requestAnimationFrame: (run: () => void) => { if (session.deferPaint) frames.push(run); else run() },
     history: { replaceState: (_state: unknown, _title: string, url: string) => { historyReplacements.push(url) } },
@@ -140,7 +142,9 @@ function bootPage(
     return node
   }
   const root = createElement('div'); root.id = 'root'
-  const document = { documentElement: createElement('html'), head: createElement('head'), addEventListener: () => {}, getElementById: (id: string) => elements.find(node => node.id === id) ?? null, createElement, body: createElement('body') }
+  const document = { documentElement: createElement('html'), head: createElement('head'), addEventListener: () => {}, getElementById: (id: string) => elements.find(node => node.id === id && node.parentElement) ?? null, createElement, body: createElement('body') }
+  document.documentElement.append(document.head, document.body)
+  document.body.append(root)
   let mutation: (() => void) | undefined
   const MutationObserver = class { constructor(listener: () => void) { mutation = listener } observe() {} disconnect() { mutation = undefined } }
   let reloads = 0
@@ -173,10 +177,11 @@ function bootPage(
     window, NativeEventSource, requests, timers, sockets: StandInSocket.all, document, root, createElement, mountBoot, advance, clock,
     mutate: () => { mutation?.() }, frame: () => frames.splice(0).forEach(run => run()), reloads: () => reloads, replacements, historyReplacements,
     store: stored,
-    fire: (type: string, event: unknown) => { for (const listener of listeners.get(type) ?? []) listener(event) },
+    fire,
+    rejectRequest: () => waiting.shift()?.reject(new TypeError('Network unavailable')),
     report: () => { advance(8000); return JSON.parse(requests.filter(request => request.url === '/rc/boot-report').at(-1)!.body!) },
-    answer: () => waiting.shift()?.(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
-    answerWith: (status: number, body: string) => waiting.shift()?.(new Response(body, { status, headers: { 'content-type': 'application/json' } })),
+    answer: () => waiting.shift()?.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
+    answerWith: (status: number, body: string) => waiting.shift()?.resolve(new Response(body, { status, headers: { 'content-type': 'application/json' } })),
     elements,
   }
 }
@@ -468,15 +473,23 @@ it('delegates an existing transport and preserves its rejection without adding s
   expect(f.document.head.children.filter(node => node.tagName === 'SCRIPT')).toHaveLength(0)
 })
 
-it('says the connection is being restored when the Host goes away and clears it when it answers', () => {
+it('shows the reconnect status when a connected socket closes and its status check fails', async () => {
   const f = bootPage()
+  const connection = new f.window.WebSocket('/api/remote.mux')
+  connection.fire('open')
+  connection.fire('close')
+  f.rejectRequest()
+  await new Promise(resolve => setImmediate(resolve))
+  const banner = connectionStatus(f)!
+  expect(banner.children.find(child => child.attributes.role === 'status')?.textContent).toBe('正在重新连接电脑…')
+  const retry = banner.children.find(child => child.tagName === 'BUTTON')!
+  expect(retry.textContent).toBe('正在重新连接…')
+  expect(retry.attributes['aria-label']).toBe('正在重新连接，点击重试')
   f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
-  const banner = f.elements.find(element => element.id === 'dsh-rc-reconnecting')!
-  expect(banner.attributes.role).toBe('status')
-  expect(banner.textContent).toContain('与电脑的连接已断开，正在重连')
-  banner.children.find(child => child.tagName === 'BUTTON')!.onclick!()
+  expect(f.document.body.children.filter(element => element.id === banner.id)).toEqual([banner])
+  retry.onclick!()
   expect(f.reloads()).toBe(1)
-  f.fire('dsh-rc-online', new Event('dsh-rc-online'))
+  new f.window.WebSocket('/api/remote.mux').fire('open')
   expect(banner.parentElement).toBeNull()
 })
 
@@ -550,26 +563,22 @@ it('backs a failing carrier off from 3s to 30s and resets after a live connectio
   expect(timers.at(-1)!.delay).toBe(3000)
 })
 
-it('shows a revoked device as a modal dialog that starts on its only action', async () => {
-  const globals = globalThis as Record<string, any>
-  globals.getComputedStyle = () => ({ colorScheme: 'light' })
-  globals.matchMedia = () => ({ matches: false })
-  try {
-    const { window, requests, answerWith, elements } = bootPage()
-    const socket = new window.WebSocket('/api/remote.mux'); socket.fire('open'); socket.fire('close')
-    expect(requests).toHaveLength(1)
-    answerWith(403, JSON.stringify({ code: 'unpaired' }))
-    await new Promise(resolve => setTimeout(resolve, 0))
-    const notice = elements.find(node => node.id === 'dsh-rc-disconnected')!
-    expect(notice.attributes.role).toBe('dialog')
-    expect(notice.attributes['aria-modal']).toBe('true')
-    expect(notice.attributes['aria-labelledby']).toBe('dsh-rc-disconnected-text')
-    const retry = notice.children[0].children[1]
-    expect(retry.textContent).toBe('重新连接')
-    expect(retry.focused).toBe(true)
-  } finally {
-    delete globals.getComputedStyle; delete globals.matchMedia
-  }
+it('asks a revoked device to pair again in a modal without a reload action', async () => {
+  const f = bootPage()
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  const socket = new f.window.WebSocket('/api/remote.mux'); socket.fire('open'); socket.fire('close')
+  f.answerWith(403, JSON.stringify({ code: 'unpaired' }))
+  await settle()
+  const modal = dialog(f.elements)!
+  expect(modal.tagName).toBe('DIALOG')
+  expect(modal.attributes.open).toBe('')
+  expect(modal.attributes['aria-labelledby']).toBe('dsh-rc-disconnected-title')
+  expect(modal.attributes['aria-describedby']).toBe('dsh-rc-disconnected-text')
+  expect(modal.children.find(child => child.tagName === 'H2')?.textContent).toBe('设备授权已失效')
+  expect(modal.children.find(child => child.tagName === 'P')?.textContent).toContain('扫描新的二维码')
+  expect(modal.children.find(child => child.tagName === 'BUTTON')).toBeUndefined()
+  f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+  expect(connectionStatus(f)).toBeUndefined()
 })
 
 const HOST_ID = '5QKQY_VIKcY52sBuej3ozcSh4gUAwAYe0YENr18qsfA'
@@ -582,18 +591,15 @@ const v2OnlyContext = (): BootContext => ({ fallback: { node: IDENTITY, hostId: 
 const fallbackAnswer = () => ({ sameHost: true, node: IDENTITY, url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT })
 const settle = async () => { await new Promise(resolve => setTimeout(resolve, 0)); await new Promise(resolve => setImmediate(resolve)) }
 const dialog = (elements: StandInElement[]) => elements.find(node => node.id === 'dsh-rc-disconnected')
-const toast = (elements: StandInElement[]) => elements.find(node => node.id === 'dsh-rc-notice')
-function withTheme(): () => void {
-  const globals = globalThis as Record<string, any>
-  globals.getComputedStyle = () => ({ colorScheme: 'light' })
-  globals.matchMedia = () => ({ matches: false })
-  return () => { delete globals.getComputedStyle; delete globals.matchMedia }
-}
+const connectionStatus = (f: ReturnType<typeof bootPage>) => f.document.getElementById('dsh-rc-connection-status') ?? undefined
+const announcement = (f: ReturnType<typeof bootPage>) => connectionStatus(f)?.children.find(child => child.attributes.role === 'status')?.textContent
 
 it('says it already switched to the LAN entry when the LAN page boots', () => {
   const f = bootPage(undefined, {}, { search: '?rc=lan', href: 'https://rc.example/?rc=lan' })
   expect(f.historyReplacements).toEqual(['/'])
-  expect(toast(f.elements)!.textContent).toBe('已切换到局域网')
+  expect(announcement(f)).toBe('已切换到局域网')
+  f.advance(2600)
+  expect(connectionStatus(f)).toBeUndefined()
 })
 
 it('switches a paired browser to the same Host LAN entry when the public connection dies', async () => {
@@ -607,7 +613,7 @@ it('switches a paired browser to the same Host LAN entry when the public connect
   f.answerWith(200, JSON.stringify(fallbackAnswer()))
   await settle()
   expect(f.replacements).toEqual([`${LAN_URL}/?rc=lan`])
-  expect(toast(f.elements)!.textContent).toBe('已切换到局域网')
+  expect(announcement(f)).toBe('正在重新连接电脑…')
   expect(dialog(f.elements)).toBeUndefined()
 })
 
@@ -641,25 +647,27 @@ it('cancels the fallback when the connection comes back first', async () => {
 })
 
 it('never follows a LAN entry that reports another Host, another fingerprint or another address', async () => {
-  const restore = withTheme()
-  try {
-    for (const answer of [
-      { sameHost: true, url: LAN_URL, hostId: 'A'.repeat(43), fingerprint: FINGERPRINT },
-      { sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: '0'.repeat(32) },
-      { sameHost: true, url: LAN_URL, node: { id: 'A'.repeat(43), fingerprint: FINGERPRINT }, hostId: HOST_ID, fingerprint: FINGERPRINT },
-      { sameHost: true, url: LAN_URL, node: { id: HOST_ID, fingerprint: '0'.repeat(32) }, hostId: HOST_ID, fingerprint: FINGERPRINT },
-      { sameHost: true, url: 'http://10.0.0.7:59395', hostId: HOST_ID, fingerprint: FINGERPRINT },
-      { sameHost: false, reason: 'identity', url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT },
-    ]) {
-      const f = bootPage(undefined, {}, { context: context() })
-      f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
-      f.timers.at(-1)!.run()
-      f.answerWith(200, JSON.stringify(answer))
-      await settle()
-      expect(f.replacements).toEqual([])
-      expect(dialog(f.elements)!.textContent).toContain('扫描新的二维码')
-    }
-  } finally { restore() }
+  for (const answer of [
+    { sameHost: true, url: LAN_URL, hostId: 'A'.repeat(43), fingerprint: FINGERPRINT },
+    { sameHost: true, url: LAN_URL, hostId: HOST_ID, fingerprint: '0'.repeat(32) },
+    { sameHost: true, url: LAN_URL, node: { id: 'A'.repeat(43), fingerprint: FINGERPRINT }, hostId: HOST_ID, fingerprint: FINGERPRINT },
+    { sameHost: true, url: LAN_URL, node: { id: HOST_ID, fingerprint: '0'.repeat(32) }, hostId: HOST_ID, fingerprint: FINGERPRINT },
+    { sameHost: true, url: 'http://10.0.0.7:59395', hostId: HOST_ID, fingerprint: FINGERPRINT },
+    { sameHost: false, reason: 'identity', url: LAN_URL, hostId: HOST_ID, fingerprint: FINGERPRINT },
+  ]) {
+    const f = bootPage(undefined, {}, { context: context() })
+    f.fire('dsh-rc-offline', new Event('dsh-rc-offline'))
+    f.timers.at(-1)!.run()
+    f.answerWith(200, JSON.stringify(answer))
+    await settle()
+    expect(f.replacements).toEqual([])
+    const modal = dialog(f.elements)!
+    expect(modal.children.find(child => child.tagName === 'P')?.textContent).toContain('扫描新的二维码')
+    const retry = modal.children.find(child => child.tagName === 'BUTTON')!
+    expect(retry.textContent).toBe('重试当前入口')
+    retry.onclick!()
+    expect(f.reloads()).toBe(1)
+  }
 })
 
 it('does not try a fallback when this page holds no same-host LAN entry', async () => {

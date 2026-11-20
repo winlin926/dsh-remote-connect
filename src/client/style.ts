@@ -56,17 +56,6 @@ export const CSS = `
 .dsrc-ghost:hover:not(:disabled){border-color:transparent;color:var(--rc-ink)!important}
 
 .dsrc-workspace{padding:15px;border-color:color-mix(in srgb,var(--rc-indigo) 20%,var(--rc-line));background:linear-gradient(152deg,var(--rc-indigo-soft),var(--rc-paper) 46%,color-mix(in srgb,var(--rc-teal) 4%,var(--rc-paper)) 96%);box-shadow:0 3px 14px #202b4a08}
-.dsrc-ways{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;padding:4px;border:1px solid var(--rc-line);border-radius:11px;background:var(--rc-fill)}
-.dsrc .dsrc-way{--way:var(--rc-indigo);display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-width:0;min-height:42px;text-align:left;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--rc-ink);padding:6px 10px;transition:border-color .14s,background .14s,box-shadow .14s,color .14s}
-.dsrc .dsrc-way[data-mode=public]{--way:var(--rc-teal)}
-.dsrc .dsrc-way:hover:not(:disabled):not([aria-checked=true]){background:color-mix(in srgb,var(--way) 5%,transparent);color:var(--way)}
-.dsrc .dsrc-way[aria-checked=true]{border-color:color-mix(in srgb,var(--way) 42%,transparent);background:var(--rc-paper);color:var(--way);box-shadow:0 1px 4px #202b4a17}
-.dsrc-way-icon{display:grid;place-items:center;flex:none}
-.dsrc-way-icon svg{width:18px;height:18px}
-.dsrc-way-copy{display:block;flex:none;min-width:0}
-.dsrc-way-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:650;white-space:nowrap}
-.dsrc-confirm{margin-top:12px;padding:12px;border:1px solid color-mix(in srgb,var(--rc-warm) 25%,var(--rc-line));border-radius:10px;background:var(--rc-warm-soft)}
-.dsrc-confirm .dsrc-actions{margin-top:10px}
 .dsrc-stage{display:grid;grid-template-columns:minmax(128px,154px) minmax(0,1fr);gap:16px;align-items:start;margin-top:13px}
 .dsrc-brief{display:flex;flex-direction:column;min-width:0}
 .dsrc-connection-state{margin-top:0}
@@ -91,9 +80,11 @@ export const CSS = `
 .dsrc-code[data-ready=true]{box-shadow:0 0 0 2.5px color-mix(in srgb,var(--rc-accent) 36%,transparent),0 2px 9px #25304814}
 .dsrc-code img{width:100%;height:100%;display:block}
 .dsrc-placeholder{width:100%;height:100%;display:grid;place-items:center;text-align:center;padding:12px;font-size:11px;line-height:1.6;color:var(--rc-muted);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--rc-ink) 4%,var(--rc-paper)) 0 7px,color-mix(in srgb,var(--rc-ink) 2%,var(--rc-paper)) 7px 14px)}
-.dsrc-code-refresh{min-height:28px;margin-top:6px;font-size:12px}
-.dsrc-steps{display:flex;flex-direction:column;align-items:flex-start;gap:7px;width:100%;margin-top:13px;padding-top:11px;border-top:1px dashed var(--rc-line)}
-.dsrc-step{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:11px;line-height:1.5;color:var(--rc-muted)}
+.dsrc-code-refresh{min-height:28px;font-size:12px}
+.dsrc-action-with-feedback{display:flex;align-items:center;min-width:0}
+.dsrc-scan .dsrc-action-with-feedback{justify-content:center;margin-top:6px}
+.dsrc-action-feedback{color:var(--rc-muted);font-size:12px;white-space:nowrap}
+.dsrc-action-feedback:not(:empty){margin-inline-start:6px}
 .dsrc-number{flex:none;width:17px;height:17px;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,var(--rc-teal) 10%,var(--rc-paper));color:var(--rc-teal);font-size:9px;font-weight:700}
 .dsrc-pair-link{display:flex;align-items:center;gap:8px;min-width:0;margin-top:12px;padding-top:10px;border-top:1px solid var(--rc-line)}
 .dsrc-link{min-width:0;flex:1;padding:5px 8px;border-radius:7px;background:var(--rc-fill);color:var(--rc-muted);font:11px/20px ui-monospace,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -237,11 +228,8 @@ export const CSS = `
 .dsrc-dialog.dsrc-prompt{width:min(400px,calc(100vw - 32px))}
 .dsrc-prompt-device{font-size:15px;font-weight:600;margin-top:12px!important}
 .dsrc-prompt-actions{justify-content:flex-end;margin-top:18px}
-.dsrc-toast{position:fixed;left:50%;top:28px;transform:translateX(-50%);z-index:2147483000;display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;background:#242938;color:#fff;font-size:14px;font-weight:600;box-shadow:0 8px 28px #00000047;animation:dsrc-toast-in .18s ease-out}
-.dsrc-toast svg{width:16px;height:16px;color:#81d7b4}
 @keyframes dsrc-spin{to{transform:rotate(360deg)}}
 @keyframes dsrc-pulse{50%{opacity:.35}}
-@keyframes dsrc-toast-in{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
 
 @container(max-width:700px){
 .dsrc-layout{grid-template-columns:minmax(0,1fr)}
@@ -250,8 +238,6 @@ export const CSS = `
 .dsrc-head{gap:8px;flex-wrap:wrap}
 .dsrc-surface{padding:14px}
 .dsrc-workspace{padding:13px}
-.dsrc-ways{grid-template-columns:1fr;gap:4px}
-.dsrc .dsrc-way{justify-content:flex-start;min-height:44px}
 .dsrc-stage{grid-template-columns:minmax(0,1fr);gap:14px}
 .dsrc-scan{align-items:center}
 .dsrc-code{width:176px;max-width:176px}
@@ -277,7 +263,7 @@ export const CSS = `
 @container(max-width:350px){
 .dsrc-pair-link{align-items:stretch;flex-direction:column}
 .dsrc-link{width:100%;flex:none}
-.dsrc-pair-link .dsrc-button{align-self:flex-end}
+.dsrc-pair-link .dsrc-action-with-feedback{align-self:flex-end}
 }
 @media(max-width:560px),(pointer:coarse){
 .dsrc-dialog{padding:16px}
@@ -293,10 +279,9 @@ export const CSS = `
 .dsrc-connection-actions .dsrc-button{min-height:44px}
 .dsrc-input input{height:44px;font-size:16px}
 .dsrc-mode button{min-height:44px;font-size:14px}
-.dsrc .dsrc-way{min-height:46px;padding:10px 12px}
 .dsrc-toggle{min-height:44px;font-size:14px}
 .dsrc-toggle input{width:20px;height:20px}
-.dsrc-muted,.dsrc-note,.dsrc-sub,.dsrc-summary-value,.dsrc-way-name,.dsrc-field-label,.dsrc-field>label,.dsrc-status-note,.dsrc-step,.dsrc-connection-state p,.dsrc-inline-notice,.dsrc-panel-message{font-size:14px}
+.dsrc-muted,.dsrc-note,.dsrc-sub,.dsrc-summary-value,.dsrc-field-label,.dsrc-field>label,.dsrc-status-note,.dsrc-connection-state p,.dsrc-inline-notice,.dsrc-panel-message{font-size:14px}
 .dsrc-connection-state strong{font-size:16px}
 .dsrc-setting-kicker{font-size:12px}
 .dsrc-code-refresh,.dsrc-pair-link .dsrc-button,.dsrc-notice-action{min-height:44px;font-size:14px}

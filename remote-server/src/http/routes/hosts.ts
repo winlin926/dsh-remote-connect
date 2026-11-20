@@ -16,7 +16,7 @@ import { baseHeaders, readJsonBody, sendJson } from '../util.js'
  * access beyond the newly created Host's own credential.
  */
 export function registerHostRoutes(router: Router, services: AppServices): void {
-  const { config, repos, sessions, auth, limiter, tunnelProxy, logger } = services
+  const { config, repos, sessions, auth, limiter, tunnelProxy, tunnel, logger } = services
 
   router.add('POST', '/v1/hosts', async ctx => {
     const decision = limiter.take('host-registration', ctx.ip, config.limits.hostRegistration)
@@ -97,6 +97,7 @@ export function registerHostRoutes(router: Router, services: AppServices): void 
     repos.revokeRelationship(hostId, deviceId, Date.now())
     sessions.revokeDevice(deviceId)
     tunnelProxy.closeDevice(deviceId)
+    if (tunnel.supportsDirect(hostId)) tunnel.sendHostFrame(hostId, { t: 'pair.revoked', clientDeviceId: deviceId })
     logger.info({ event: 'relationship.revoked', hostId, deviceId })
     sendJson(ctx.res, 200, { ok: true, hostId, deviceId }, { head: ctx.head })
   })

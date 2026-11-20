@@ -41,7 +41,8 @@ export const TUNNEL_MAX_REQUESTS_PER_DEVICE = 16
 /** How long the node waits for the first `hello` after the WSS handshake. */
 export const TUNNEL_HELLO_TIMEOUT_MS = 10_000
 
-export type TunnelCapability = 'http' | 'ws' | 'assets'
+export type TunnelCapability = 'http' | 'ws' | 'assets' | 'direct'
+export interface TunnelRelayDevice { id: string; name: string }
 export type TunnelHeaderValue = string | string[]
 export type TunnelHeaders = Record<string, TunnelHeaderValue>
 
@@ -60,6 +61,7 @@ export interface TunnelHttpRequestFrame {
   method: string
   path: string
   headers: TunnelHeaders
+  relayDevice?: TunnelRelayDevice
 }
 /** Node → Host: one piece of the request body, after the header frame. */
 export interface TunnelHttpBodyFrame { t: 'http.body'; id: string }
@@ -87,6 +89,7 @@ export interface TunnelWsOpenFrame {
   id: string
   path: string
   headers: TunnelHeaders
+  relayDevice?: TunnelRelayDevice
   protocol?: string
 }
 /** Host → node: the upstream WebSocket opened (or failed). */
@@ -151,6 +154,7 @@ export type TunnelFrame =
   | TunnelPairApproveFrame
   | TunnelPairRejectFrame
   | TunnelPairCompleteFrame
+  | { t: 'pair.revoked'; clientDeviceId: string }
 
 export type TunnelFrameType = TunnelFrame['t']
 
