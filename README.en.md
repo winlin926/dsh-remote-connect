@@ -18,7 +18,7 @@
 **Setting up public access from scratch?** Follow the [SakuraFrp public-access walkthrough](docs/public-access-sakura.md) (in Chinese), from buying a domain to connecting your phone.
 
 <details>
-<summary>Show the phone recording (26-second GIF): answer a question card, watch a tool run, open an HTML preview</summary>
+<summary><strong>Show the phone recording (26-second GIF): answer a question card, watch a tool run, open an HTML preview</strong></summary>
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/demo.gif" width="320" alt="Screen recording: answering a question card, watching a tool run, and opening an HTML preview on a phone" /></p>
 
@@ -37,7 +37,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 3. Open an existing session in your phone browser. To revoke access later, remove the phone from the authorized devices on your computer.
 
 <details>
-<summary>Show the plugin panel</summary>
+<summary><strong>Show the plugin panel</strong></summary>
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="Remote Control panel on the computer with a pairing QR code and a list of authorized devices" /></p>
 

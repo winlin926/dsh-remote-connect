@@ -18,7 +18,7 @@
 **想从零配置公网访问？** [阅读 SakuraFrp 公网连接教程](docs/public-access-sakura.md)，从购买域名、创建隧道到手机验证，一步一步完成设置。
 
 <details>
-<summary>查看实机录屏（26 秒 GIF）：回答提问卡片、查看工具输出、打开 HTML 预览</summary>
+<summary><strong>查看实机录屏（26 秒 GIF）：回答提问卡片、查看工具输出、打开 HTML 预览</strong></summary>
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/demo.gif" width="320" alt="手机上回复提问卡片、查看工具执行结果并打开工作区 HTML 预览的实机录屏" /></p>
 
@@ -37,7 +37,7 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 3. 在手机浏览器中打开已有会话。以后要收回权限，在电脑的已授权设备列表中撤销该手机即可。
 
 <details>
-<summary>查看插件面板截图</summary>
+<summary><strong>查看插件面板截图</strong></summary>
 
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="电脑端远程控制面板，显示配对二维码和已授权设备列表" /></p>
 
