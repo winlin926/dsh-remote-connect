@@ -30,6 +30,6 @@
 dsh plugin --profile <你的 profile> add @winlin926/dsh-carry@latest
 ```
 
-或者在 DSH 插件页点更新，更新完重启宿主。`0.7.0` 的 `.tgz` 安装包仍可在本 Release 的附件中下载。
+或者在 DSH 插件页点更新，更新完重启宿主。
 
 旧版自托管节点可以继续走公网。通过自托管节点使用双线路切换，需要同时升级插件和节点。
