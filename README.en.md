@@ -30,7 +30,12 @@ The desktop app and `dsh web` have separate plugin directories. If the Remote Co
 2. Scan the QR code on your phone; approve the device on your computer.
 3. Open an existing session — you're in. To revoke access later, remove the phone from the authorized-device list on the computer.
 
+<details>
+<summary>Show the Remote Control panel</summary>
+
 <p align="center"><img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/desktop-connect.png" width="720" alt="Remote Control panel on the computer with a pairing QR code and a list of authorized devices" /></p>
+
+</details>
 
 ## 📱 What you can do from your phone
 
