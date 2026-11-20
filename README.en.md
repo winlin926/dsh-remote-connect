@@ -1,8 +1,6 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" width="112" height="112" alt="dsh-carry" />
-</p>
-<h1 align="center">dsh-carry</h1>
-<p align="center"><strong>Pick up your DSH session on your phone.</strong></p>
+<img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" width="112" height="112" alt="dsh-carry" />
+<h1>dsh-carry</h1>
+<p><strong>Pick up your DSH session on your phone.</strong></p>
 <p>
   <img src="https://img.shields.io/static/v1?label=DSH&message=Plugin&color=8B4A38" height="20" alt="DSH | Plugin" />
   <a href="https://github.com/winlin926/dsh-carry/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/winlin926/dsh-carry/ci.yml?branch=main&label=build" height="20" alt="build" /></a>
@@ -36,11 +34,12 @@ The desktop app and `dsh web` have separate plugin directories. If the Remote Co
 
 ## 📱 What you can do from your phone
 
-| When… | What to do |
-| --- | --- |
-| A task keeps running after you leave your desk | Open the same session, read the reply, keep talking. |
-| A tool is waiting for approval | Review the request, approve or reject. |
-| You want to see a generated file | Tap the file link and preview it. |
+<table align="center">
+  <tr><th>When…</th><th>What to do</th></tr>
+  <tr><td>A task keeps running after you leave your desk</td><td>Open the same session, read the reply, keep talking.</td></tr>
+  <tr><td>A tool is waiting for approval</td><td>Review the request, approve or reject.</td></tr>
+  <tr><td>You want to see a generated file</td><td>Tap the file link and preview it.</td></tr>
+</table>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="Boot screen preview with a theme selector while DSH checks plugins" />

@@ -1,8 +1,6 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" width="112" height="112" alt="dsh-carry" />
-</p>
-<h1 align="center">dsh-carry</h1>
-<p align="center"><strong>电脑上的 DSH 会话，拿起手机接着用。</strong></p>
+<img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/logo.png" width="112" height="112" alt="dsh-carry" />
+<h1>dsh-carry</h1>
+<p><strong>电脑上的 DSH 会话，拿起手机接着用。</strong></p>
 <p>
   <img src="https://img.shields.io/static/v1?label=DSH&message=Plugin&color=8B4A38" height="20" alt="DSH | Plugin" />
   <a href="https://github.com/winlin926/dsh-carry/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/winlin926/dsh-carry/ci.yml?branch=main&label=build" height="20" alt="build" /></a>
@@ -36,11 +34,12 @@ dsh plugin --profile web add @winlin926/dsh-carry@latest
 
 ## 📱 手机上能做什么
 
-| 场景 | 操作 |
-| --- | --- |
-| 离开工位，任务还在跑 | 打开同一个会话，看回复、继续聊。 |
-| 工具请求等你确认 | 查看请求，批准或拒绝。 |
-| 想看刚生成的文件 | 点文件链接，直接预览。 |
+<table align="center">
+  <tr><th>场景</th><th>操作</th></tr>
+  <tr><td>离开工位，任务还在跑</td><td>打开同一个会话，看回复、继续聊。</td></tr>
+  <tr><td>工具请求等你确认</td><td>查看请求，批准或拒绝。</td></tr>
+  <tr><td>想看刚生成的文件</td><td>点文件链接，直接预览。</td></tr>
+</table>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/winlin926/dsh-carry/main/assets/mobile-boot.png" width="30%" alt="启动页预览，顶部可选主题，中央显示插件检查进度" />
